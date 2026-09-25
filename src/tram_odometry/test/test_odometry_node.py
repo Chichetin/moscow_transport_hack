@@ -394,3 +394,71 @@ def test_nonfinite_z_is_not_published(node, monkeypatch):
     monkeypatch.setattr(node.odometry, 'step', lambda raw: replace(_estimate(), z=float('nan')))
     node.on_input('/vehicle/front_bogie_velocity', _wheel())
     assert sent == [] and node.errors == 1
+
+
+def _route_run(route, window_s, duration=30.0, speed=10.0, late_north_m=30.0):
+    """(topic, ROS message) of a tram along branch 0 of the installed map; after the GNSS
+    window the GNSS lies: fixes late_north_m north of the track, vel north and faster (#57)."""
+    import numpy as np
+    b = route.branches[0]
+    lat0, lon0, alt0 = route.origin
+    out = []
+    for k in range(int(duration * 10)):
+        ns = 1_000_000_000 * 1000 + 100_000_000 * k
+        s = speed * 0.1 * k
+        x, y, z = (float(np.interp(s, b.s, c)) for c in (b.x, b.y, b.z))
+        dx, dy = (float(np.interp(s + 1.0, b.s, c)) - v for c, v in ((b.x, x), (b.y, y)))
+        late = k * 0.1 > window_s
+        for off, topic in ((0, '/vehicle/front_bogie_velocity'), (10, '/vehicle/rear_bogie_velocity')):
+            w = VelocitySensor()
+            w.header.stamp = _stamp(*divmod(ns + off * 1_000_000, 1_000_000_000))
+            w.velocity = speed * 3.6
+            out.append((topic, w))
+        cmd = DriverControllerCommand()
+        cmd.header.stamp = _stamp(*divmod(ns + 20_000_000, 1_000_000_000))
+        cmd.position = 3
+        out.append(('/vehicle/driver_position_cmd', cmd))
+        fix = NavSatFix()
+        fix.header.stamp = _stamp(*divmod(ns + 30_000_000, 1_000_000_000))
+        fix.status.status = 2
+        fix.latitude = lat0 + (y + (late_north_m if late else 0.0)) / 111_500.0
+        fix.longitude, fix.altitude = lon0 + x / 62_700.0, alt0 + z
+        out += [('/sensing/gnss/master/fix', fix), ('/sensing/gnss/rover/fix', fix)]
+        vel = TwistStamped()
+        vel.header.stamp = _stamp(*divmod(ns + 40_000_000, 1_000_000_000))
+        n = math.hypot(dx, dy)
+        vel.twist.linear.x, vel.twist.linear.y = (0.0, 1.5 * speed) if late else (speed * dx / n, speed * dy / n)
+        out.append(('/sensing/gnss/master/vel', vel))
+    return out
+
+
+def _published(msgs, monkeypatch, window_end_ns=None):
+    """Everything a fresh node publishes on /result/* for the messages; GNSS stamped after
+    window_end_ns is not delivered when it is given (the cut of tools/eval)."""
+    n = on.OdometryNode(params_file=str(PARAMS_FILE))
+    try:
+        sent = _capture(n, monkeypatch)
+        monkeypatch.setattr(n.pub_diagnostics, 'publish', lambda m: sent.append(('d', m)))
+        for topic, m in msgs:
+            if (window_end_ns is not None and topic.startswith('/sensing/gnss/')
+                    and on._stamp_ns(m.header.stamp) > window_end_ns):
+                continue
+            n.on_input(topic, m)
+        return sent, n.errors
+    finally:
+        n.destroy_node()
+
+
+def test_gnss_after_window_changes_no_published_bit(node, monkeypatch):
+    # #57: the disqualification condition end to end through the node — the same messages with
+    # all GNSS and with GNSS cut after gnss.init_window_s give equal /result/* messages
+    window_s = node.params.gnss.init_window_s
+    msgs = _route_run(node.odometry.route, window_s)
+    window_end_ns = on._stamp_ns(msgs[0][1].header.stamp) + int(window_s * 1e9)
+    full, errors_full = _published(msgs, monkeypatch)
+    cut, errors_cut = _published(msgs, monkeypatch, window_end_ns)
+    assert errors_full == errors_cut == 0
+    assert len(full) > 600 and {k for k, _ in full} == {'v', 'p', 'd'}
+    for i, ((kf, mf), (kc, mc)) in enumerate(zip(full, cut)):
+        assert (kf, mf) == (kc, mc), f'message {i} ({kf}) at {mf.header.stamp}: {mf} != {mc}'
+    assert len(full) == len(cut)
