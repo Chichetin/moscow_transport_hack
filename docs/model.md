@@ -1,7 +1,7 @@
 # Модель резервной одометрии
 
-Состояние документа: реализация `origin/main` после #9, #12, #13, #14 и контракта
-фильтра D-032. Модель привода #10 и оценщик EKF #11 ещё открыты. Их проектные намерения перечислены отдельно, без
+Состояние документа: реализация `origin/main` после #9, #12, #13, #14, #56 и
+контракта фильтра D-032. Модель привода #10 и оценщик EKF #11 ещё открыты. Их проектные намерения перечислены отдельно, без
 уравнений, которые можно было бы принять за работающий код.
 
 ## Входы, выходы и единицы
@@ -87,18 +87,37 @@ dev_i = |v_i − v_pred|.
 Выбросы за `fix_gate_m` и fix обычного статуса после GBAS не обновляют якорь.
 
 После окна [`PathTracker.advance`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py)
-двигается только вперёд по выбранной ветке и интерполирует `x/y/z/yaw` в
+двигается только вперёд по выбранной ветке с текущей оценкой масштаба `scale` и
+интерполирует `x/y/z/yaw` в
 [`PathTracker._at`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py):
 
 ```text
-s = s_anchor + (distance − distance_anchor);
+s = s_anchor + scale · (distance − distance_anchor);
 σ_cross² = position.cross_std_m²;
-σ_along² = σ_cross² + [position.along_drift_frac · (distance − distance_anchor)]²;
+σ_along² = σ_cross² + var0 + [position.along_drift_frac · scale · (distance − distance_anchor)]²;
 Σ_xy = R(yaw) · diag(σ_along², σ_cross²) · R(yaw)ᵀ.
 ```
 
 Высота карты сдвигается на медиану разности высот fix и карты за окно выставки.
 При достижении конца ветки продолжение ищется в пределах `position.join_m`.
+После окна GNSS и стоянки не короче `position.stop_min_s` со скоростью ниже
+`position.stop_speed_mps`, pipeline один раз предлагает карте из
+[`stops.csv`](../src/tram_odometry/maps/stops.csv) поправить `s` к ближайшему
+месту, если оно не дальше `position.stop_snap_max_m`.
+Поправка взвешенная: `gain = var/(var + stop_std_m²)`, затем `s += gain·(s_stop-s)`;
+остаточная дисперсия `var` умножается на `1-gain`. Если две принятые стоянки
+находятся на одной ветке и расстояние между ними не меньше
+`position.scale_min_arc_m`, отношение пути карты к пути колёс обновляет масштаб:
+
+```text
+ratio = clip((s_stop − s_stop_prev) / (distance − distance_prev), 1 ± scale_max_dev);
+scale += scale_alpha · (ratio − scale).
+```
+
+Реализуют
+[`Odometry._on_standstill`](../src/tram_odometry_core/tram_odometry_core/pipeline.py),
+[`PathTracker.on_stop`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py)
+и [`PathTracker._update_scale`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py).
 Если карта отключена либо ещё нет якоря, [`Odometry._advance`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
 интегрирует прямую по курсу из наибольшей скорости GNSS master в окне:
 
