@@ -14,7 +14,7 @@
 |---|---|---|---|---|
 | T1 | ROS 2 Humble, `colcon build` без интернета | `src/`, `docker/jury-stand.sh` | стенд: `build.log`, `--network=none` | ⚠️ каркас собирается (3 пакета, 2026-09-25), нод ещё нет; рантайм-зависимость ядра `python3-yaml` — apt, есть в `ros:humble-ros-base` (D-004, D-019) |
 | T2 | Вход только `/vehicle/*` (3 топика); без IMU | `core/preprocess`, нода | `grep -rn subscription src/tram_odometry` | — |
-| T3 | GNSS только для начальной выставки, в проверке — первые секунды | D-005, `gnss.init_window_s` | eval с обрезкой GNSS = выходы ноды; ревью | ⚠️ `tools/eval` обрезает GNSS после окна (тест `test_gnss_after_window_is_not_fed_but_used_as_reference`); нода — ждёт #5 |
+| T3 | GNSS только для начальной выставки, в проверке — первые секунды | D-005, `gnss.init_window_s` | eval с обрезкой GNSS = выходы ноды; ревью | ⚠️ `tools/eval` обрезает GNSS после окна (тест `test_gnss_after_window_is_not_fed_but_used_as_reference`); pipeline игнорирует GNSS после окна: `test_gnss_after_window_is_ignored` (D-021); нода — ждёт #5 |
 | T4 | Выход `/result/velocity` `VelocitySensor`, м/с | нода | запись стенда, `ros2 topic echo` | — |
 | T5 | Выход `/result/position` `nav_msgs/Odometry`: stamp, frame_id, позиция, продольная скорость, ковариации | нода | запись стенда, тест формы сообщения | — |
 | T6 | `header.stamp` = время входа из bag, допуск судьи 0,05 с | D-015, нода | тест: stamp выхода ∈ stamps входов | — |
@@ -46,7 +46,7 @@
 |---|---|---|---|---|
 | R1 | Проскальзывание: снижаем доверие к одометрии, опираемся на модель, нет всплесков | `core/slip`, `core/estimator` | stress: всплеск одной тележки; 6 bag 30639 | — |
 | R2 | Пропуски и выбросы входов; нет drift blow-up | `core/preprocess` | stress: дыры 1–70 с, выбросы | — |
-| R3 | Нода не падает на некорректных/неполных данных; восстановление | нода, pipeline | тесты NaN/пусто/немонотонно; stress `crashed=false` | — |
+| R3 | Нода не падает на некорректных/неполных данных; восстановление | нода, pipeline | тесты NaN/пусто/немонотонно; stress `crashed=false` | ⚠️ pipeline: NaN/inf/мусор/немонотонный stamp/молчащая тележка покрыты тестами (D-021); нода и stress — впереди |
 | R4 | Флаг/диагностика проскальзывания, оценка сцепления, адаптация модели | `/result/diagnostics`, масштабы колёс в фильтре | запись стенда | — |
 
 ## Критерий 4. Реальное время (15)

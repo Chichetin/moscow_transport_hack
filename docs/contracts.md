@@ -114,7 +114,7 @@ class Estimate:
 
 | Модуль | Публичное | Контракт поведения |
 |---|---|---|
-| `preprocess` | `Preprocessor(params).accept(raw) -> Sample \| None` | `raw` — сырой вход (км/ч, notch как есть); возвращает нормализованный `Sample` или `None` (выброс, NaN, stamp из прошлого сверх допуска, GNSS вне окна) |
+| `preprocess` | `Preprocessor(params).accept(raw) -> Sample \| None` | `raw` — сырой вход: пара `(topic, ROS-сообщение)` (км/ч, notch как есть; поля сообщения — как в ROS, у bag и rclpy одинаковые); возвращает нормализованный `Sample` или `None` (выброс, NaN, stamp из прошлого сверх допуска, GNSS вне окна) |
 | `dynamics` | `model_accel(notch: int, speed: float, params) -> float` | чистая функция, м/с²; без состояния |
 | `slip` | `SlipDetector(params).update(front, rear, accel_model, est) -> SlipState` | `front`/`rear` — последний `WheelSample` или `None` (молчит) |
 | `estimator` | `SpeedFilter(params).predict(t, accel_model)`, `.update(sample: WheelSample, trust: float)`, `.state() -> (speed, speed_var, accel)` | монотонное время внутри; `t` меньше текущего — без отката |
