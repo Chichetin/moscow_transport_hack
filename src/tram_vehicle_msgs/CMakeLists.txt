@@ -4,7 +4,7 @@ project(tram_vehicle_msgs_vendor NONE)
 find_package(ament_cmake REQUIRED)
 
 # Jury's tram_vehicle_msgs (same workspace or underlay) wins; ours is built only when there is
-# none. Nested in this package, so colcon never sees two tram_vehicle_msgs (D-042, #40).
+# none. Nested in this package, so colcon never sees two tram_vehicle_msgs (D-043, #40).
 find_package(tram_vehicle_msgs QUIET)
 if(tram_vehicle_msgs_FOUND)
   message(STATUS "tram_vehicle_msgs found in ${tram_vehicle_msgs_DIR}: vendored copy not built")

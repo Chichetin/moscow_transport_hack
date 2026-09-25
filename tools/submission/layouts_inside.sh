@@ -7,7 +7,7 @@ LOGS="/out/layouts-$COMMIT"; mkdir -p "$LOGS"
 RES=/tmp/results.tsv; : > "$RES"
 
 # Пакет сообщений у жюри. Оригинал организаторов в Humble не собирается (нет <maintainer>,
-# D-006), значит у жюри рабочая копия — такая же, как вложенная в наш vendor (D-042); оригинал
+# D-006), значит у жюри рабочая копия — такая же, как вложенная в наш vendor (D-043); оригинал
 # нужен для раскладки «поверх».
 JURY_MSGS=/tmp/jury_msgs/tram_vehicle_msgs
 ORIG_MSGS=/tmp/orig_msgs/tram_vehicle_msgs

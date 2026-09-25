@@ -3,7 +3,7 @@
 <package format="3">
   <name>tram_vehicle_msgs_vendor</name>
   <version>0.0.0</version>
-  <description>Builds the organizers' tram_vehicle_msgs (vendor/ + msg/) only if the workspace or underlay has none (D-042)</description>
+  <description>Builds the organizers' tram_vehicle_msgs (vendor/ + msg/) only if the workspace or underlay has none (D-043)</description>
   <maintainer email="team@example.com">Hackathon team</maintainer>
   <license>MIT</license>
 
