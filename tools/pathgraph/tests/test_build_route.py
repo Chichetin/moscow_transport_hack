@@ -88,16 +88,45 @@ def test_refine_branch_recovers_truth_from_shifted_reference():
 def test_route_csv_roundtrip_matches_contract(tmp_path):
     s0, xy0 = br.resample(curve(np.linspace(0, 300, 50)), step=1.0)
     s1, xy1 = br.resample(curve(np.linspace(300, 0, 50)), step=1.0)
+    z0, z1 = 0.02 * s0, -0.01 * s1
     path = tmp_path / 'route.csv'
-    br.write_route(path, [(s0, xy0), (s1, xy1)], 'frame: ENU, origin_lat=55.8104, origin_lon=37.4623')
+    br.write_route(path, [(s0, xy0, z0), (s1, xy1, z1)],
+                   'frame: ENU, origin_lat=55.8104, origin_lon=37.4623')
     lines = path.read_text().splitlines()
     assert lines[0].startswith('# frame: ENU, origin_lat=55.8104, origin_lon=37.4623')
-    assert 'branch,s_m,x_m,y_m' in lines
+    assert 'branch,s_m,x_m,y_m,z_m' in lines
     route = br.read_route(path)
     assert sorted(route) == [0, 1]
-    for b, (s, xy) in route.items():
+    for b, (s, xy, z) in route.items():
         assert s[0] == 0.0 and np.all(np.diff(s) > 0) and np.max(np.diff(s)) <= 2.0
     assert np.allclose(route[1][1], xy1, atol=1e-3)
+    assert np.allclose(route[0][2], z0, atol=1e-3) and np.allclose(route[1][2], z1, atol=1e-3)
+
+
+def test_clean_track_returns_enu_up():
+    lat0, lon0, alt0 = br.ORIGIN
+    fixes = np.array([[float(i), lat0, lon0, alt0 + 2.0, 2.0] for i in range(20)])
+    t, xy, z = br.clean_track(fixes, (2,))
+    assert len(t) == 20 and np.allclose(xy, 0.0, atol=1e-6)
+    assert np.allclose(z, 2.0, atol=1e-6)
+
+
+def test_branch_height_is_median_of_passes_along_branch():
+    rng = np.random.default_rng(2)
+    x = np.arange(0.0, 400.0, 1.0)
+    s, poly = br.resample(np.column_stack([x, np.zeros_like(x)]), 1.0)
+    truth = 0.03 * s + 2.0 * np.sin(s / 60.0)
+    passes = []
+    for bias in (-0.3, 0.0, 0.1, 0.2, -0.1):
+        px = np.sort(rng.uniform(0, 399, 3000))
+        xy = np.column_stack([px, rng.normal(0, 0.3, len(px))])
+        passes.append((xy, 0.03 * px + 2.0 * np.sin(px / 60.0) + bias + rng.normal(0, 0.2, len(px))))
+    passes.append((np.column_stack([x, np.full_like(x, 8.0)]), np.full_like(x, 50.0)))  # other track
+    glitch = 0.03 * x + 2.0 * np.sin(x / 60.0) + np.where((x > 100) & (x < 200), 20.0, 0.0)
+    passes.append((np.column_stack([x, np.zeros_like(x)]), glitch))   # same track, GNSS height jump
+    z = br.branch_height(s, poly, passes, gate=6.0, min_passes=3, smooth_m=15.0)
+    inner = (s > 10) & (s < s[-1] - 10)
+    assert np.max(np.abs(z - truth)[inner]) < 0.15
 
 
 def test_split_bag_names_stay_strings():

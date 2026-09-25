@@ -3,6 +3,8 @@
 Usage:
     .venv/bin/python tools/pathgraph/build_route.py [--data $TRAM_DATA_DIR] [--out <route.csv>]
 
+Height z_m is ENU up of the same fixes: median over passes in 1 m bins along each branch.
+
 Every long bag is one trip in one direction, so the route is two branches:
 0 — westbound (east terminal -> east loop -> west loop), 1 — eastbound (west terminal -> east
 terminal). Per branch: the longest gap-free train pass is the reference; all passes of that
@@ -221,19 +223,43 @@ def add_extra_branches(branches: list, tracks: list[tuple[np.ndarray, np.ndarray
     return branches
 
 
-def write_route(path: Path, branches: list[tuple[np.ndarray, np.ndarray]], header: str) -> None:
+def branch_height(s: np.ndarray, poly: np.ndarray, passes: list[tuple[np.ndarray, np.ndarray]],
+                  gate: float, min_passes: int, smooth_m: float) -> np.ndarray:
+    """Height along a branch: per 1 m bin the mean z of each pass within `gate` laterally,
+    median over passes (>= min_passes), gaps interpolated, moving average over smooth_m."""
+    ds = s[1] - s[0]
+    per_pass = np.full((len(passes), len(s)), np.nan)
+    for k, (xy, z) in enumerate(passes):
+        ps, pe = project(s, poly, xy)
+        ok = (np.abs(pe) <= gate) & (ps > 0) & (ps < s[-1])
+        b = np.rint(ps[ok] / ds).astype(int)
+        cnt = np.bincount(b, minlength=len(s))
+        tot = np.bincount(b, weights=z[ok], minlength=len(s))
+        per_pass[k, cnt > 0] = tot[cnt > 0] / cnt[cnt > 0]
+    good = np.sum(~np.isnan(per_pass), axis=0) >= min_passes
+    if not good.any():
+        good = np.sum(~np.isnan(per_pass), axis=0) >= 1   # single-pass terminal track
+    height = np.interp(np.arange(len(s)), np.flatnonzero(good),
+                       np.nanmedian(per_pass[:, good], axis=0))
+    return _moving_average(height, max(1, int(round(smooth_m / ds))))
+
+
+def write_route(path: Path, branches: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+                header: str) -> None:
     """maps/route.csv, docs/contracts.md §5."""
-    lines = [f'# {header}', 'branch,s_m,x_m,y_m']
-    for b, (s, xy) in enumerate(branches):
-        lines += [f'{b},{si:.3f},{x:.3f},{y:.3f}' for si, (x, y) in zip(s, xy)]
+    lines = [f'# {header}', 'branch,s_m,x_m,y_m,z_m']
+    for b, (s, xy, z) in enumerate(branches):
+        lines += [f'{b},{si:.3f},{x:.3f},{y:.3f},{zi:.3f}' for si, (x, y), zi in zip(s, xy, z)]
     Path(path).write_text('\n'.join(lines) + '\n')
 
 
-def read_route(path: Path) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+def read_route(path: Path) -> dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """branch -> (s, xy, z)."""
     rows = [ln for ln in Path(path).read_text().splitlines()
             if ln and not ln.startswith('#') and not ln.startswith('branch')]
     a = np.array([[float(v) for v in ln.split(',')] for ln in rows])
-    return {int(b): (a[a[:, 0] == b, 1], a[a[:, 0] == b, 2:4]) for b in np.unique(a[:, 0])}
+    return {int(b): (a[a[:, 0] == b, 1], a[a[:, 0] == b, 2:4], a[a[:, 0] == b, 4])
+            for b in np.unique(a[:, 0])}
 
 
 def read_master_fixes(bag: Path) -> np.ndarray:
@@ -251,13 +277,13 @@ def read_master_fixes(bag: Path) -> np.ndarray:
     return a[np.argsort(a[:, 0], kind='stable')]
 
 
-def clean_track(fixes: np.ndarray, statuses: tuple[int, ...]) -> tuple[np.ndarray, np.ndarray]:
-    """Stamps and ENU x/y of fixes with an accepted status, without outliers."""
+def clean_track(fixes: np.ndarray, statuses: tuple[int, ...]):
+    """Stamps, ENU x/y and ENU up of fixes with an accepted status, without outliers."""
     f = fixes[np.isin(fixes[:, 4], statuses) & np.all(np.isfinite(fixes[:, 1:4]), axis=1)]
-    e, n, _ = lla_to_enu(f[:, 1], f[:, 2], f[:, 3], *ORIGIN)
+    e, n, u = lla_to_enu(f[:, 1], f[:, 2], f[:, 3], *ORIGIN)
     xy = np.column_stack([e, n])
     keep = reject_outliers(xy, OUTLIER_WIN, OUTLIER_M)
-    return f[keep, 0], xy[keep]
+    return f[keep, 0], xy[keep], u[keep]
 
 
 def reference_ok(t: np.ndarray, xy: np.ndarray) -> bool:
@@ -267,7 +293,7 @@ def reference_ok(t: np.ndarray, xy: np.ndarray) -> bool:
     return bool(step.max() <= REF_MAX_GAP_M and not np.any((step > REF_MAX_STEP_M) & (speed > REF_MAX_SPEED)))
 
 
-def _load_train_track(bag: Path) -> tuple[str, tuple[np.ndarray, np.ndarray]]:
+def _load_train_track(bag: Path):
     return bag.name, clean_track(read_master_fixes(bag), (MAP_STATUS,))
 
 
@@ -280,7 +306,7 @@ def main() -> None:
     with ProcessPoolExecutor(max(1, (os.cpu_count() or 2) - 2)) as ex:
         tracks = dict(ex.map(_load_train_track, bags))
     passes: dict[int, list[tuple[str, np.ndarray, np.ndarray]]] = {0: [], 1: []}
-    for name, (t, xy) in tracks.items():
+    for name, (t, xy, _) in tracks.items():
         if len(xy) > OUTLIER_WIN and abs(xy[0, 0] - xy[-1, 0]) >= MIN_SPAN_M:
             passes[0 if xy[0, 0] > xy[-1, 0] else 1].append((name, t, xy))
     branches = []
@@ -290,10 +316,15 @@ def main() -> None:
         branches.append(refine_branch(reference_track(ref_xy, STEP_M), [xy for _, _, xy in passes[b]],
                                       STEP_M, GATES_M, MIN_PASSES, OFFSET_SMOOTH_M))
         print(f'branch {b}: {branches[-1][0][-1]:.0f} m, {len(passes[b])} passes, reference {ref_name}')
-    branches = add_extra_branches(branches, [tr for tr in tracks.values() if len(tr[1]) > OUTLIER_WIN])
+    usable = [tr for tr in tracks.values() if len(tr[1]) > OUTLIER_WIN]
+    branches = add_extra_branches(branches, [(t, xy) for t, xy, _ in usable])
     for b, (s, poly) in enumerate(branches[2:], start=2):
         print(f'branch {b}: {s[-1]:.0f} m, extra, from ({poly[0, 0]:.0f}, {poly[0, 1]:.0f}) '
               f'to ({poly[-1, 0]:.0f}, {poly[-1, 1]:.0f})')
+    branches = [(s, poly, branch_height(s, poly, [(xy, z) for _, xy, z in usable], GATES_M[-1],
+                                        MIN_PASSES, OFFSET_SMOOTH_M)) for s, poly in branches]
+    for b, (_, _, z) in enumerate(branches):
+        print(f'branch {b}: height {z.min():.1f} .. {z.max():.1f} m')
     commit = subprocess.run(['git', '-C', str(REPO), 'rev-parse', '--short', 'HEAD'],
                             capture_output=True, text=True).stdout.strip()
     header = (f'frame: ENU, origin_lat={ORIGIN[0]}, origin_lon={ORIGIN[1]}, origin_alt={ORIGIN[2]}, '

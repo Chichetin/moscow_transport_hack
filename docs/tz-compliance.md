@@ -36,7 +36,7 @@
 |---|---|---|---|---|
 | P1 | Дрейф в конце, % от пути | eval `drift_pct` | holdout | ⚠️ метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 |
 | P2 | Along-track MEAN/MAX/RMSE | eval `along_*` | holdout | ⚠️ метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 |
-| P3 | Cross-track при привязке к pathgraph | карта `src/tram_odometry/maps/route.csv` (D-007, D-022), eval `cross_*` | holdout | ⚠️ карта есть: GNSS holdout до карты mean 0,41 м, p99 4,95 м (`docs/verification/2026-09-25-route-map.md`); метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 и PO1 #14 |
+| P3 | Cross-track при привязке к pathgraph | карта `src/tram_odometry/maps/route.csv` (D-007, D-022), eval `cross_*` | holdout | ⚠️ карта есть: GNSS holdout до карты mean 0,41 м, p99 4,95 м (`docs/verification/2026-09-25-route-map.md`); высота `z_m` (D-024): mean 0,17 м, p99 2,45 м (`docs/verification/2026-09-25-route-height.md`); метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 и PO1 #14 |
 | P4 | Корректный `nav_msgs/Odometry` | нода, контракт §1 | тест формы, запись стенда | — |
 | P5 | Инициализация абсолютного положения (последняя позиция / старт прогона) | `core/position` | eval: ошибка в первые 10 с | — |
 
