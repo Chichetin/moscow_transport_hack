@@ -177,9 +177,16 @@ class PathTracker:
         places = self._stops[k]
         if not len(places):
             return False
-        place = float(places[int(np.argmin(np.abs(places - s)))])
-        if abs(place - s) > self.p.stop_snap_max_m:
+        distances = np.abs(places - s)
+        nearest = int(np.argmin(distances))
+        if distances[nearest] > self.p.stop_snap_max_m:
             return False                      # not at a stop place: a signal, keep s
+        if len(places) > 1:
+            second = float(np.partition(distances, 1)[1])
+            if second <= self.p.stop_snap_max_m and \
+                    second - distances[nearest] <= 2.0 * self.p.stop_std_m:
+                return False                  # map uncertainty cannot distinguish close candidates
+        place = float(places[nearest])
         var = self._var_along(distance)
         gain = var / (var + self.p.stop_std_m ** 2)
         self._update_scale(k, place, distance)

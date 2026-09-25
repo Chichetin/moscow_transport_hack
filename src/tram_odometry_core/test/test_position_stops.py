@@ -38,6 +38,23 @@ def test_stop_near_a_place_snaps_s_and_cuts_the_variance():
     assert tr.advance(495.0)[4][0] < before
 
 
+def test_stop_with_two_places_inside_gate_does_not_snap_to_neighbour():
+    tr = _tracker([(0, 1500.0), (0, 1517.8)])
+    origin = _anchor_xy(tr)
+    at = _arc(tr, 510.0, origin)                              # 10 m after the first place
+
+    assert not tr.on_stop(510.0)
+    assert _arc(tr, 510.0, origin) == pytest.approx(at)
+    assert tr._last_snap is None
+    assert tr._scale == 1.0
+
+
+def test_stop_clear_of_neighbour_still_snaps():
+    tr = _tracker([(0, 1500.0), (0, 1517.8)])
+    assert tr.on_stop(500.0)
+    assert tr._last_snap == (0, 1500.0, 500.0)
+
+
 def test_stop_far_from_every_place_keeps_s():
     tr = _tracker([(0, 1500.0)])
     origin = _anchor_xy(tr)
