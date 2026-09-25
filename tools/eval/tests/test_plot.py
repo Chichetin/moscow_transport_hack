@@ -35,22 +35,37 @@ def test_series_units_error_signs_controller_and_slip():
     assert s.route == []                                 # the double carries no map
 
 
-def test_route_moves_into_the_frame_of_the_run():
+def test_series_are_in_stamp_order_whatever_the_recording_order():
+    msgs = drive(duration=20.0)
+    late = [m for m in msgs[600:900] if m[0] in (FRONT, REAR, CMD)]   # a late burst (docs/data.md, trap 5)
+    msgs = msgs[:600] + [m for m in msgs[600:] if m not in late] + late
+    s = plot.bag_series(msgs, 5.0, DeadReckoning)
+    for t in (s.est.t, s.wheel_t['front'], s.wheel_t['rear'], s.cmd_t):
+        assert np.all(np.diff(t) >= 0)
+    assert len(s.est.slip) == len(s.est.t) and s.est.slip.sum() == 200
+
+
+def test_plot_bag_reports_a_failure_instead_of_raising(tmp_path, capsys):
+    assert plot.plot_bag('empty', 5.0, tmp_path, make_odometry=DeadReckoning, msgs=[]) == []
+    assert 'empty: plot failed' in capsys.readouterr().err
+
+
+def test_route_moves_into_the_frame_of_the_reference():
     east = np.array([0.0, 100.0, 200.0])
     route = NS(origin=(LAT0, LON0 + 100.0 / M_PER_DEG_E, 150.0),
                branches=(NS(x=east, y=np.zeros(3), z=np.zeros(3)),))
-    same = plot.route_in_run_frame(NS(origin=route.origin, branches=route.branches), route.origin)
+    same = plot.route_in_ref_frame(NS(origin=route.origin, branches=route.branches), route.origin)
     assert np.allclose(same[0], np.stack([east, np.zeros(3)], axis=1), atol=1e-6)
-    moved = plot.route_in_run_frame(route, (LAT0, LON0, 150.0))
+    moved = plot.route_in_ref_frame(route, (LAT0, LON0, 150.0))
     assert np.allclose(moved[0][:, 0], east + 100.0, atol=0.5)   # the map origin is 100 m east of the run's
     assert np.allclose(moved[0][:, 1], 0.0, atol=0.5)
-    assert plot.route_in_run_frame(route, None) == []
+    assert plot.route_in_ref_frame(route, None) == []
     # kilometres apart the tangent planes turn by ~1e-3 rad: metres at the far end of the line
     far_origin, point = (LAT0 + 0.05, LON0 + 0.05, 160.0), (LAT0 + 0.1, LON0 + 0.1, 170.0)
     in_map = geodetic_to_enu(*point, far_origin)
     far = NS(origin=far_origin, branches=(NS(x=in_map[None, 0], y=in_map[None, 1], z=in_map[None, 2]),))
     run_origin = (LAT0, LON0, 150.0)
-    assert np.allclose(plot.route_in_run_frame(far, run_origin)[0][0], geodetic_to_enu(*point, run_origin)[:2],
+    assert np.allclose(plot.route_in_ref_frame(far, run_origin)[0][0], geodetic_to_enu(*point, run_origin)[:2],
                        atol=1e-3)
 
 

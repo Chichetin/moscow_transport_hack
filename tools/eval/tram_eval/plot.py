@@ -2,12 +2,16 @@
 
 Timeline: speed (estimate, reference, both bogies as recorded), speed error, along/cross
 error, driver controller, slip flags. Map: the route of maps/route.csv, reference and
-estimate in frame `map`. For debugging, docs/accuracy.md and the pitch; not part of
+estimate in the frame of the eval reference (ENU of `Reference.origin`), where the metrics
+compare them. It is frame `map` of the tracker unless the bag has no status-2 fix in the GNSS
+window: then the reference origin is elsewhere, up to km away (#70). For debugging, docs/accuracy.md and the pitch; not part of
 metrics.json (contracts §4). matplotlib is imported only in `render`: the dev image has
 no matplotlib (docker/Dockerfile, D-039).
 """
 from __future__ import annotations
 
+import sys
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,7 +42,7 @@ class Series:
     pos_err_t: np.ndarray       # s, reference fix stamps matched to an estimate
     along_err: np.ndarray       # m, arc of estimate - arc of reference: + = estimate ahead
     cross_err: np.ndarray       # m, distance to the reference track
-    route: list                 # (M, 2) x/y of every map branch in frame `map` of the run
+    route: list                 # (M, 2) x/y of every map branch in the frame of the reference
     crash: str | None
 
 
@@ -56,8 +60,9 @@ def enu_rotation(lat_deg: float, lon_deg: float) -> np.ndarray:
                      [np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)]])
 
 
-def route_in_run_frame(route, origin) -> list:
-    """x/y of the map branches (ENU of the map's own origin) in the ENU of the run origin."""
+def route_in_ref_frame(route, origin) -> list:
+    """x/y of the map branches (ENU of the map's own origin) in the ENU of `origin`; the same
+    transform as PathTracker._set_origin, applied at the origin of the eval reference."""
     if route is None or origin is None:
         return []
     rot_run = enu_rotation(*origin[:2])
@@ -72,15 +77,18 @@ def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '') -
     odometry = (make_odometry or bagmod.default_odometry)()
     est, crash, _ = bagmod.run_pipeline(msgs, odometry, window_end)
     est, _ = bagmod.finite_only(est)
+    # estimates come in recording order (late bursts, trap 5): lines and slip bands need time order
+    order = np.argsort(est.t, kind='stable')
+    est = Estimates(est.t[order], est.speed[order], est.pos[order], est.slip[order])
     ref = build_reference(*bagmod.reference_inputs(msgs), window_end)
 
     scale = wheel_speed_scale()
     wheel_t, wheel_v = {}, {}
     for side, topic in (('front', FRONT), ('rear', REAR)):
-        rows = [(bagmod.stamp(m), m.velocity) for tp, m in msgs if tp == topic]
+        rows = sorted(((bagmod.stamp(m), m.velocity) for tp, m in msgs if tp == topic), key=lambda r: r[0])
         wheel_t[side] = np.array([r[0] for r in rows], float)
         wheel_v[side] = np.array([r[1] for r in rows], float) * scale
-    cmd = [(bagmod.stamp(m), m.position) for tp, m in msgs if tp == CMD]
+    cmd = sorted(((bagmod.stamp(m), m.position) for tp, m in msgs if tp == CMD), key=lambda r: r[0])
 
     ri, ei = match_nearest(ref.vel_t, est.t)
     speed_err_t, speed_err = ref.vel_t[ri], est.speed[ei] - ref.speed[ri]
@@ -93,7 +101,7 @@ def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '') -
     return Series(name, bagmod.stamp(msgs[0][1]), wheel_t, wheel_v,
                   np.array([c[0] for c in cmd], float), np.array([c[1] for c in cmd], float),
                   est, ref, speed_err_t, speed_err, ref.pos_t[ri], along, cross,
-                  route_in_run_frame(getattr(odometry, 'route', None), ref.origin), crash)
+                  route_in_ref_frame(getattr(odometry, 'route', None), ref.origin), crash)
 
 
 def _rmse(e) -> str:
@@ -184,5 +192,10 @@ def render(s: Series, out_dir: Path) -> list[Path]:
 
 def plot_bag(path, gnss_window_s: float, out_dir: Path, make_odometry=None, msgs=None) -> list[Path]:
     """PNG files of one bag; make_odometry and msgs are for tests, as in `bag.evaluate_bag`."""
-    msgs = bagmod.read_bag(Path(path)) if msgs is None else msgs
-    return render(bag_series(msgs, gnss_window_s, make_odometry, Path(path).name), Path(out_dir))
+    name = Path(path).name
+    try:   # metrics.json is already written: one bad bag must not take down the other plots
+        msgs = bagmod.read_bag(Path(path)) if msgs is None else msgs
+        return render(bag_series(msgs, gnss_window_s, make_odometry, name), Path(out_dir))
+    except Exception:
+        print(f'{name}: plot failed\n{traceback.format_exc(limit=3)}', file=sys.stderr)
+        return []
