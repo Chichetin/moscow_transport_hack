@@ -35,7 +35,27 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/repo" && git -C "$ROOT" archive HEAD | tar -x -C "$TMP/repo"
 docker build -q -f "$TMP/repo/docker/Dockerfile" --target jury -t tram-odom:jury "$TMP/repo" >/dev/null
 
+REPORT="$OUT/layouts-$COMMIT.json"; rm -f "$REPORT"
+# прогон, оборванный на середине (OOM, kill), не должен выглядеть как проверенный:
+# отчёт пишется последним шагом, нет отчёта — нет проверки
 docker run --rm --network=none --cpus=2 --memory=512m --memory-swap=512m \
   --user "$(id -u):$(id -g)" -e HOME=/tmp -e COMMIT="$COMMIT" -e DIRTY="$DIRTY" \
   -e BAGS="${BAGS[*]}" -v "$TMP/repo:/repo:ro" -v "$OUT:/out" "${MOUNTS[@]}" \
-  tram-odom:jury bash /repo/tools/submission/layouts_inside.sh
+  tram-odom:jury bash /repo/tools/submission/layouts_inside.sh \
+  || { echo "ОБОРВАНО: контейнер вышел с кодом $?, отчёта нет" >&2; exit 1; }
+[ -f "$REPORT" ] || { echo "ОБОРВАНО: отчёт $REPORT не создан" >&2; exit 1; }
+# код выхода 1 — новая поломка. JURY_LAYOUTS_KNOWN_FAIL="<раскладка> …" — падения, у которых
+# есть открытая issue blocker (CI не краснеет на уже известном). check_submission.py исключений
+# не знает: для сдачи красное любое падение.
+python3 - "$REPORT" "${JURY_LAYOUTS_KNOWN_FAIL:-}" <<'PY'
+import json, sys
+rep, known = json.load(open(sys.argv[1])), set(sys.argv[2].split())
+new = [x['name'] for x in rep['layouts'] if x['build'] != 'ok' and x['name'] not in known]
+new += [x['bag'] for x in rep['runs'] if x['status'] not in ('ok', 'skipped')]
+for x in rep['layouts']:
+    if x['build'] != 'ok' and x['name'] in known:
+        print(f"известное падение (blocker): {x['name']}")
+if new:
+    print('НОВАЯ ПОЛОМКА:', ', '.join(new))
+sys.exit(1 if new else 0)
+PY
