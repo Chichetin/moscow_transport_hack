@@ -1,5 +1,6 @@
 """Node tests (need ROS: bash docker/dev.sh python3 -m pytest src/tram_odometry/test)."""
 import math
+import random
 from dataclasses import replace
 from pathlib import Path
 
@@ -298,3 +299,59 @@ def test_diagnostics_inputs_ok_when_fresh_and_warn_after_stale_timeout(node, mon
     node.on_input('/vehicle/driver_position_cmd', cmd)
     assert sent[-1].status[1].level == DiagnosticStatus.WARN
     assert sent[-1].status[1].message == 'stale input'
+
+
+def _stress_stream(seed=17, seconds=300.0):
+    """Wheels 10 Hz, controller 20 Hz with the faults of docs/data.md: NaN/inf, outliers,
+    zero, repeated and backward stamps, a 70 s silence of the rear bogie, bad notches."""
+    rng = random.Random(seed)
+    t0 = STAMP.sec
+    stream = []
+    for i in range(int(seconds * 20)):
+        t = t0 + i * 0.05
+        topics = ['/vehicle/driver_position_cmd']
+        if i % 2 == 0:
+            topics.append('/vehicle/front_bogie_velocity')
+            if not 100.0 <= i * 0.05 <= 170.0:
+                topics.append('/vehicle/rear_bogie_velocity')
+        for topic in topics:
+            if topic == '/vehicle/driver_position_cmd':
+                msg = DriverControllerCommand()
+                msg.position = rng.choice([-15, -3, 0, 5, 15, 127, -128])
+            else:
+                msg = VelocitySensor()
+                msg.velocity = rng.choice([30.0, 31.5, 0.0, -5.0, 1e9, float('nan'),
+                                           float('inf'), float('-inf')])
+            fault = rng.random()
+            ts = t - rng.uniform(0.0, 3.7) if fault < 0.05 else t   # backward and late stamps
+            ts = 0.0 if 0.05 <= fault < 0.07 else ts                   # empty header
+            sec = int(ts)
+            msg.header.stamp = _stamp(sec, int(round((ts - sec) * 1e9)) % 1_000_000_000)
+            stream.append((topic, msg))
+            if 0.07 <= fault < 0.1:
+                stream.append((topic, msg))                            # repeated message
+    return stream
+
+
+def test_stress_stream_through_real_core_never_breaks_outputs(node, monkeypatch):
+    sent = _capture(node, monkeypatch)
+    diagnostics = []
+    monkeypatch.setattr(node.pub_diagnostics, 'publish', diagnostics.append)
+    stream = _stress_stream()
+    stamps = {(m.header.stamp.sec, m.header.stamp.nanosec) for _, m in stream}
+    for topic, msg in stream:
+        node.on_input(topic, msg)
+    assert node.errors == 0
+    assert len(sent) > 1000 and diagnostics
+    for kind, m in sent:
+        assert (m.header.stamp.sec, m.header.stamp.nanosec) in stamps and m.header.stamp.sec > 0
+        if kind == 'v':
+            assert math.isfinite(m.velocity) and m.velocity >= 0.0
+        else:
+            p = m.pose.pose.position
+            assert all(math.isfinite(v) for v in (p.x, p.y, p.z, *m.pose.covariance))
+    gap = [m for k, m in sent if k == 'v' and STAMP.sec + 110 <= m.header.stamp.sec <= STAMP.sec + 160]
+    assert len(gap) > 100                          # rear bogie silent: publication goes on
+    rear_age = [float(v.value) for d in diagnostics if STAMP.sec + 110 <= d.header.stamp.sec
+                <= STAMP.sec + 160 for v in d.status[1].values if v.key == 'rear_age_s']
+    assert rear_age and max(rear_age) > node.params.input.stale_timeout_s
