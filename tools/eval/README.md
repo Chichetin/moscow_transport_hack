@@ -10,7 +10,7 @@
 
 Статус: готово (#6). Бейзлайн P0 на holdout — `docs/verification/2026-09-25-pr35-baseline-holdout.md`
 (Linux, 33 с); повтор на Windows-хосте с теми же числами — `docs/verification/2026-09-25-eval-holdout-windows.md`
-(18 с). `--plot` — #16, `--stress` — #15.
+(18 с). `--plot` — #16 (ниже), `--stress` — #15.
 
 ```bash
 .venv/bin/python tools/eval/run_eval.py --split quick         # 3 bag, цикл разработки, ~15 с
@@ -77,3 +77,17 @@ cross 0 на `quick` (разброс — допуск 0,05 с при 10 м/с).
 добавка ≤ 0,2 м/с (скорость) или ≤ 2 м (позиция) непрерывно 2 с без пропусков публикации
 дольше 0,3 с (`null` — не восстановилось до конца bag), `crashed`. Если после окна GNSS и
 1 с запаса событию с хвостом 3 с места нет — `skipped`. В stdout — сводная таблица по сценариям.
+
+Графики (`--plot`, #16, D-048): после метрик по каждому bag — `<out>/plots/<bag>_timeline.png` и
+`<bag>_xy.png` (нужен matplotlib из `requirements-dev.txt`; в dev-образе его нет, тесты
+отрисовки там пропускаются). `metrics.json` не меняется.
+
+```bash
+.venv/bin/python tools/eval/run_eval.py --split quick --plot
+.venv/bin/python tools/eval/run_eval.py --bag 30618_27e994fc --plot
+```
+
+| Файл | Что на нём |
+|---|---|
+| `_timeline.png` | одна ось времени от начала bag: скорость (оценка, эталон GNSS, обе тележки как записаны, м/с через `input.wheel_speed_scale`); оценка − эталон, м/с; ошибка вдоль пути со знаком (+ оценка впереди) и поперёк, м — та же проекция, что в метриках; позиция контроллера; флаги проскальзывания заливкой |
+| `_xy.png` | карта `route.csv`, эталон и оценка в системе эталона eval (ENU `Reference.origin`, перевод карты — как в `PathTracker`, через ECEF); в заголовке — RMSE скорости, along и cross. На bag без fix статуса 2 в окне начало эталона не совпадает с frame `map` трекера (#70): оценка там в стороне от карты — это артефакт эталона |
