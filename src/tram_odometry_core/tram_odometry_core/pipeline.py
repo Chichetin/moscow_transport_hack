@@ -7,6 +7,7 @@ follow replace the parts of it; the numbers of this version are the first row of
 import math
 from typing import Any, Optional
 
+from .estimator import SpeedFilter
 from .position import PathTracker
 from .slip import SlipDetector
 from .types import Estimate, Params, SlipState, WheelSample
@@ -34,6 +35,7 @@ class Odometry:
         self._last = {}                       # stream topic -> newest accepted stamp
         self._wheel = {FRONT_TOPIC: None, REAR_TOPIC: None}   # last WheelSample per bogie, m/s
         self._slip = SlipDetector(params)
+        self._filter = SpeedFilter(params)
         self._slip_state = SlipState(1.0, 1.0, False, False, None)
         self._v = 0.0                         # current speed, m/s
         self._distance = 0.0
@@ -81,24 +83,24 @@ class Odometry:
         self._wheel[topic] = WheelSample(                              # the only km/h -> m/s
             t=t, bogie='front' if topic == FRONT_TOPIC else 'rear',
             speed=kmh * p.input.wheel_speed_scale * scale)
-        return self._advance(t)
+        return self._advance(t, self._wheel[topic])
 
     def _on_stream(self, topic: str, t: float) -> Optional[Estimate]:
         if not self._fresh(topic, t):
             return None
         return self._advance(t)
 
-    def _advance(self, t: float) -> Estimate:
+    def _advance(self, t: float, sample=None) -> Estimate:
         now = t if self._t is None else max(self._t, t)
         front, rear = self._wheel[FRONT_TOPIC], self._wheel[REAR_TOPIC]
         est = self._v if self._t is not None else None
         st = self._slip.update(front, rear, 0.0, est)    # no drive model yet: accel_model = 0
         self._slip_state = st
-        used = [(w, s.speed) for w, s in ((st.front_trust, front), (st.rear_trust, rear))
-                if s is not None and w > 0.0]
-        if used:
-            self._v = sum(w * v for w, v in used) / sum(w for w, _ in used)
-        # no trusted bogie: keep the last speed
+        self._filter.predict(now, 0.0)  # drive-model dependency #10 is not merged
+        if sample is not None:
+            trust = st.front_trust if sample.bogie == 'front' else st.rear_trust
+            self._filter.update(sample, trust)
+        self._v, _, _ = self._filter.state()
         dt = 0.0 if self._t is None else now - self._t
         self._t = now
         ds = self._v * dt
@@ -108,14 +110,14 @@ class Odometry:
         return self._estimate(t, now)
 
     def _estimate(self, t: float, now: float) -> Estimate:
-        var = self.params.filter.r_wheel
+        _, var, accel = self._filter.state()
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
         x, y, z, yaw, pos_cov = self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0)
         on_map = self._tracker.advance(self._distance) if self._tracker is not None else None
         if on_map is not None:
             x, y, z, yaw, pos_cov = on_map
         return Estimate(
-            t=t, speed=self._v, speed_var=var, accel=0.0, accel_model=0.0,
+            t=t, speed=self._v, speed_var=var, accel=accel, accel_model=0.0,
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used)

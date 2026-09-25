@@ -187,3 +187,18 @@ def test_stuck_rear_bogie_does_not_halve_the_speed():
     assert est.slip.slip_rear and not est.slip.slip_front
     back = odo.step(wheel(REAR, est.t + 0.1, KMH_36))          # the sensor recovers
     assert back.slip.rear_trust == 1.0 and back.speed == pytest.approx(10.0, abs=0.1)
+
+
+def test_command_does_not_reuse_cached_wheel_as_new_measurement():
+    odo = Odometry(PARAMS)
+    first = odo.step(wheel(FRONT, 0.0, KMH_36))
+    later = odo.step(cmd(0.1, 0))
+    assert later.speed_var > first.speed_var
+    assert later.speed == pytest.approx(first.speed)
+
+
+def test_filter_does_not_apply_wheel_scale_twice():
+    from dataclasses import replace
+    params = replace(PARAMS, vehicle=replace(PARAMS.vehicle, wheel_scale_front=1.01))
+    est = Odometry(params).step(wheel(FRONT, 0.0, KMH_36))
+    assert est.speed == pytest.approx(10.1)
