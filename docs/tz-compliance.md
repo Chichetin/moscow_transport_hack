@@ -12,13 +12,13 @@
 
 | # | Пункт условий | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| T1 | ROS 2 Humble, `colcon build` без интернета | `src/`, `docker/jury-stand.sh`, `tools/submission/jury_layouts.sh` | стенд: `build.log`, `--network=none`; шесть раскладок жюри из `git archive` (D-025), падает клон рядом с `tram_vehicle_msgs` жюри — blocker #40 | ⚠️ каркас собирается (3 пакета, 2026-09-25), нод ещё нет; рантайм-зависимость ядра `python3-yaml` — apt, есть в `ros:humble-ros-base` (D-004, D-019) |
-| T2 | Вход только `/vehicle/*` (3 топика); без IMU | `core/preprocess`, нода | `grep -rn subscription src/tram_odometry` | — |
-| T3 | GNSS только для начальной выставки, в проверке — первые секунды | D-005, `gnss.init_window_s` | eval с обрезкой GNSS = выходы ноды; ревью | ⚠️ `tools/eval` обрезает GNSS после окна (тест `test_gnss_after_window_is_not_fed_but_used_as_reference`); pipeline игнорирует GNSS после окна: `test_gnss_after_window_is_ignored` (D-021); нода — ждёт #5 |
-| T4 | Выход `/result/velocity` `VelocitySensor`, м/с | нода | запись стенда, `ros2 topic echo` | — |
-| T5 | Выход `/result/position` `nav_msgs/Odometry`: stamp, frame_id, позиция, продольная скорость, ковариации | нода | запись стенда, тест формы сообщения | — |
-| T6 | `header.stamp` = время входа из bag, допуск судьи 0,05 с | D-015, нода | тест: stamp выхода ∈ stamps входов | — |
-| T7 | Только онлайн-публикация, без данных из будущего | pipeline, нода | ревью; eval на обрезанном потоке = нода | — |
+| T1 | ROS 2 Humble, `colcon build` без интернета | `src/`, `docker/jury-stand.sh`, `tools/submission/jury_layouts.sh` | стенд: `build.log`, `--network=none`; шесть раскладок жюри из `git archive` (D-025), падает клон рядом с `tram_vehicle_msgs` жюри — blocker #40 | ⚠️ 3 пакета с нодой `odometry_node` и launch собираются в раскладках жюри без сети (#5, D-028); рантайм-зависимость ядра `python3-yaml` — apt, есть в `ros:humble-ros-base` (D-004, D-019) |
+| T2 | Вход только `/vehicle/*` (3 топика); без IMU | `core/preprocess`, нода | `grep -rn subscription src/tram_odometry` | ✅ подписки — 3 `/vehicle/*` + GNSS (`test_node_subscribes_to_inputs_and_gnss_from_params`, D-028); IMU нет |
+| T3 | GNSS только для начальной выставки, в проверке — первые секунды | D-005, `gnss.init_window_s` | eval с обрезкой GNSS = выходы ноды; ревью | ⚠️ `tools/eval` обрезает GNSS после окна (тест `test_gnss_after_window_is_not_fed_but_used_as_reference`); pipeline игнорирует GNSS после окна: `test_gnss_after_window_is_ignored` (D-021); через ноду — `test_real_core_ignores_gnss_after_window_through_the_node` (#5, D-028): GNSS после окна через подписки не меняет выход |
+| T4 | Выход `/result/velocity` `VelocitySensor`, м/с | нода | запись стенда, `ros2 topic echo` | ⚠️ тест формы и единиц через настоящее ядро (`test_velocity_message_follows_contract`, `test_real_core_converts_kmh_to_mps_once`, #5); запись стенда — после `docker/jury-stand.sh` |
+| T5 | Выход `/result/position` `nav_msgs/Odometry`: stamp, frame_id, позиция, продольная скорость, ковариации | нода | запись стенда, тест формы сообщения | ⚠️ тест формы `test_position_message_follows_contract` (#5): frame `map`/`base_link`, кватернион yaw, ковариации по §1; запись стенда — после стенда |
+| T6 | `header.stamp` = время входа из bag, допуск судьи 0,05 с | D-015, нода | тест: stamp выхода ∈ stamps входов | ⚠️ `test_node_publishes_both_results_with_input_stamp` (#5): stamp обоих выходов = stamp входа; по записи стенда — после стенда |
+| T7 | Только онлайн-публикация, без данных из будущего | pipeline, нода | ревью; eval на обрезанном потоке = нода | ⚠️ нода публикует на каждом входе без буферов и таймеров (D-028); GNSS после окна через ноду не меняет выход (`test_real_core_ignores_gnss_after_window_through_the_node`); сравнение с eval бит в бит — issue eval |
 | T8 | Кастомные сообщения собираются | `src/tram_vehicle_msgs` (D-006) | стенд | ✅ `colcon build` в `ros:humble-ros-base` без сети, 2026-09-25 |
 
 ## Критерий 1. Скорость (30)
@@ -37,7 +37,7 @@
 | P1 | Дрейф в конце, % от пути | eval `drift_pct` | holdout | ⚠️ бейзлайн holdout: медиана 153 % — прямая по курсу без карты (D-021), планка для #14 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
 | P2 | Along-track MEAN/MAX/RMSE | eval `along_*` | holdout | ⚠️ бейзлайн holdout: along RMSE медиана 3264 м, MEAN 2763 м, MAX 5394 м — без карты (D-021), планка для #14 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
 | P3 | Cross-track при привязке к pathgraph | карта `src/tram_odometry/maps/route.csv` (D-007, D-022), eval `cross_*` | holdout | ⚠️ карта есть: GNSS holdout до карты mean 0,41 м, p99 4,95 м (`docs/verification/2026-09-25-route-map.md`); высота `z_m` (D-024): mean 0,17 м, p99 2,45 м (`docs/verification/2026-09-25-route-height.md`); метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 и PO1 #14 |
-| P4 | Корректный `nav_msgs/Odometry` | нода, контракт §1 | тест формы, запись стенда | — |
+| P4 | Корректный `nav_msgs/Odometry` | нода, контракт §1 | тест формы, запись стенда | ⚠️ `test_position_message_follows_contract` (#5); запись стенда — после стенда |
 | P5 | Инициализация абсолютного положения (последняя позиция / старт прогона) | `core/position` | eval: ошибка в первые 10 с | — |
 
 ## Критерий 3. Устойчивость (20)
@@ -46,17 +46,17 @@
 |---|---|---|---|---|
 | R1 | Проскальзывание: снижаем доверие к одометрии, опираемся на модель, нет всплесков | `core/slip`, `core/estimator` | stress: всплеск одной тележки; 6 bag 30639 | ⚠️ детектор в pipeline (D-027): покрытие 98,7 % расхождений на train, ложные флаги 0,00 %; stress (#15) и связка с EKF (#11) впереди |
 | R2 | Пропуски и выбросы входов; нет drift blow-up | `core/preprocess` | stress: дыры 1–70 с, выбросы | — |
-| R3 | Нода не падает на некорректных/неполных данных; восстановление | нода, pipeline | тесты NaN/пусто/немонотонно; stress `crashed=false` | ⚠️ pipeline: NaN/inf/мусор/немонотонный stamp/молчащая тележка покрыты тестами (D-021); нода и stress — впереди |
+| R3 | Нода не падает на некорректных/неполных данных; восстановление | нода, pipeline | тесты NaN/пусто/немонотонно; stress `crashed=false` | ⚠️ pipeline: NaN/inf/мусор/немонотонный stamp/молчащая тележка покрыты тестами (D-021); нода: NaN/inf без публикации, исключение ядра не роняет ноду (`test_real_core_drops_nan_wheel_without_publishing`, `test_exception_in_pipeline_does_not_kill_node`, D-028); stress — впереди (R2) |
 | R4 | Флаг/диагностика проскальзывания, оценка сцепления, адаптация модели | `/result/diagnostics`, масштабы колёс в фильтре | запись стенда | ⚠️ флаги и доверие считаются (`core/slip`, D-027); сцепление и диагностика — впереди |
 
 ## Критерий 4. Реальное время (15)
 
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| RT1 | Задержка вход → выход ≤ 100 мс, пик ≤ 250 мс | нода, `tools/stand` | стенд, p99/max | ⚠️ инструмент готов (`tools/stand`, D-023), замера на ноде нет — ждёт #5 |
+| RT1 | Задержка вход → выход ≤ 100 мс, пик ≤ 250 мс | нода, `tools/stand` | стенд, p99/max | ⚠️ инструмент готов (`tools/stand`, D-023), нода есть (#5, D-028); замер `docker/jury-stand.sh 30618_e9a34502` — на машине с данными, итог — строка D-… по D-002 |
 | RT2 | Частота `/result/*` ≥ 10 Гц (20–50) | D-015 | стенд | — |
 | RT3 | ≤ 2 ядра, ≤ 0,5 ГБ, без утечек и гонок на длинном прогоне | нода | стенд на bag ≥ 20 мин, RSS во времени | ⚠️ `sampler.py` + наклон RSS готовы (D-023), замера на ноде нет |
-| RT4 | Непрерывная работа без вмешательства; сборка без интернета | launch, стенд | стенд целиком | ⚠️ сборка — да, нода — нет |
+| RT4 | Непрерывная работа без вмешательства; сборка без интернета | launch, стенд | стенд целиком | ⚠️ сборка — да (раскладки жюри); нода и launch есть (#5), прогон стенда целиком — после `docker/jury-stand.sh` |
 
 ## Обязательные артефакты сдачи
 
@@ -77,7 +77,7 @@
 | E2 | Модель продольной динамики | `core/dynamics`, A3 | — |
 | E3 | Модель/эвристика проскальзывания | `core/slip`, A3 | — |
 | E4 | Допущения и ограничения | A4 | — |
-| E5 | Одна или несколько нод оценки ускорения, скорости, положения | `src/tram_odometry` | — |
+| E5 | Одна или несколько нод оценки ускорения, скорости, положения | `src/tram_odometry` | ⚠️ нода `odometry_node` + `odometry.launch.py` (#5, D-028); диагностика — R2 |
 | E6 | Инструкции по сборке и запуску, параметры | A2, A4 | — |
 | E7 | Демонстрация: запуск на bag, публикация в реальном времени, оценка по GNSS | стенд + eval + питч | — |
 
