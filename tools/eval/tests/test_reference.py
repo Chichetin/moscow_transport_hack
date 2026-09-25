@@ -53,6 +53,34 @@ def test_origin_is_first_fix_inside_the_window():
     assert ref.pos[0] == pytest.approx([0, 0, 0], abs=1e-6)
 
 
+def test_origin_is_first_window_fix_when_status_2_comes_only_later():
+    # #70: window has only status 0, status 2 starts 30 s (300 m) later. The tracker's frame `map`
+    # starts at the first valid fix of the window (D-030); the reference must start there too,
+    # while its track stays status 2 only
+    t, llas = fixes_east(600)
+    llas[300:, 3] = 2
+    ref = build_reference(t, llas, [], np.zeros((0, 2)), window_end=5.0)
+    assert ref.origin == pytest.approx((LAT0, LON0, ALT0))
+    assert len(ref.pos_t) == 300 and ref.pos_t[0] == pytest.approx(30.0)
+    assert ref.pos[0] == pytest.approx([300.0, 0, 0], abs=0.05)     # not 0: same frame as the tracker (1 cm: parallel vs ENU plane)
+
+
+def test_status_2_in_the_window_still_wins_the_origin():
+    t, llas = fixes_east(600)
+    llas[20:, 3] = 2                                  # status 2 from 2 s, inside the 5 s window
+    ref = build_reference(t, llas, [], np.zeros((0, 2)), window_end=5.0)
+    assert ref.origin == pytest.approx((LAT0, llas[20, 1], ALT0))
+    assert ref.pos[0] == pytest.approx([0, 0, 0], abs=1e-6)
+
+
+def test_km_outlier_in_the_window_does_not_become_the_origin_before_late_status_2():
+    t, llas = fixes_east(600)
+    llas[300:, 3] = 2
+    llas[0, 0] += 0.03                                # first fix 3 km north (trap 10)
+    ref = build_reference(t, llas, [], np.zeros((0, 2)), window_end=5.0)
+    assert ref.origin == pytest.approx((LAT0, llas[1, 1], ALT0))
+
+
 def test_no_gnss_gives_empty_reference():
     ref = build_reference([], np.zeros((0, 4)), [], np.zeros((0, 2)), window_end=5.0)
     assert ref.origin is None and len(ref.pos) == 0 and len(ref.vel_t) == 0
