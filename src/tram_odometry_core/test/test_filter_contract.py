@@ -34,6 +34,16 @@ def test_filter_rejects_invalid_covariance_or_gate(tmp_path, key, value):
         T.load_params(path)
 
 
+@pytest.mark.parametrize('key', [
+    'q_accel', 'r_wheel', 'q_bias', 'initial_bias_var', 'nis_gate',
+])
+@pytest.mark.parametrize('value', [float('nan'), float('inf')])
+def test_filter_rejects_nonfinite_noise_or_gate(tmp_path, key, value):
+    path = _write(tmp_path, lambda p: p['filter'].__setitem__(key, value))
+    with pytest.raises(TypeError, match=key):
+        T.load_params(path)
+
+
 def test_filter_diagnostic_has_measurement_identity():
     diag = T.FilterDiagnostics(t=12.5, bogie='rear', nis=4.0, accepted=False)
     assert dataclasses.is_dataclass(diag)
