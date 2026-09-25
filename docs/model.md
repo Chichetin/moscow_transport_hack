@@ -1,163 +1,162 @@
 # Модель резервной одометрии
 
-Состояние документа: реализация `origin/main` после #9, #12, #13, #14, #56 и
-контракта фильтра D-032. Модель привода #10 и оценщик EKF #11 ещё открыты. Их проектные намерения перечислены отдельно, без
-уравнений, которые можно было бы принять за работающий код.
+Описание сверено с кодом `origin/main` после #10, #12–#14 и #56. Формулы ниже
+описывают реализованное поведение; оценщик EKF из #11 пока не влит и отдельно
+помечен как следующий шаг.
 
 ## Входы, выходы и единицы
 
 Единственная точка расчёта — [`Odometry.step`](../src/tram_odometry_core/tram_odometry_core/pipeline.py).
-Она передаёт пару `(topic, ROS message)` от ноды или `tools/eval` в
+Она передаёт сырое сообщение в
 [`Preprocessor.accept`](../src/tram_odometry_core/tram_odometry_core/preprocess/__init__.py),
-а затем обрабатывает нормализованный `Sample`. Метод возвращает `Estimate` либо
-`None` для отклонённого или служебного входа. В движении используются скорости двух
-тележек и позиция контроллера; GNSS master fix/vel допускается только в первые
-`gnss.init_window_s` секунд по `header.stamp`. Позиция контроллера уже проходит проверку
-и попадает в `CommandSample`, но пока не участвует в расчёте скорости. GNSS rover в ноде
-подписан, но ядро его не использует. Выходы ноды — `/result/velocity` в м/с и `/result/position` в метрах,
-ENU прогона; их заполнение выполняют
+который возвращает нормализованный `Sample` либо `None`. Используются скорости
+передней и задней тележек, позиция контроллера и, только в начальном окне,
+GNSS master fix/velocity. Скорость тележек приходит в км/ч и внутри представлена
+в м/с; расстояние и координаты — в метрах, время — секунды из `header.stamp`.
+GNSS rover подписан нодой, но в ядре не используется.
+
+`Odometry.step` возвращает `Estimate` либо `None`. Нода публикует его как
+`/result/velocity` в м/с и `/result/position` в ENU метрах через
 [`velocity_msg` и `position_msg`](../src/tram_odometry/tram_odometry/odometry_node.py).
+Поле `Estimate.accel` пока равно нулю; `accel_model` содержит расчёт модели
+привода, если `drive.use_model` включён.
 
-Внутренние величины `Estimate`: скорость `speed` (м/с), путь `distance` (м), положение
-`x/y/z` (м), курс `yaw` (рад), дисперсия скорости и ковариация плоскости. Поля
-`accel` и `accel_model` пока всегда равны нулю; это видно в
-[`Odometry._estimate`](../src/tram_odometry_core/tram_odometry_core/pipeline.py).
-
-## Скорость и путь: работающий бейзлайн
+## Предобработка и скорость
 
 [`Preprocessor._wheel`](../src/tram_odometry_core/tram_odometry_core/preprocess/__init__.py)
-единожды переводит скорость `u_i` тележки из км/ч в м/с и применяет её масштаб:
+переводит каждую скорость и применяет настроенный масштаб колеса:
 
 ```text
-v_i = u_i · input.wheel_speed_scale · vehicle.wheel_scale_i.
+v_i = u_i · input.wheel_speed_scale · vehicle.wheel_scale_i
 ```
 
-До оценщика предобработчик пропускает только возрастающие stamp каждой тележки
-и отсекает выбросы по пределу ускорения колеса
-`input.max_wheel_accel_mps2`; деталь поведения описана в решении D-031.
-После проверки доверия [`Odometry._advance`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
-считает взвешенное среднее; при отсутствии доверенных тележек оставляет прежнюю
-скорость. Время состояния не откатывается при запоздавшем сообщении:
+Здесь `u_i` — вход в км/ч, а `v_i` — м/с. `Preprocessor._fresh` проверяет
+возрастающие stamps отдельно для каждого потока; `_wheel` также отбрасывает
+неправдоподобный скачок скорости по `input.max_wheel_accel_mps2`.
+
+На каждом принятом событии [`Odometry._advance`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
+обновляет состояние времени `now = max(t, t_prev)` и интервал
+`dt = now − t_prev` (для первого события `dt = 0`). Детектор
+[`SlipDetector.update`](../src/tram_odometry_core/tram_odometry_core/slip/detector.py)
+назначает доверие двум последним измерениям. Для тележек с положительным
+доверием скорость — их взвешенное среднее:
 
 ```text
-v = Σ(w_i v_i) / Σw_i,  если Σw_i > 0; иначе v = v_prev;
-dt = max(t, t_prev) − t_prev;  ds = v · dt;  distance += ds.
+v = Σ(w_i · v_i) / Σw_i
 ```
 
-Повторные и не возрастающие stamp потоков тележек и контроллера отклоняются в
-[`Preprocessor._fresh`](../src/tram_odometry_core/tram_odometry_core/preprocess/__init__.py).
-При молчании обеих тележек дольше `input.stale_timeout_s` (с `drive.use_model: true`, #10, D-036)
-скорость **прогнозируется моделью привода**: `v = max(0, v_prev + a_model·dt)`, где
-`a_model = model_accel(notch(t − response_delay_s), v_prev)` — таблица D-033 с пределами
-сцепления и мощности минус сопротивление Дэвиса; то же `a_model` идёт в `SlipDetector` как
-прогноз и публикуется в `Estimate.accel_model`. Пока тележки живы, скорость берётся из них;
-модель входит в оценку только через детектор (сведение прогноза и измерений — EKF #11).
-`Estimate.accel` по-прежнему 0.
+Если доверенных измерений нет, включённая модель привода даёт прогноз
+`v = max(0, v_prev + a_model · dt)`. При выключенной модели скорость удерживается.
+Путь обновляется как `distance += v · dt`; положение прямого режима —
+`x += ds·cos(yaw)`, `y += ds·sin(yaw)`, где `ds = v·dt`.
+
+## Привод и продольное ускорение
+
+[`Odometry._notch_at`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
+выбирает последнюю позицию контроллера, действовавшую к моменту `t −
+drive.response_delay_s`; до первой подходящей команды берётся нейтраль.
+[`model_accel`](../src/tram_odometry_core/tram_odometry_core/dynamics/__init__.py)
+линейно интерполирует модуль ускорения по `drive.speed_grid_mps` в строке
+`abs(notch)` таблицы тяги для `notch ≥ 0` или торможения для `notch < 0`.
+Экстраполяция за узлы сетки использует крайнее значение `numpy.interp`.
+Для тяги модуль ограничен сцеплением и, при `v > 0`, удельной мощностью;
+затем вычитается сопротивление Дэвиса:
+
+```text
+A = min(interp(table[abs(notch)], v), drive.adhesion_accel_mps2)
+если notch > 0 и v > 0: A = min(A, drive.traction_power_w_per_kg / v)
+a_model = sign_drive(notch) · A − (c0 + c1·v + c2·v²)
+```
+
+`sign_drive` равен `+1` для нейтрали и тяги и `−1` для торможения. Поэтому
+нейтраль также учитывает сопротивление. Функция возвращает ускорение, не скорость;
+интегрирование и ограничение `v ≥ 0` выполняются в `_advance`. Это эмпирическая
+табличная модель ускорения, а не оценка момента двигателя или силы. Масса,
+передаточное отношение и уклон отдельно этими входами не наблюдаются.
+
+Если `drive.use_model` включён, `a_model` передаётся в `SlipDetector.update`.
+Когда обе тележки не поступали дольше `input.stale_timeout_s`, pipeline обнуляет
+их доверие и прогнозирует скорость моделью. Когда хотя бы одна тележка
+доверенная, оценка скорости пока берётся из тележек: сведения модели и измерений
+через EKF относится к #11.
 
 ## Проскальзывание и отказ тележки
 
 [`SlipDetector.update`](../src/tram_odometry_core/tram_odometry_core/slip/detector.py)
-сравнивает две свежие тележки с допуском и прогнозом; в текущем pipeline
-`accel_model = 0`:
+сравнивает свежие скорости тележек с прогнозом от последней измеренной скорости
+`v_ref` и модельного ускорения. Здесь `dt` — разница stamps последнего и
+предыдущего обновления детектора, `v_ref` — скорость до текущих измерений:
 
 ```text
-tol = slip.front_rear_threshold_mps + slip.model_residual_threshold_mps2 · dt;
-v_pred = v_prev + accel_model · dt;
-dev_i = |v_i − v_pred|.
+tol = slip.front_rear_threshold_mps + slip.model_residual_threshold_mps2 · dt
+v_pred = v_ref + accel_model · dt
+dev_i = |v_i − v_pred|
 ```
 
-Если обе скорости расходятся не более чем на `tol`, обе получают доверие 1. При
-большем расхождении и ровно нулевой скорости одной тележки нулевая получает
-доверие 0 и флаг отказа. Если прогноза `pred` ещё нет, обе получают 0,5;
-иначе отбрасывается тележка с большим `dev_i`, при равенстве — 0,5/0,5.
-Возраст тележки считается относительно **последнего stamp тележек**, а не
-текущего входа контроллера: при возрасте больше `input.stale_timeout_s` доверие
-становится 0; флаг отказа появляется только если другая тележка продолжает
-сообщать. `adhesion_est` пока `None`. Это эвристика на
-расхождение и застревание датчика; согласное проскальзывание обеих тележек она
-не обнаруживает.
+Если две свежие тележки согласны в пределах `tol`, обе получают доверие 1.
+Иначе, если ровно одна скорость равна нулю, она помечается отказавшей при
+отсутствии прогноза, тяге (`accel_model > 0`) или согласии движущейся тележки
+с прогнозом. В остальных случаях при отсутствии прогноза обе получают 0,5;
+с прогнозом доверие 1 получает ближайшая к нему тележка, а другая помечается
+проскальзывающей только если её отклонение больше `tol`. При равном удалении
+обе получают по 0,5. Просроченная тележка получает доверие 0. Это не обнаруживает
+согласное проскальзывание обеих тележек; `adhesion_est` сейчас не оценивается.
 
-## Положение: работающая карта и запасной режим
+## Положение по карте
 
-[`Odometry._on_fix`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
-передаёт разрешённые фиксы в
+При включённой карте [`Odometry._on_fix`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
+передаёт допустимые фиксы в
 [`PathTracker.on_fix`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py).
-После фильтра расстояния до карты `position.fix_gate_m` начало ENU прогона берётся
-по первому GBAS fix (если он есть в окне), иначе по первому валидному fix. Карта
-переводится между двумя ENU через WGS84 ECEF в
-[`PathTracker._set_origin`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py).
-Принятый fix окна обновляет якорь `(ветка, s_anchor, distance_anchor)` по
-ближайшему сегменту карты в
-[`PathTracker._nearest`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py).
-Выбросы за `fix_gate_m` и fix обычного статуса после GBAS не обновляют якорь.
+Начало ENU выставляется в окне `gnss.init_window_s`; начало карты задаётся
+через WGS84 ECEF в `PathTracker._set_origin`. `PathTracker._nearest` выбирает
+ближайший сегмент и фиксирует якорь `(s_anchor, distance_anchor)` на ветке.
+Фикс вне `position.fix_gate_m` от карты не принимается.
 
-После окна [`PathTracker.advance`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py)
-двигается только вперёд по выбранной ветке с текущей оценкой масштаба `scale` и
-интерполирует `x/y/z/yaw` в
-[`PathTracker._at`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py):
+После окна GNSS [`PathTracker.advance`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py)
+продвигает путь по колёсному расстоянию с текущим масштабом `scale` и получает
+координаты и касательный курс в `_at`:
 
 ```text
-s = s_anchor + scale · (distance − distance_anchor);
-σ_cross² = position.cross_std_m²;
-σ_along² = σ_cross² + var0 + [position.along_drift_frac · scale · (distance − distance_anchor)]²;
-Σ_xy = R(yaw) · diag(σ_along², σ_cross²) · R(yaw)ᵀ.
+s = s_anchor + scale · (distance − distance_anchor)
+σ_along² = σ_cross² + var0 + [position.along_drift_frac · scale · (distance − distance_anchor)]²
+σ_cross² = position.cross_std_m²
+Σ_xy = R(yaw) · diag(σ_along², σ_cross²) · R(yaw)ᵀ
 ```
 
-Высота карты сдвигается на медиану разности высот fix и карты за окно выставки.
-При достижении конца ветки продолжение ищется в пределах `position.join_m`.
-После окна GNSS и стоянки не короче `position.stop_min_s` со скоростью ниже
-`position.stop_speed_mps`, pipeline один раз предлагает карте из
-[`stops.csv`](../src/tram_odometry/maps/stops.csv) поправить `s` к ближайшему
-месту, если оно не дальше `position.stop_snap_max_m`.
-Поправка взвешенная: `gain = var/(var + stop_std_m²)`, затем `s += gain·(s_stop-s)`;
-остаточная дисперсия `var` умножается на `1-gain`. Если две принятые стоянки
-находятся на одной ветке и расстояние между ними не меньше
-`position.scale_min_arc_m`, отношение пути карты к пути колёс обновляет масштаб:
+Высота карты корректируется медианой разности высот принятых фиксов и карты в
+окне выставки. На конце ветки продолжение ищется в радиусе `position.join_m`.
+После стоянки длительностью `position.stop_min_s` при скорости ниже
+`position.stop_speed_mps` метод `Odometry._on_standstill` предлагает привязку к
+ближайшему месту остановки. `PathTracker.on_stop` принимает её в пределах
+`position.stop_snap_max_m` и при неоднозначности близких мест пропускает; иначе
+корректирует путь с весом `var/(var + position.stop_std_m²)`. При двух принятых
+остановках на одной ветке, разделённых не менее чем `position.scale_min_arc_m`,
+`PathTracker._update_scale` обновляет масштаб по отношению дуги карты к пути колёс,
+ограниченному `position.scale_max_dev`, с весом `position.scale_alpha`.
 
-```text
-ratio = clip((s_stop − s_stop_prev) / (distance − distance_prev), 1 ± scale_max_dev);
-scale += scale_alpha · (ratio − scale).
-```
+Если карта выключена или ещё не выставлена, `Odometry._advance` интегрирует
+прямую. Курс запасного режима получает
+[`Odometry._on_vel`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
+из `atan2(v_north, v_east)` по GNSS master velocity в начальном окне. После окна
+GNSS для коррекции оценки положения не используется.
 
-Реализуют
-[`Odometry._on_standstill`](../src/tram_odometry_core/tram_odometry_core/pipeline.py),
-[`PathTracker.on_stop`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py)
-и [`PathTracker._update_scale`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py).
-Если карта отключена либо ещё нет якоря, [`Odometry._advance`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
-интегрирует прямую по курсу из наибольшей скорости GNSS master в окне:
+## Оценщик скорости: текущий статус
 
-```text
-x += ds · cos(yaw);  y += ds · sin(yaw).
-```
+На `origin/main` после #10 оценка при доступных тележках всё ещё является
+взвешенным средним из `Odometry._advance`; параметры `filter.q_accel`,
+`filter.r_wheel`, `filter.q_bias`, `filter.initial_bias_var` и `filter.nis_gate`
+пока не участвуют в расчёте. Контракт этих параметров описан в D-032.
+Открытая #11 реализует EKF с прогнозом по `a_model`, измерениями с доверием
+`SlipState` и gating по NIS. После её merge этот раздел следует дополнить
+фактическими состоянием, уравнениями, якобианом и ссылками на функции.
 
-Курс выбирает [`Odometry._on_vel`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
-через `atan2(v_north, v_east)` после валидного fix. Он не задаёт положение
-на карте: там курс берётся из касательной ветки.
+## Пределы применимости
 
-## Привод, продольная динамика и EKF: состояние реализации
-
-Схема параметров уже задана в [`DriveParams`, `ResistanceParams` и `FilterParams`](../src/tram_odometry_core/tram_odometry_core/types.py):
-таблицы неотрицательных модулей ускорения по позиции контроллера и скорости,
-пределы сцепления/удельной мощности, коэффициенты сопротивления и шумы фильтра.
-[`_validate_drive`](../src/tram_odometry_core/tram_odometry_core/types.py) проверяет форму
-таблиц, нулевую строку и допустимость сетки. В `params.yaml` таблицы заполнены по
-train в #9 (D-033), но ещё не участвуют в `Odometry.step`. Модули
-[`dynamics`](../src/tram_odometry_core/tram_odometry_core/dynamics/__init__.py) и
-[`estimator`](../src/tram_odometry_core/tram_odometry_core/estimator/__init__.py) ещё
-не содержат расчётных функций. Поэтому в текущем ядре нет ни модели момента,
-ни зависимости момента от скорости вала, ни уравнения продольной динамики с
-массой/уклоном, ни EKF с состоянием, якобианом и обновлением измерениями.
-`mass_kg`, таблицы и коэффициенты сопротивления сейчас не участвуют в `Odometry.step`.
-
-Контракт D-032 уже задаёт смысл `q_accel`, `r_wheel`, `q_bias`,
-`initial_bias_var` и `nis_gate`, а тип `Estimate` содержит необязательное поле
-`filter_diagnostics`. До реализации #11 поле остаётся `None`, а значения шумов
-не участвуют в расчёте.
-
-#10 должен реализовать преобразование табличного ускорения от тяги/тормоза и
-сопротивления в `accel_model`; #11 — прогноз скорости и обновление по двум
-тележкам с доверием `SlipState`. Документ нужно дополнить ссылками на **их реальные
-функции и уравнения** после merge этих issue. Уклон и обратное вычисление момента
-не определены текущими входами: без IMU и данных о передаче их нельзя честно
-назвать оцененными величинами. На выходе сейчас оцениваются только скорость,
-путь и положение, а не момент.
+- Колёсные датчики передают модуль скорости; знак заднего хода не наблюдается.
+- Уклон не измеряется. Эффективное сопротивление идентифицировано без явной
+  коррекции уклона и может включать средний уклон train.
+- Согласное проскальзывание обеих тележек эвристикой не обнаруживается.
+- Карта покрывает известный маршрут и ветку; вне карты и на неоднозначном
+  разветвлении положение может ошибаться.
+- Запасная скорость при долгой потере обоих датчиков зависит от точности таблиц
+  привода и задержки контроллера.
