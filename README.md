@@ -11,7 +11,9 @@
 ## Для жюри: проверка за 5 минут
 
 Нужны: ROS 2 Humble (`ros-humble-ros-base` достаточно), `python3-numpy`, `python3-yaml`
-из apt Humble. Интернет не нужен ни на одном шаге.
+из apt Humble. Шаги 1–4 (сборка, запуск, выходы, логи) работают без интернета. Для шагов 5–6
+сеть нужна один раз: `pip install` зависимостей `tools/eval` и `docker build` образа стенда
+(`ros:humble-ros-base` + `apt-get install procps time`); сам стенд идёт с `--network=none`.
 
 ### 1. Сборка (без интернета)
 
@@ -31,7 +33,9 @@ source install/setup.bash
 
 Та же сборка проверяется у нас в шести раскладках workspace, которые может выбрать жюри
 (клон целиком в `src/`, только `src/*`, свой `tram_vehicle_msgs` рядом, underlay и т. д.),
-из `git archive`, без сети, 2 CPU, 512 МБ: `bash tools/submission/jury_layouts.sh`.
+из `git archive`, без сети, 2 CPU, 512 МБ: `bash tools/submission/jury_layouts.sh`. Пять
+проходят; раскладка «клон рядом со своим `tram_vehicle_msgs` без `COLCON_IGNORE`» падает на
+дубликате имени пакета — открытый blocker #40, обход — строка `COLCON_IGNORE` выше.
 
 ### 2. Запуск
 
@@ -57,12 +61,13 @@ ros2 bag play <каталог bag>                            # терминал
 
 | Топик | Тип | Частота | Содержимое |
 |---|---|---|---|
-| `/result/velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | на каждом входном сообщении, ~40 Гц (тележки 2 × 10 Гц + контроллер 20 Гц) | `velocity` — продольная скорость, **м/с** (вход тележек — км/ч, перевод в ядре) |
+| `/result/velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | на каждом принятом сообщении тележек и контроллера, ~40 Гц (2 × 10 Гц + 20 Гц); GNSS и отброшенный вход выхода не дают | `velocity` — продольная скорость, **м/с** (вход тележек — км/ч, перевод в ядре) |
 | `/result/position` | `nav_msgs/msg/Odometry` | та же | `pose.pose.position` — x (восток), y (север), z (вверх), м, frame `map`; `pose.pose.orientation` — курс; `twist.twist.linear.x` — скорость; ковариации заполнены, неоцениваемые компоненты 1e6 |
 | `/result/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 1–10 Гц | флаги проскальзывания и состояние входов — в работе (пакет R2, issue #17); до него топик не публикуется |
 
-`header.stamp` на обоих выходах — время входного сообщения из bag (не wall clock);
-`frame_id` = `map`, `child_frame_id` = `base_link`. Начало frame `map` — первый
+`header.stamp` на обоих выходах — время входного сообщения из bag (не wall clock).
+`frame_id`: у `/result/velocity` — `base_link`, у `/result/position` — `map` с
+`child_frame_id` = `base_link`. Начало frame `map` — первый
 GNSS-fix статуса 2 в окне выставки (иначе первый валидный), оси ENU, как у эталона.
 
 ```bash
@@ -72,8 +77,7 @@ ros2 topic echo --once /result/position
 
 ### 4. Логи
 
-- Нода пишет в stdout терминала `ros2 launch` (`output='screen'`); ошибок на штатном bag нет.
-  Некорректный вход (NaN, stamp из прошлого, молчащая тележка) пропускается без сообщения:
+- Нода пишет в stdout терминала `ros2 launch` (`output='screen'`). Некорректный вход (NaN, stamp из прошлого, молчащая тележка) пропускается без сообщения:
   на каждом сообщении нода не логирует. Исключение ядра — одна строка `error` с троттлингом 5 с,
   нода живёт дальше.
 - На стенде (п. 6) всё складывается в `out/stand/<bag>/`: `build.log` (colcon), `node.log`
@@ -82,7 +86,7 @@ ros2 topic echo --once /result/position
 ### 5. Метрики против GNSS-эталона (без ROS)
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt   # rosbags, numpy, pyyaml
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt   # rosbags, numpy, pyyaml, scipy, pandas, matplotlib, pytest
 cp .env.example .env                                  # TRAM_DATA_DIR = каталог с распакованными bag
 .venv/bin/python tools/eval/run_eval.py --bag 30618_e9a34502              # один bag
 .venv/bin/python tools/eval/run_eval.py --split holdout                   # 26 bag отложенных дней
@@ -98,8 +102,8 @@ cp .env.example .env                                  # TRAM_DATA_DIR = ката
 ### 6. Задержка, частота, ресурсы — стенд жюри
 
 ```bash
-bash docker/jury-stand.sh <bag_id>            # 2 CPU, 512 МБ, --network=none; ~ длительность bag
-.venv/bin/python tools/stand/run_stand.py out/stand/<bag_id>     # таблица + stand.json
+bash docker/jury-stand.sh <bag_id>            # 2 CPU, 512 МБ, --network=none; ~ длительность bag; в конце сам печатает таблицу
+.venv/bin/python tools/stand/run_stand.py out/stand/<bag_id>     # пересчитать отдельно: таблица + stand.json
 ```
 
 Стенд собирает `src/` в чистом контейнере `ros:humble-ros-base` без сети, запускает ноду по
