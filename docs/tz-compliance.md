@@ -46,8 +46,8 @@
 |---|---|---|---|---|
 | R1 | Проскальзывание: снижаем доверие к одометрии, опираемся на модель, нет всплесков | `core/slip`, `core/estimator` | stress: всплеск одной тележки; 6 bag 30639 | ⚠️ детектор в pipeline (D-027): покрытие 98,7 % расхождений на train, ложные флаги 0,00 %; stress (#15) и связка с EKF (#11) впереди |
 | R2 | Пропуски и выбросы входов; нет drift blow-up | `core/preprocess` | stress: дыры 1–70 с, выбросы | — |
-| R3 | Нода не падает на некорректных/неполных данных; восстановление | нода, pipeline | тесты NaN/пусто/немонотонно; stress `crashed=false` | ⚠️ pipeline: NaN/inf/мусор/немонотонный stamp/молчащая тележка покрыты тестами (D-021); нода: NaN/inf без публикации, исключение ядра не роняет ноду (`test_real_core_drops_nan_wheel_without_publishing`, `test_exception_in_pipeline_does_not_kill_node`, D-028); stress — впереди (R2) |
-| R4 | Флаг/диагностика проскальзывания, оценка сцепления, адаптация модели | `/result/diagnostics`, масштабы колёс в фильтре | запись стенда | ⚠️ флаги и доверие считаются (`core/slip`, D-027); сцепление и диагностика — впереди |
+| R3 | Нода не падает на некорректных/неполных данных; восстановление | нода, pipeline | тесты NaN/пусто/немонотонно; stress `crashed=false` | ⚠️ pipeline: NaN/inf/мусор/немонотонный stamp/молчащая тележка покрыты тестами (D-021); нода #17 (D-030): `test_empty_zero_stamp_and_nonfinite_output_do_not_publish`, `test_controller_continues_prediction_during_wheel_silence`, повторные stamp и исключение ядра проверены в контейнере; bag с паузой тележки 73 с — стенд |
+| R4 | Флаг/диагностика проскальзывания, оценка сцепления, адаптация модели | `/result/diagnostics`, масштабы колёс в фильтре | запись стенда | ⚠️ `/result/diagnostics` с двумя статусами по контракту, 10 Гц по времени bag, возрастами входов и флагами slip (#17, D-030; `test_diagnostics_reports_slip_and_input_age_with_input_stamp`, `test_diagnostics_rate_and_warning_for_slipping_bogie`); сцепление и адаптация модели — #10/#11 |
 
 ## Критерий 4. Реальное время (15)
 
