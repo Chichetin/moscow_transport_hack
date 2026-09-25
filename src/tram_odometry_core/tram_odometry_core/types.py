@@ -113,6 +113,8 @@ class DriveParams:
     brake_accel_table: Tuple[float, ...]
     adhesion_accel_mps2: float
     traction_power_w_per_kg: float
+    response_delay_s: float
+    use_model: bool
 
 
 @dataclass(frozen=True)
@@ -294,6 +296,8 @@ def _validate_drive(drive: DriveParams) -> None:
         raise ValueError('drive.adhesion_accel_mps2 must be positive')
     if drive.traction_power_w_per_kg <= 0:
         raise ValueError('drive.traction_power_w_per_kg must be positive')
+    if not (drive.response_delay_s >= 0):
+        raise ValueError('drive.response_delay_s must be nonnegative')
     expected = (drive.notch_max + 1) * len(grid)
     for name in ('traction_accel_table', 'brake_accel_table'):
         table = getattr(drive, name)
