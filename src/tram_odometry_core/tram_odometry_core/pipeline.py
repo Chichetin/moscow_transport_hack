@@ -80,6 +80,13 @@ class Odometry:
         return notch
 
     def _advance(self, t: float, wheel_arrived: bool = False) -> Estimate:
+        jump = self.params.input.max_stamp_jump_s
+        if self._t is not None and self._t - t > jump:
+            # the input clock was resynced back by preprocess (#77, D-042): the state time is
+            # in the future of every input now; follow the input instead of freezing there
+            self._t = t
+            self._t_wheel_rx = t if self._t_wheel_rx is not None else None
+            self._stop_since, self._stop_snapped = None, False
         now = t if self._t is None else max(self._t, t)
         front, rear = self._wheel['front'], self._wheel['rear']
         # the detector predicts from the last measured speed over its own dt (last wheel
@@ -87,6 +94,8 @@ class Odometry:
         # the acceleration twice
         est = self._v_measured if self._t is not None else None
         dt = 0.0 if self._t is None else now - self._t
+        if dt > jump:
+            dt = 0.0     # a clock jump, not travel: no bag holds such a gap (max 2.6 s, D-042)
         drive = self.params.drive
         self._accel_model = (model_accel(self._notch_at(now), self._v, self.params)
                              if drive.use_model else 0.0)

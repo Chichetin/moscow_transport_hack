@@ -251,25 +251,29 @@ def test_empty_zero_stamp_and_nonfinite_output_do_not_publish(node, monkeypatch)
 
 
 def test_controller_continues_prediction_during_wheel_silence(node, monkeypatch):
+    """Trap 7: a bogie silent for 73 s while the controller keeps talking (here every 5 s,
+    within input.max_stamp_jump_s, #77): every command publishes on the model prediction."""
     sent = _capture(node, monkeypatch)
     diagnostics = []
     monkeypatch.setattr(node.pub_diagnostics, 'publish', diagnostics.append)
     node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
+    for sec in range(5, 73, 5):
+        c = DriverControllerCommand()
+        c.header.stamp = _stamp(STAMP.sec + sec, STAMP.nanosec)
+        node.on_input('/vehicle/driver_position_cmd', c)
     cmd = DriverControllerCommand()
-    # 9 s: far beyond stale_timeout_s, within input.max_stamp_jump_s -- a lone command further
-    # ahead of the only other sample is a clock glitch until confirmed (#77, D-042)
-    cmd.header.stamp = _stamp(STAMP.sec + 9, STAMP.nanosec)
+    cmd.header.stamp = _stamp(STAMP.sec + 73, STAMP.nanosec)
     node.on_input('/vehicle/driver_position_cmd', cmd)
-    assert [k for k, _ in sent] == ['v', 'p', 'v', 'p']
+    assert [k for k, _ in sent] == ['v', 'p'] * 16
     assert sent[-2][1].header.stamp == cmd.header.stamp
     assert sent[-2][1].velocity > 0.0
     assert sent[-1][1].pose.pose.position.x > sent[1][1].pose.pose.position.x
     ages = {v.key: v.value for v in diagnostics[-1].status[1].values}
-    assert ages['front_age_s'] == '9.0'
+    assert ages['front_age_s'] == '73.0'
     assert ages['cmd_age_s'] == '0.0'
     assert diagnostics[-1].status[1].level == DiagnosticStatus.WARN
     node.on_input('/vehicle/driver_position_cmd', cmd)  # repeated stamp is dropped
-    assert len(sent) == 4
+    assert len(sent) == 32
 
 
 def test_diagnostics_marks_missing_bogies_on_controller_start(node, monkeypatch):

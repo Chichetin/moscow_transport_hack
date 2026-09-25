@@ -412,3 +412,38 @@ def test_after_a_resync_the_clock_is_back_and_a_new_glitch_is_rejected():
     assert pp.accept(cmd(t0 + 20.0, 0)) is None                   # +20 s over the real clock
     assert isinstance(pp.accept(cmd(t0 + 0.15, 0)), CommandSample)
 
+
+def _run_odometry(glitches):
+    """10 m/s: 1 s of normal flow, the glitch inputs, then 10 s of normal flow (cmd + front
+    at 20 Hz). Returns the distance before the glitch and the last Estimate."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS)
+    t0 = 1000.0
+    start = [cmd(t0 + 86400.0, 3)] if glitches == 'first' else []
+    for e in start:
+        odo.step(e)
+    before = None
+    for k in range(20):
+        odo.step(cmd(t0 + 0.05 * k, 3))
+        before = odo.step(wheel(FRONT_TOPIC, t0 + 0.05 * k, 36.0)) or before
+    for e in {'first': [], 'two_in_a_row': [cmd(t0 + 86400.0, 3), cmd(t0 + 86400.05, 3)],
+              'two_streams': [cmd(t0 + 86400.0, 3), wheel(FRONT_TOPIC, t0 + 86401.0, 36.0)]}[glitches]:
+        odo.step(e)
+    last = None
+    for k in range(200):
+        t = t0 + 1.0 + 0.05 * k
+        odo.step(cmd(t, 3))
+        last = odo.step(wheel(FRONT_TOPIC, t, 36.0)) or last
+    return before, last
+
+
+@pytest.mark.parametrize('glitches', ['first', 'two_in_a_row', 'two_streams'])
+def test_odometry_distance_keeps_growing_after_an_accepted_clock_glitch(glitches):
+    """Review #77: the pipeline state time must follow a resync, not freeze in the future or
+    integrate the glitch (10 m/s over the last 10 s: about 100 m)."""
+    before, last = _run_odometry(glitches)
+    assert last is not None and last.t == pytest.approx(1000.0 + 1.0 + 0.05 * 199)
+    grown = last.distance - (before.distance if before is not None else 0.0)
+    assert 90.0 < grown < 120.0, grown
+    assert last.speed == pytest.approx(10.0, abs=1e-6)
+
