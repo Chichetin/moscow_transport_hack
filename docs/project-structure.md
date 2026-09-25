@@ -74,7 +74,7 @@
 | `area:docs` | `README.md`, `docs/accuracy.md` | инструкция жюри, точность и быстродействие | — |
 | `area:docs-model` | `docs/model.md`, `docs/parameters.md`, `docs/roadmap.md` | модель, допущения и параметры, план развития | — |
 | `area:pitch` | `docs/pitch/` | материалы питча, сценарий демо | — |
-| `area:infra` | `.claude/`, `.github/`, `CLAUDE.md`, `GIT.md`, `pyproject.toml`, `requirements-dev.txt` | правила и tooling | все |
+| `area:infra` | `.claude/`, `.github/`, `CLAUDE.md`, `GIT.md`, `pyproject.toml`, `requirements-dev.txt`, `tools/submission/` | правила и tooling, гейт сдачи и раскладки жюри | все |
 
 `core/` = `src/tram_odometry_core/tram_odometry_core/`.
 

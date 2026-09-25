@@ -1,0 +1,55 @@
+# Проверки на каждый PR и на main (D-026). Окружение — docker/Dockerfile, как у участников:
+# ros:humble-ros-base, numpy 1.21. Данных в CI нет: holdout и стенд с bag — за evaluator.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Условие merge (GIT.md, «Финиш»): этот job зелёный на последнем commit PR.
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: dev-образ
+        run: docker build -q -f docker/Dockerfile --target dev -t tram-odom:dev .
+      - name: pytest, colcon build, colcon test (тесты ноды на хосте не запускаются)
+        run: |
+          docker run --rm -v "$PWD:/ws" -w /ws -e COLCON_DEFAULTS_FILE=/ws/docker/colcon-defaults.yaml \
+            tram-odom:dev bash -c '
+              set -e
+              source /opt/ros/humble/setup.bash
+              python3 -m pytest -q
+              colcon build --event-handlers console_cohesion-
+              colcon test --return-code-on-test-failure --event-handlers console_cohesion-
+              colcon test-result --verbose'
+
+  # Сборка в раскладках жюри из git archive, без сети, 2 CPU, 512 МБ (D-025).
+  jury-layouts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # падения с открытой issue blocker: jury_msgs_in_src — #40
+      JURY_LAYOUTS_KNOWN_FAIL: jury_msgs_in_src
+    steps:
+      - uses: actions/checkout@v4
+      - name: раскладки жюри
+        run: bash tools/submission/jury_layouts.sh
+      - name: таблица в summary
+        if: always()
+        run: |
+          python3 - out/submission/layouts-*.json >> "$GITHUB_STEP_SUMMARY" <<'PY'
+          import json, sys
+          rep = json.load(open(sys.argv[1]))
+          print(f"### Раскладки жюри, {rep['commit'][:7]}\n\n| раскладка | что имитирует | сборка |\n|---|---|---|")
+          for x in rep['layouts']:
+              print(f"| {x['name']} | {x['what']} | {x['build']} {x['note']} |")
+          PY
