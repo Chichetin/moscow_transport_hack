@@ -329,14 +329,14 @@ def test_odometry_keeps_publishing_after_a_future_command():
     odo = Odometry(PARAMS)
     t0 = 1000.0
     for k in range(20):
-        odo.step((CMD_TOPIC, cmd(t0 + 0.05 * k, 3)))
-        odo.step((FRONT_TOPIC, wheel(FRONT_TOPIC, t0 + 0.05 * k, 36.0)))
-    assert odo.step((CMD_TOPIC, cmd(t0 + 86400.0, 3))) is None
+        odo.step(cmd(t0 + 0.05 * k, 3))
+        odo.step(wheel(FRONT_TOPIC, t0 + 0.05 * k, 36.0))
+    assert odo.step(cmd(t0 + 86400.0, 3)) is None
     outs = []
     for k in range(200):                                           # 10 s at 20 Hz
         t = t0 + 1.0 + 0.05 * k
-        outs.append(odo.step((CMD_TOPIC, cmd(t, 3))))
-        outs.append(odo.step((FRONT_TOPIC, wheel(FRONT_TOPIC, t, 36.0))))
+        outs.append(odo.step(cmd(t, 3)))
+        outs.append(odo.step(wheel(FRONT_TOPIC, t, 36.0)))
     assert all(e is not None for e in outs)
     assert outs[-1].t == pytest.approx(t0 + 1.0 + 0.05 * 199)
     assert outs[-1].speed == pytest.approx(10.0, abs=1e-6)
