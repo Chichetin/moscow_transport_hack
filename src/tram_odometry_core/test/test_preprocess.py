@@ -154,6 +154,9 @@ def test_long_silent_bogie_resume_not_flagged_as_outlier():
     """Trap 7: a bogie silent up to 73 s; the large dt keeps the implied accel small."""
     pre = Preprocessor(PARAMS)
     pre.accept(wheel(REAR_TOPIC, 0.0, BASE_MPS * 3.6))              # non-zero: not the trap-8 exemption
+    # the controller keeps the input clock running while the bogie is silent (every bag)
+    for k in range(1, 1461):
+        pre.accept(cmd(0.05 * k, 0))
     sample = pre.accept(wheel(REAR_TOPIC, 73.0, KMH_36))            # 10 m/s over 73 s
     assert sample is not None and sample.speed == pytest.approx(10.0)
 
@@ -204,3 +207,117 @@ def test_t0_is_stamp_of_first_input_regardless_of_topic():
     assert pre.t0 is None
     pre.accept(cmd(3.5, 0))
     assert pre.t0 == pytest.approx(3.5)
+
+
+# --- #77: a stamp far in the future must not freeze the stream -------------------------
+
+JUMP = PARAMS.input.max_stamp_jump_s
+
+
+def _feed(pp, events):
+    return [pp.accept(e) for e in events]
+
+
+def test_one_future_command_does_not_block_the_normal_stream():
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0 + 0.05 * k, 3) for k in range(20)])
+    assert pp.accept(cmd(t0 + 86400.0, 3)) is None                # glitch: +1 day
+    out = _feed(pp, [cmd(t0 + 1.0 + 0.05 * k, 3) for k in range(200)])
+    assert all(isinstance(s, CommandSample) for s in out)          # nothing dropped after it
+    out = _feed(pp, [wheel(FRONT_TOPIC, t0 + 1.0 + 0.1 * k, 36.0) for k in range(20)])
+    assert all(isinstance(s, WheelSample) for s in out)
+
+
+def test_one_future_wheel_does_not_block_its_bogie():
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [wheel(REAR_TOPIC, t0 + 0.1 * k, 36.0) for k in range(10)])
+    assert pp.accept(wheel(REAR_TOPIC, t0 + 5e6, 36.0)) is None
+    assert isinstance(pp.accept(wheel(REAR_TOPIC, t0 + 1.0, 36.0)), WheelSample)
+
+
+def test_a_real_clock_jump_on_all_streams_is_accepted():
+    """The whole bag clock jumps by more than the limit: the second stream confirms it."""
+    pp = Preprocessor(PARAMS)
+    t0, big = 1000.0, JUMP + 30.0
+    _feed(pp, [cmd(t0, 0), wheel(FRONT_TOPIC, t0, 18.0), wheel(REAR_TOPIC, t0, 18.0)])
+    assert pp.accept(cmd(t0 + big, 0)) is None                     # alone: not yet trusted
+    assert isinstance(pp.accept(wheel(FRONT_TOPIC, t0 + big, 18.0)), WheelSample)   # confirmed
+    assert isinstance(pp.accept(cmd(t0 + big + 0.05, 0)), CommandSample)
+    assert isinstance(pp.accept(wheel(REAR_TOPIC, t0 + big + 0.1, 18.0)), WheelSample)
+
+
+def test_jumps_within_the_limit_are_normal():
+    """Data: the largest forward jump over all 122 bags is 2.6 s (a bogie after a pause)."""
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0, 0), wheel(FRONT_TOPIC, t0, 18.0)])
+    assert isinstance(pp.accept(wheel(REAR_TOPIC, t0 + JUMP - 0.5, 18.0)), WheelSample)
+
+
+def test_a_lone_stream_coming_back_after_a_long_silence_confirms_itself():
+    """Only one stream talks, silent longer than the limit, then continues: the second
+    sample moving on from the jumped stamp confirms it (one sample lost, not the stream)."""
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0, 0)])
+    assert pp.accept(cmd(t0 + 86400.0, 0)) is None
+    assert isinstance(pp.accept(cmd(t0 + 86400.05, 0)), CommandSample)
+
+
+def test_a_lone_glitch_followed_by_normal_stamps_stays_rejected():
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0, 0)])
+    assert pp.accept(cmd(t0 + 86400.0, 0)) is None
+    out = _feed(pp, [cmd(t0 + 0.05 * k, 0) for k in range(1, 50)])
+    assert all(isinstance(s, CommandSample) for s in out)
+
+
+def test_nonpositive_stamp_jump_limit_is_rejected(tmp_path):
+    text = (ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml').read_text(encoding='utf-8')
+    bad = tmp_path / 'params.yaml'
+    bad.write_text(text.replace('max_stamp_jump_s: 10.0', 'max_stamp_jump_s: 0.0'), encoding='utf-8')
+    with pytest.raises(ValueError):
+        load_params(bad)
+
+
+def test_two_unrelated_glitches_on_different_streams_stay_rejected():
+    """A second glitch far from the first one does not confirm it: the clock stays."""
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0, 0), wheel(FRONT_TOPIC, t0, 18.0)])
+    assert pp.accept(cmd(t0 + 86400.0, 0)) is None
+    assert pp.accept(wheel(FRONT_TOPIC, t0 + 5e6, 18.0)) is None
+    assert isinstance(pp.accept(wheel(FRONT_TOPIC, t0 + 0.1, 18.0)), WheelSample)
+    assert isinstance(pp.accept(cmd(t0 + 0.05, 0)), CommandSample)
+
+
+def test_a_glitch_does_not_move_the_clock_for_later_real_samples():
+    """After a rejected glitch, a normal sample 3 s ahead (a bogie after a pause) passes."""
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0, 0), wheel(REAR_TOPIC, t0, 18.0)])
+    assert pp.accept(cmd(t0 + 86400.0, 0)) is None
+    assert isinstance(pp.accept(wheel(REAR_TOPIC, t0 + 3.0, 18.0)), WheelSample)
+
+
+def test_an_earlier_future_stamp_of_the_same_stream_does_not_confirm():
+    """Same stream, second future stamp behind the first one: not a clock moving on."""
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0, 0)])
+    assert pp.accept(cmd(t0 + 86400.0, 0)) is None
+    assert pp.accept(cmd(t0 + 86395.0, 0)) is None
+
+
+def test_a_lagging_stream_does_not_pull_the_clock_back():
+    """A stream far behind (accepted: it is not ahead) must not make the leading stream's
+    next sample look like a jump."""
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0 + 100.0, 0)])
+    assert isinstance(pp.accept(wheel(FRONT_TOPIC, t0 + 100.0 - 2 * JUMP, 18.0)), WheelSample)
+    assert isinstance(pp.accept(cmd(t0 + 100.05, 0)), CommandSample)
+

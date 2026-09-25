@@ -46,6 +46,8 @@ class Preprocessor:
         self.t0: Optional[float] = None        # stamp of the first raw input ever seen
         self._last: dict = {}                  # topic -> last accepted stamp (trap 6 gate)
         self._wheel_prev: dict = {}             # bogie -> last accepted WheelSample
+        self._clock: Optional[float] = None    # newest accepted stamp over the vehicle streams
+        self._jump: Optional[tuple] = None     # (topic, stamp) of an unconfirmed jump ahead
 
     def accept(self, raw: Any) -> Optional[Sample]:
         topic, msg = raw
@@ -65,10 +67,30 @@ class Preprocessor:
         return None
 
     def _fresh(self, topic: str, t: float) -> bool:
-        """Accept a stream sample only if its stamp is newer than the stream's last one."""
+        """Accept a stream sample only if its stamp is newer than the stream's last one and
+        not implausibly far ahead of all vehicle streams (#77).
+
+        A stamp more than `input.max_stamp_jump_s` ahead of the newest accepted one is a clock
+        glitch unless a second sample confirms it: taken alone it would push the stream's gate
+        into the future and drop every normal sample after it. A real jump of the clock (or a
+        stream coming back after a long silence while nothing else talks) continues: another
+        stream near the same stamp, or the same stream moving on from it within the limit,
+        confirms it. A lone glitch is followed only by normal stamps far behind it, stays
+        rejected and changes nothing.
+        """
         if t <= self._last.get(topic, -math.inf):
             return False
+        jump = self.p.input.max_stamp_jump_s
+        if self._clock is not None and t - self._clock > jump:
+            pending = self._jump
+            confirmed = (pending is not None and abs(t - pending[1]) <= jump
+                         and (pending[0] != topic or t > pending[1]))
+            if not confirmed:
+                self._jump = (topic, t)
+                return False
+            self._jump = None                  # the clock really moved
         self._last[topic] = t
+        self._clock = t if self._clock is None else max(self._clock, t)
         return True
 
     def _wheel(self, topic: str, t: float, msg) -> Optional[WheelSample]:
