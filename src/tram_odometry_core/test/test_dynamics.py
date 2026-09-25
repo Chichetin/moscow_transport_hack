@@ -74,3 +74,10 @@ def test_calibrated_tables_of_params_yaml():
     assert accel(15, 5., BASE) == pytest.approx(expected - BASE.resistance.c0)
     assert 0.5 < accel(15, 5., BASE) < d.adhesion_accel_mps2
     assert accel(-15, 12., BASE) == pytest.approx(-d.adhesion_accel_mps2 - BASE.resistance.c0)
+
+
+def test_negative_response_delay_is_rejected():
+    from tram_odometry_core.types import _validate_drive
+    with pytest.raises(ValueError):
+        _validate_drive(replace(P.drive, response_delay_s=-0.1))
+

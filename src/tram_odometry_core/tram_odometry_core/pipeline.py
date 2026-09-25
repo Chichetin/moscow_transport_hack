@@ -37,6 +37,7 @@ class Odometry:
         self._cmd = deque(maxlen=CMD_HISTORY)  # (stamp, notch), stamps increasing
         self._accel_model = 0.0               # m/s^2, drive model at the state time
         self._v = 0.0                         # current speed, m/s
+        self._v_measured = 0.0                # speed at the last accepted wheel sample
         self._distance = 0.0
         self._x = self._y = 0.0
         self._yaw = 0.0
@@ -53,7 +54,7 @@ class Odometry:
             self._t0 = self._preprocess.t0
             if isinstance(sample, WheelSample):
                 self._wheel[sample.bogie] = sample
-                return self._advance(sample.t)
+                return self._advance(sample.t, wheel_arrived=True)
             if isinstance(sample, CommandSample):
                 self._cmd.append((sample.t, sample.notch))
                 return self._advance(sample.t)
@@ -77,27 +78,31 @@ class Odometry:
                 break
         return notch
 
-    def _advance(self, t: float) -> Estimate:
+    def _advance(self, t: float, wheel_arrived: bool = False) -> Estimate:
         now = t if self._t is None else max(self._t, t)
         front, rear = self._wheel['front'], self._wheel['rear']
-        est = self._v if self._t is not None else None
+        # the detector predicts from the last measured speed over its own dt (last wheel
+        # stamp -> newest wheel stamp): a speed already moved on by the model would count
+        # the acceleration twice
+        est = self._v_measured if self._t is not None else None
         dt = 0.0 if self._t is None else now - self._t
         drive = self.params.drive
         self._accel_model = (model_accel(self._notch_at(now), self._v, self.params)
                              if drive.use_model else 0.0)
         st = self._slip.update(front, rear, self._accel_model, est)
-        # the detector sees silence only relative to the other bogie; a pause of both bogies
-        # (every 30618 run, docs/data.md trap 7) is visible here, against the state time
-        stale = self.params.input.stale_timeout_s
-        if front is not None and now - front.t > stale and st.front_trust > 0.0:
-            st = dataclasses.replace(st, front_trust=0.0)
-        if rear is not None and now - rear.t > stale and st.rear_trust > 0.0:
-            st = dataclasses.replace(st, rear_trust=0.0)
+        stamps = [s.t for s in (front, rear) if s is not None]
+        if (drive.use_model and stamps and not wheel_arrived
+                and now - max(stamps) > self.params.input.stale_timeout_s):
+            # both bogies silent against the state time (the detector sees silence only
+            # relative to the other bogie): trust neither and predict below. A wheel sample
+            # that arrived in this very event is a late measurement, better than the model
+            st = dataclasses.replace(st, front_trust=0.0, rear_trust=0.0)
         self._slip_state = st
         used = [(w, s.speed) for w, s in ((st.front_trust, front), (st.rear_trust, rear))
                 if s is not None and w > 0.0]
         if used:
             self._v = sum(w * v for w, v in used) / sum(w for w, _ in used)
+            self._v_measured = self._v
         elif drive.use_model:
             # no trusted bogie: predict with the drive model; wheels never report reverse
             self._v = max(0.0, self._v + self._accel_model * dt)

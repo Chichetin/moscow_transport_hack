@@ -124,3 +124,53 @@ def test_command_history_is_bounded():
     for k in range(500):
         odo.step((CMD, _cmd(T0 + 0.05 * k, 3)))
     assert len(odo._cmd) == odo._cmd.maxlen
+
+
+def test_wheels_lagging_behind_the_controller_are_still_used():
+    """docs/data.md trap 5: wheel stamps can trail the controller by seconds; a late wheel
+    sample is a measurement, not silence."""
+    for use_model in (True, False):
+        params = replace(PARAMS, drive=replace(PARAMS.drive, use_model=use_model))
+        odo = Odometry(params)
+        last = None
+        for k in range(40):                              # 4 s, controller 1.0 s ahead
+            t = T0 + 0.1 * k
+            odo.step((CMD, _cmd(t + 1.0, 0)))
+            last = odo.step((FRONT, _wheel(t, 36.0)))
+            odo.step((REAR, _wheel(t, 36.0)))
+        assert last.speed == pytest.approx(10.0, abs=1e-6), use_model
+        assert last.slip.front_trust == 1.0 and last.slip.rear_trust == 1.0
+
+
+def test_without_the_model_lagging_wheels_and_gaps_behave_like_the_baseline():
+    params = replace(PARAMS, drive=replace(PARAMS.drive, use_model=False))
+    odo = Odometry(params)
+    t = _cruise(odo, 36.0, T0, T0 + 2.0, notch=10)
+    # controller 2 s ahead of the wheels, then wheels stop: speed is held, no prediction
+    last = None
+    for k in range(1, 61):
+        last = odo.step((CMD, _cmd(t + 2.0 + 0.05 * k, 10)))
+    assert last.speed == pytest.approx(10.0, abs=1e-6)
+    assert last.accel_model == 0.0
+
+
+def test_accel_model_changes_which_bogie_the_detector_blames():
+    """Disagreeing bogies, neither at 0: the detector blames the one further from its
+    prediction `est + accel_model * dt`; with full brake the prediction drops, so the slower
+    bogie becomes the plausible one. Steps stay inside the 3 m/s^2 outlier gate."""
+    results = {}
+    for use_model in (True, False):
+        params = replace(PARAMS, drive=replace(PARAMS.drive, use_model=use_model))
+        odo = Odometry(params)
+        t = T0
+        for _ in range(20):                               # 2 s: front 5.0, rear 5.2 (agree)
+            _run(odo, [(t, CMD, -15), (t, FRONT, 5.0 * 3.6), (t, REAR, 5.2 * 3.6),
+                       (t + 0.05, CMD, -15)])
+            t += 0.1
+        t += 0.3                                          # 0.4 s after the last wheels
+        odo.step((CMD, _cmd(t - 0.2, -15)))
+        est = odo.step((FRONT, _wheel(t, 4.1 * 3.6)))    # front drops 0.9 m/s, rear is 5.2
+        assert est is not None
+        results[use_model] = (est.slip.front_trust, est.slip.rear_trust)
+    assert results[False] == (0.0, 1.0)                  # a = 0: front is the outlier
+    assert results[True] == (1.0, 0.0)                   # brake model: rear is the outlier
