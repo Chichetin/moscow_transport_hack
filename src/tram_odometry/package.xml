@@ -15,6 +15,8 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>diagnostic_msgs</exec_depend>
   <exec_depend>tram_vehicle_msgs</exec_depend>
+  <!-- builds tram_vehicle_msgs when the jury has none (D-044); env for colcon test, packages-up-to -->
+  <exec_depend>tram_vehicle_msgs_vendor</exec_depend>
   <exec_depend>tram_odometry_core</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
