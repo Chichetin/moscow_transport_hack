@@ -15,7 +15,7 @@
 Скрипты — `*.py` с `argparse` (воспроизводимо из командной строки), ноутбуки — только для
 просмотра. Зависимости — `requirements-dev.txt` (scipy разрешён здесь, не в ядре).
 
-## Модель привода (#9, D-031)
+## Модель привода (#9, D-032)
 
 ```bash
 .venv/bin/python notebooks/identification/identify.py --check-split holdout      # отчёт, графики, ~1 мин
