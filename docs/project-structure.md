@@ -57,7 +57,7 @@
 
 ## Области
 
-| `area:` | Пути | Что внутри | Потребители (кого звать на апрув контракта) |
+| `area:` | Пути | Что внутри | Потребители (чей код править и кому оставить комментарий при смене контракта) |
 |---|---|---|---|
 | `area:contracts` | `docs/contracts.md`, `core/types.py`, имена в `params.yaml`, `tools/eval/splits.yaml` | контракт | все |
 | `area:core-preprocess` | `core/preprocess/` | км/ч→м/с, stamp, дыры, выбросы | pipeline, eval |
