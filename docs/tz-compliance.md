@@ -27,18 +27,18 @@
 |---|---|---|---|---|
 | S1 | RMSE/MAE скорости по всему прогону vs GNSS | eval `speed_rmse`, `speed_mae` | `docs/accuracy.md`, holdout | ⚠️ бейзлайн holdout (D-021): `speed_rmse` медиана 0,064, MAE 0,039 м/с, худший bag 0,167 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`; повтор на Windows с теми же числами — `docs/verification/2026-09-25-eval-holdout-windows.md`); `docs/accuracy.md` — #21 |
 | S2 | Нет bias на разгоне/торможении/остановках | eval `speed_bias_*` | таблица по режимам | ⚠️ бейзлайн holdout: bias разгон −0,060, торможение +0,038, стоянка −0,006, ход −0,025 м/с (медианы, `docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
-| S3 | Нелинейная модель привода: позиция контроллера, скорость вала → момент | `core/dynamics`, `docs/model.md` | тесты; графики идентификации | — |
-| S4 | Продольная динамика: масса, радиус, сопротивление, уклон, тормоза, сцепление | `core/dynamics`, `docs/model.md` | — | — |
+| S3 | Нелинейная модель привода: позиция контроллера, скорость вала → момент | `core/dynamics`, `docs/model.md` | тесты; графики идентификации | ⚠️ контракт таблицы `notch × speed` и предел удельной мощности — D-029; модель и числа #9/#10 впереди |
+| S4 | Продольная динамика: масса, радиус, сопротивление, уклон, тормоза, сцепление | `core/dynamics`, `docs/model.md` | — | ⚠️ контракт предела сцепления и сопротивления — D-029; вычисление #10 впереди |
 
 ## Критерий 2. Положение (35)
 
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| P1 | Дрейф в конце, % от пути | eval `drift_pct`, `core/position` (`PathTracker`, D-029) | holdout | ⚠️ положение по карте — PR #14, число holdout «было → стало» в его таблице; бейзлайн holdout: медиана 153 % — прямая по курсу без карты (D-021), планка для #14 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
-| P2 | Along-track MEAN/MAX/RMSE | eval `along_*`, `core/position` (`PathTracker`, D-029) | holdout | ⚠️ положение по карте — PR #14, число holdout в его таблице; бейзлайн holdout: along RMSE медиана 3264 м, MEAN 2763 м, MAX 5394 м — без карты (D-021), планка для #14 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
+| P1 | Дрейф в конце, % от пути | eval `drift_pct`, `core/position` (`PathTracker`, D-030) | holdout | ⚠️ положение по карте — PR #14, число holdout «было → стало» в его таблице; бейзлайн holdout: медиана 153 % — прямая по курсу без карты (D-021), планка для #14 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
+| P2 | Along-track MEAN/MAX/RMSE | eval `along_*`, `core/position` (`PathTracker`, D-030) | holdout | ⚠️ положение по карте — PR #14, число holdout в его таблице; бейзлайн holdout: along RMSE медиана 3264 м, MEAN 2763 м, MAX 5394 м — без карты (D-021), планка для #14 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
 | P3 | Cross-track при привязке к pathgraph | карта `src/tram_odometry/maps/route.csv` (D-007, D-022), eval `cross_*` | holdout | ⚠️ карта есть: GNSS holdout до карты mean 0,41 м, p99 4,95 м (`docs/verification/2026-09-25-route-map.md`); высота `z_m` (D-024): mean 0,17 м, p99 2,45 м (`docs/verification/2026-09-25-route-height.md`); положение по карте — `PathTracker` (PR #14, D-029): `x/y/z` — точка ветки на дуге пробега, тесты `test_position.py` (выставка, переход ветки, ковариация); `cross_*` holdout — в таблице PR #14 |
 | P4 | Корректный `nav_msgs/Odometry` | нода, контракт §1 | тест формы, запись стенда | ⚠️ `test_position_message_follows_contract` (#5); запись стенда — после стенда |
-| P5 | Инициализация абсолютного положения (последняя позиция / старт прогона) | `core/position`: `PathTracker.on_fix` по каждому fix окна `gnss.init_window_s`, якорь — последний (D-029) | eval: ошибка в первые 10 с; тест `test_position.py` | ⚠️ выставка есть, до первого fix — начало координат (`gnss_used=False`); ошибка первых 10 с holdout — в таблице PR #14 |
+| P5 | Инициализация абсолютного положения (последняя позиция / старт прогона) | `core/position`: `PathTracker.on_fix` по каждому fix окна `gnss.init_window_s`, якорь — последний (D-030) | eval: ошибка в первые 10 с; тест `test_position.py` | ⚠️ выставка есть, до первого fix — начало координат (`gnss_used=False`); ошибка первых 10 с holdout — в таблице PR #14 |
 
 ## Критерий 3. Устойчивость (20)
 
@@ -73,8 +73,8 @@
 
 | # | Пункт | Где | Статус |
 |---|---|---|---|
-| E1 | Модель тягового привода | `core/dynamics`, A3 | — |
-| E2 | Модель продольной динамики | `core/dynamics`, A3 | — |
+| E1 | Модель тягового привода | `core/dynamics`, A3 | ⚠️ схема параметров — D-029; реализация #10 |
+| E2 | Модель продольной динамики | `core/dynamics`, A3 | ⚠️ схема параметров — D-029; реализация #10 |
 | E3 | Модель/эвристика проскальзывания | `core/slip`, A3 | — |
 | E4 | Допущения и ограничения | A4 | — |
 | E5 | Одна или несколько нод оценки ускорения, скорости, положения | `src/tram_odometry` | ⚠️ нода `odometry_node` + `odometry.launch.py` (#5, D-028); диагностика — R2 |

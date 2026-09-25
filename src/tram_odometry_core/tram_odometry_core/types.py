@@ -99,8 +99,11 @@ class VehicleParams:
 @dataclass(frozen=True)
 class DriveParams:
     notch_max: int
+    speed_grid_mps: Tuple[float, ...]
     traction_accel_table: Tuple[float, ...]
     brake_accel_table: Tuple[float, ...]
+    adhesion_accel_mps2: float
+    traction_power_w_per_kg: float
 
 
 @dataclass(frozen=True)
@@ -236,4 +239,26 @@ def load_params(path) -> Params:
         raw = doc['/**']['ros__parameters']
     except (KeyError, TypeError):
         raise KeyError("params file must contain '/**' -> 'ros__parameters'") from None
-    return _build(Params, raw, 'params')
+    params = _build(Params, raw, 'params')
+    _validate_drive(params.drive)
+    return params
+
+
+def _validate_drive(drive: DriveParams) -> None:
+    """Reject a malformed acceleration surface before the ROS node starts."""
+    grid = drive.speed_grid_mps
+    if len(grid) < 2 or grid[0] != 0.0 or any(b <= a for a, b in zip(grid, grid[1:])):
+        raise ValueError('drive.speed_grid_mps must start at 0 and strictly increase')
+    if drive.notch_max < 1:
+        raise ValueError('drive.notch_max must be positive')
+    if drive.adhesion_accel_mps2 <= 0:
+        raise ValueError('drive.adhesion_accel_mps2 must be positive')
+    if drive.traction_power_w_per_kg <= 0:
+        raise ValueError('drive.traction_power_w_per_kg must be positive')
+    expected = (drive.notch_max + 1) * len(grid)
+    for name in ('traction_accel_table', 'brake_accel_table'):
+        table = getattr(drive, name)
+        if len(table) != expected or any(value < 0 for value in table):
+            raise ValueError(f'drive.{name} must contain {expected} nonnegative values')
+        if any(value != 0 for value in table[:len(grid)]):
+            raise ValueError(f'drive.{name} must have a zero notch row')
