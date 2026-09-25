@@ -92,9 +92,9 @@ bash docker/dev.sh bash -c 'colcon build --packages-select tram_vehicle_msgs && 
    в train, а другая в holdout, метрика завышена. Список — `tools/eval/splits.yaml: dups`.
 4. **В `tram_vehicle_msgs/package.xml` организаторов нет `<maintainer>`** — `colcon build` в Humble
    падает (`Package 'tram_vehicle_msgs' must declare at least one maintainer`). В нашей копии
-   `src/tram_vehicle_msgs` добавлена одна строка maintainer, `.msg` не тронуты (D-006).
-   Если у жюри свой `tram_vehicle_msgs` в том же workspace — будет конфликт имён пакетов:
-   инструкция в README говорит, как исключить наш (`touch src/tram_vehicle_msgs/COLCON_IGNORE`).
+   `src/tram_vehicle_msgs/vendor` добавлена одна строка maintainer, `.msg` не тронуты (D-006).
+   Копия вложена в `tram_vehicle_msgs_vendor` и собирается, только если у жюри нет своего
+   `tram_vehicle_msgs`: иначе `colcon` отказался бы собирать два пакета с одним именем (D-041).
 5. **`header.stamp` отстаёт от времени записи bag**: медиана 50 мс у тележек, но в начале
    прогона — пачка буферизованных сообщений с отставанием до **3,7 с** (p99 > 2 с в 10 % bag).
    Время для модели — только `header.stamp`; порядок прихода ≠ порядок stamp.
