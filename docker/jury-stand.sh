@@ -17,6 +17,8 @@ OUT="$OUT/stand/$BAG"; mkdir -p "$OUT"
 docker build -q -f "$ROOT/docker/Dockerfile" --target jury -t tram-odom:jury "$ROOT" >/dev/null
 # src копируется внутрь (read-only монтирование + свой build/), чтобы не пачкать worktree.
 docker run --rm --cpus=2 --memory=512m --memory-swap=512m --network=none \
-  -v "$ROOT/src:/src:ro" -v "$ROOT/docker:/stand:ro" -v "$DATA/$BAG:/bag:ro" -v "$OUT:/out" \
+  -v "$ROOT/src:/src:ro" -v "$ROOT/docker:/stand:ro" -v "$ROOT/tools/stand:/stand-tools:ro" -v "$DATA/$BAG:/bag:ro" -v "$OUT:/out" \
   -e RATE="$RATE" tram-odom:jury bash /stand/stand-inside.sh
 echo "Результаты: $OUT"
+PY="$ROOT/.venv/bin/python"; [ -x "$PY" ] || PY=python3
+"$PY" "$ROOT/tools/stand/run_stand.py" "$OUT" || echo "замеры не посчитаны (нет записи ноды или нет rosbags)" >&2

@@ -1,5 +1,5 @@
 # Конфигурация pytest для всего репозитория: ядро, ноды (без ROS-части) и tools.
 # Запуск: .venv/bin/python -m pytest  (или в dev-контейнере: python3 -m pytest)
 [tool.pytest.ini_options]
-testpaths = ["src/tram_odometry_core/test", "tools/eval/tests"]
+testpaths = ["src/tram_odometry_core/test", "tools/eval/tests", "tools/stand/tests"]
 addopts = "-q"
