@@ -166,12 +166,8 @@ class OdometryNode(Node):
             self.pub_position.publish(position_msg(est, msg.header.stamp, self.params))
             if topic in (VEHICLE_INPUTS[0][0], VEHICLE_INPUTS[1][0], VEHICLE_INPUTS[2][0]):
                 self._last_input_ns[topic] = stamp_ns
-            # a stamp far behind the last diagnostic means that one was from the future:
-            # restart the 10 Hz clock instead of staying silent until the bag catches up
-            stale_ns = self.params.input.stale_timeout_s * 1_000_000_000
             if (self._last_diagnostic_ns is None
-                    or stamp_ns - self._last_diagnostic_ns >= DIAGNOSTIC_PERIOD_NS
-                    or self._last_diagnostic_ns - stamp_ns > stale_ns):
+                    or stamp_ns - self._last_diagnostic_ns >= DIAGNOSTIC_PERIOD_NS):
                 ages = tuple('unknown' if self._last_input_ns.get(key) is None else
                              max(0, stamp_ns - self._last_input_ns[key]) / 1_000_000_000
                              for key, _ in VEHICLE_INPUTS)
