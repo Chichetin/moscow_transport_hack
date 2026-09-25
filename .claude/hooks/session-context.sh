@@ -31,6 +31,13 @@ if [ -z "$me" ] || [ -z "$issues" ]; then
   exit 0
 fi
 
+blockers="$(printf '%s' "$issues" | jq -r \
+  '.[] | select(any(.labels[]; .name == "blocker")) | "  #\(.number) \(.title)"')"
+if [ -n "$blockers" ]; then
+  echo "[blocker] открыты — сдача красная, пока открыт хоть один (D-024). Можешь закрыть — закрой раньше своей задачи:"
+  printf '%s\n' "$blockers"
+fi
+
 mine="$(printf '%s' "$issues" | jq -r --arg me "$me" \
   '.[] | select(any(.assignees[]; .login == $me))
    | "  #\(.number) \(.title) [\([.labels[].name | select(startswith("area:"))] | join(", "))]"')"

@@ -2,7 +2,7 @@
 name: reviewer
 description: Свежее ревью PR перед merge — видит только diff против origin/main. Запускать на каждый PR с кодом, тестами, params.yaml или .claude/ перед merge; особенно строго — когда PR трогает контракт (docs/contracts.md, types.py, топики), формат вывода метрик tools/eval или ядро оценщика (estimator, slip, dynamics). Ничего не правит.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: opus
 color: yellow
 ---
 
@@ -38,6 +38,12 @@ gh pr view <N>      # описание: таблица «было → стало
 7. **Тест проверяет поведение**, а не реализацию; багфикс — с воспроизводящим тестом.
 8. **Документы.** `D-…` в `docs/decisions.md`, строка `docs/tz-compliance.md`, комментарий
    параметра с единицами.
+9. **Риск запуска у жюри (D-024).** PR меняет раскладку `src/`, зависимости, `package.xml`,
+   launch, точку входа, README для жюри — прогнан `bash tools/submission/jury_layouts.sh`, новых
+   падений нет. В diff появилась запись «остаточный риск», «уточнить у организаторов», `TODO`
+   про сборку или запуск без открытой issue `blocker` (`gh issue list --label blocker`) —
+   блокирующее: записанный риск не закрыт.
+10. **CI.** `gh pr checks <N>`: job `tests` зелёный на последнем commit.
 
 ## Ответ
 
