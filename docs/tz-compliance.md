@@ -12,7 +12,7 @@
 
 | # | Пункт условий | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| T1 | ROS 2 Humble, `colcon build` без интернета | `src/`, `docker/jury-stand.sh` | стенд: `build.log`, `--network=none` | ⚠️ каркас собирается (3 пакета, 2026-09-25), нод ещё нет |
+| T1 | ROS 2 Humble, `colcon build` без интернета | `src/`, `docker/jury-stand.sh` | стенд: `build.log`, `--network=none` | ⚠️ каркас собирается (3 пакета, 2026-09-25), нод ещё нет; рантайм-зависимость ядра `python3-yaml` — apt, есть в `ros:humble-ros-base` (D-004, D-019) |
 | T2 | Вход только `/vehicle/*` (3 топика); без IMU | `core/preprocess`, нода | `grep -rn subscription src/tram_odometry` | — |
 | T3 | GNSS только для начальной выставки, в проверке — первые секунды | D-005, `gnss.init_window_s` | eval с обрезкой GNSS = выходы ноды; ревью | — |
 | T4 | Выход `/result/velocity` `VelocitySensor`, м/с | нода | запись стенда, `ros2 topic echo` | — |
@@ -36,7 +36,7 @@
 |---|---|---|---|---|
 | P1 | Дрейф в конце, % от пути | eval `drift_pct` | holdout | — |
 | P2 | Along-track MEAN/MAX/RMSE | eval `along_*` | holdout | — |
-| P3 | Cross-track при привязке к pathgraph | карта `src/tram_odometry/maps/route.csv` (D-007, D-019), eval `cross_*` | holdout | ⚠️ карта есть: GNSS holdout до карты mean 0,41 м, p99 4,95 м (`docs/verification/2026-09-25-route-map.md`); cross-track оценки — после PO1 и eval |
+| P3 | Cross-track при привязке к pathgraph | карта `src/tram_odometry/maps/route.csv` (D-007, D-020), eval `cross_*` | holdout | ⚠️ карта есть: GNSS holdout до карты mean 0,41 м, p99 4,95 м (`docs/verification/2026-09-25-route-map.md`); cross-track оценки — после PO1 и eval |
 | P4 | Корректный `nav_msgs/Odometry` | нода, контракт §1 | тест формы, запись стенда | — |
 | P5 | Инициализация абсолютного положения (последняя позиция / старт прогона) | `core/position` | eval: ошибка в первые 10 с | — |
 

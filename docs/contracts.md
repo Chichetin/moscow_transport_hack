@@ -1,12 +1,11 @@
-# Контракты — черновик v0
+# Контракты — v1
 
 Единственная точка стыковки модулей. Всё, что здесь описано, меняется **только отдельным
 PR** с перечнем потребителей в описании. В том же PR код потребителей, уже лежащий в `main`,
 приводится к новому контракту, и тесты зелёные. Merge — по вердикту `reviewer` `merge`, апрув
 людей не нужен (D-018); владельцам issue соседних `area:` — комментарий со ссылкой на PR.
-Владельца у контракта нет. Статус v0: предложение каркаса, первая
-задача плана (`contracts: зафиксировать v1`) превращает его в код (`types.py`) и снимает
-пометку «черновик».
+Владельца у контракта нет. Статус v1: типы и загрузка параметров реализованы в
+`tram_odometry_core/types.py`, сигнатура `step` — в `pipeline.py`.
 
 Состав контракта:
 
@@ -58,7 +57,9 @@ PR** с перечнем потребителей в описании. В том
 ## 2. Ядро `tram_odometry_core`
 
 Время везде — секунды `float` из `header.stamp`; скорости — м/с после preprocess; СИ.
-Код — `tram_odometry_core/types.py` (dataclass, `frozen=True` для входов).
+Код — `tram_odometry_core/types.py` (dataclass, `frozen=True` для входов). Ниже — псевдокод
+в синтаксисе Python 3.10; в коде тот же смысл через `typing` (`Union`, `Optional`, `Tuple`). Целое
+значение для float-параметра (ROS может прислать `int`) `load_params` принимает.
 
 ```python
 @dataclass(frozen=True)
@@ -120,9 +121,12 @@ class Estimate:
 | `position` | `PathTracker(params, route).init(fixes, vel) -> bool`, `.advance(distance) -> (x, y, yaw, pos_cov)` | до успешного `init` — начало координат и курс 0, `gnss_used=False` |
 | `pipeline` | `Odometry(params, route=None).step(raw) -> Estimate \| None` | единственная точка, которую зовут нода и `tools/eval`; `None` — вход отброшен, публиковать нечего |
 
-`params` — `Params` из `types.py`: плоский dataclass, собирается из того же `params.yaml`
-(нода — через ROS-параметры, eval — чтением yaml). Загрузка yaml → `Params` — одна функция
-`load_params(path)` в `types.py`.
+`params` — `Params` из `types.py`: неизменяемый dataclass, по одному вложенному dataclass на
+секцию `params.yaml` (`params.gnss.init_window_s`, `params.drive.notch_max`), имена полей =
+ключи yaml. Списки читаются как `tuple[float, ...]`. Загрузка yaml → `Params` — одна функция
+`load_params(path)` в `types.py`; пропущенный или лишний ключ — `KeyError`, неверный тип —
+`TypeError` (нода не должна стартовать на кривом конфиге молча). Нода передаёт те же значения
+через ROS-параметры, eval читает yaml той же функцией.
 
 ## 3. `params.yaml`
 
@@ -177,4 +181,4 @@ branch,s_m,x_m,y_m
 
 `branch` — 0 — на запад, 1 — на восток; ≥ 2 — пути конечных (петля, пути отстоя), каждая ответвляется от другой ветки или вливается в неё, стык — ближайшая точка другой ветки (`tools/pathgraph/README.md`); номера веток ≥ 2 при перестроении карты могут меняться. `s_m` строго растёт внутри
 ветки; шаг ≤ 2 м. Начало ENU карты — фиксированная точка, не зависит от прогона; перевод в
-frame `map` прогона — сдвиг в `position`. GNSS → ENU — только WGS84 ECEF → ENU от начала из заголовка (`tools/pathgraph/build_route.lla_to_enu`): сферическая равнопрямоугольная проекция расходится с ней на 12 м к западному концу маршрута (D-019).
+frame `map` прогона — сдвиг в `position`. GNSS → ENU — только WGS84 ECEF → ENU от начала из заголовка (`tools/pathgraph/build_route.lla_to_enu`): сферическая равнопрямоугольная проекция расходится с ней на 12 м к западному концу маршрута (D-020).
