@@ -25,6 +25,7 @@ class SpeedFilter:
             raise ValueError('invalid filter covariance or NIS threshold')
         self._t = None
         self._last = {'front': None, 'rear': None}
+        self._latest_wheel_t = None
         self._x = np.zeros(2, dtype=float)
         self._cov = np.diag((self._p.r_wheel, self._p.initial_bias_var))
         self._model_accel = 0.0
@@ -34,6 +35,16 @@ class SpeedFilter:
         self._recent_wheel = {'front': None, 'rear': None}
         self._zero_wheel = {'front': None, 'rear': None}
         self._confirmed_stop_t = None
+
+    def _rebase_time(self, t: float):
+        """Keep the estimate but start a fresh input clock after a confirmed jump."""
+        self._t = t
+        self._last = {'front': None, 'rear': None}
+        self._latest_wheel_t = None
+        self._recent_wheel = {'front': None, 'rear': None}
+        self._zero_wheel = {'front': None, 'rear': None}
+        self._confirmed_stop_t = None
+        self._diagnostic = None
 
     def predict(self, t: float, accel_model: float):
         self._diagnostic = None
@@ -59,7 +70,10 @@ class SpeedFilter:
                 or not np.isfinite(sample.speed) or sample.speed < 0.0
                 or not np.isfinite(trust) or not 0.0 <= trust <= 1.0):
             return
-        if self._t is not None and self._t - sample.t > self._stale_timeout:
+        # Controller stamps can lead both live wheel streams by several seconds.
+        # Freshness is measured on the wheel timeline, not against controller time.
+        if (self._latest_wheel_t is not None
+                and self._latest_wheel_t - sample.t > self._stale_timeout):
             return
         last = self._last[sample.bogie]
         if last is not None and sample.t <= last:
@@ -70,6 +84,8 @@ class SpeedFilter:
             return
         self.predict(sample.t, self._model_accel)
         self._last[sample.bogie] = sample.t
+        self._latest_wheel_t = (sample.t if self._latest_wheel_t is None
+                                else max(self._latest_wheel_t, sample.t))
         age = self._t - sample.t
         scale = 1.0 - self._scale_delta if sample.bogie == 'front' else 1.0 + self._scale_delta
         measurement = sample.speed / scale + self._model_accel * age

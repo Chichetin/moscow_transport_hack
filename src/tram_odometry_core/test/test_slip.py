@@ -35,11 +35,34 @@ def test_bogie_stuck_at_zero_is_blamed(stuck):
 
 
 def test_zero_reading_blamed_even_when_the_estimate_is_still_at_rest():
-    # start of motion: the estimate is 0, the rear still reads exactly 0 (dead zone / stuck)
-    s = upd(ws('front', 1.0, 0.7), ws('rear', 1.0, 0.0), est=0.0)
+    # start of motion: the drive pulls, the estimate is 0, the rear still reads exactly 0
+    # (dead zone / stuck); on train every such start had accel_model 0.38-0.43 m/s^2
+    s = upd(ws('front', 1.0, 0.7), ws('rear', 1.0, 0.0), est=0.0, accel_model=0.4)
     assert s.slip_rear and s.rear_trust == 0.0 and s.front_trust == 1.0
-    s = upd(ws('front', 1.0, 0.0), ws('rear', 1.0, 0.7), est=0.0)
+    s = upd(ws('front', 1.0, 0.0), ws('rear', 1.0, 0.7), est=0.0, accel_model=0.4)
     assert s.slip_front and s.front_trust == 0.0 and s.rear_trust == 1.0
+
+
+@pytest.mark.parametrize('accel_model', [0.0, -0.01, -1.5])
+def test_spike_at_rest_without_traction_is_blamed_not_the_zero_bogie(accel_model):
+    # stress `spike` (#76): the tram stands, the front jumps by 25 km/h, the rear honestly reads 0
+    s = upd(ws('front', 1.0, 25.0 / 3.6), ws('rear', 1.0, 0.0), est=0.0, accel_model=accel_model)
+    assert s.slip_front and s.front_trust == 0.0
+    assert not s.slip_rear and s.rear_trust == 1.0
+
+
+def test_spike_while_the_other_bogie_brakes_to_zero_is_blamed():
+    det = SlipDetector(P)
+    det.update(ws('front', 0.0, 0.11), ws('rear', 0.0, 0.11), -0.9, 0.11)
+    s = det.update(ws('front', 0.1, 6.94), ws('rear', 0.1, 0.0), -0.9, 0.11)
+    assert s.slip_front and s.front_trust == 0.0 and s.rear_trust == 1.0
+
+
+def test_zero_reading_blamed_when_rolling_off_without_traction():
+    # 30618_e9a34502: the tram rolls off with the controller braking; the rear is still in its
+    # dead zone, the front agrees with the prediction but is further from it than 0 is
+    s = upd(ws('front', 1.0, 0.57), ws('rear', 1.0, 0.0), est=0.26, accel_model=-0.01)
+    assert s.slip_rear and s.rear_trust == 0.0 and s.front_trust == 1.0
 
 
 def test_wheelspin_faster_bogie_is_blamed():

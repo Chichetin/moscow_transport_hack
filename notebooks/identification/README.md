@@ -38,3 +38,16 @@
 1,70 у «a = 0» (train; на holdout 0,29). Задержка привода 0,3 с. В `params.yaml` — подгонка без уклона,
 потому что контракт `model_accel(notch, v)` уклона не получает. Если ядро получит уклон из карты,
 `--grade` даст 0,20.
+
+## Остановки по колёсам против карты остановок (#58, D-039)
+
+```bash
+.venv/bin/python notebooks/identification/stops_vs_speed.py --split train
+.venv/bin/python notebooks/identification/stops_vs_speed.py --split holdout      # только отчёт
+.venv/bin/python -m pytest notebooks/identification/tests/test_stops_vs_speed.py
+```
+
+Остановки по `v < 0,1 м/с` ≥ 3 с (без GNSS в детекции) сравнены с местами `stops.csv`
+(#56/D-034): 84,3 % train / 85,8 % holdout ближе 20 м — порядок величины `stop_snap_max_m`
+не противоречит числу. Отчёт — `docs/research/2026-09-25-stops-vs-speed.md`, график —
+`docs/data/stops_vs_speed_hist.png`.

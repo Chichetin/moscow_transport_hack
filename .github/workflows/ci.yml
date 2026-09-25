@@ -36,9 +36,6 @@ jobs:
   jury-layouts:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      # падения с открытой issue blocker: jury_msgs_in_src — #40
-      JURY_LAYOUTS_KNOWN_FAIL: jury_msgs_in_src
     steps:
       - uses: actions/checkout@v4
       - name: раскладки жюри

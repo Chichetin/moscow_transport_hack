@@ -4,14 +4,21 @@ Baseline (D-021): mean of the two bogie speeds, path by integration, straight-li
 reckoning along the heading taken from GNSS during the init window. The modules that
 follow replace the parts of it; the numbers of this version are the first row of the table.
 """
+import dataclasses
 import math
+from collections import deque
 from typing import Any, Optional
 
+from .dynamics import model_accel
 from .estimator import SpeedFilter
 from .position import PathTracker
 from .preprocess import Preprocessor
 from .slip import SlipDetector
 from .types import CommandSample, Estimate, GnssFix, GnssVel, Params, SlipState, WheelSample
+
+# controller samples kept for the drive response delay: bounded memory (O(1) per message);
+# 32 samples at 20 Hz cover 1.6 s, five times the identified delay of 0.3 s (D-033)
+CMD_HISTORY = 32
 
 
 class Odometry:
@@ -29,7 +36,11 @@ class Odometry:
         self._slip = SlipDetector(params)
         self._filter = SpeedFilter(params)
         self._slip_state = SlipState(1.0, 1.0, False, False, None)
+        self._cmd = deque(maxlen=CMD_HISTORY)  # (stamp, notch), stamps increasing
+        self._accel_model = 0.0               # m/s^2, drive model at the state time
         self._v = 0.0                         # current speed, m/s
+        self._v_measured = 0.0                # speed at the last accepted wheel sample
+        self._t_wheel_rx: Optional[float] = None   # state time when a wheel last arrived
         self._distance = 0.0
         self._x = self._y = 0.0
         self._yaw = 0.0
@@ -46,8 +57,9 @@ class Odometry:
             self._t0 = self._preprocess.t0
             if isinstance(sample, WheelSample):
                 self._wheel[sample.bogie] = sample
-                return self._advance(sample.t, sample)
+                return self._advance(sample.t, sample=sample, wheel_arrived=True)
             if isinstance(sample, CommandSample):
+                self._cmd.append((sample.t, sample.notch))
                 return self._advance(sample.t)
             if isinstance(sample, GnssFix):
                 self._on_fix(sample)
@@ -57,18 +69,59 @@ class Odometry:
         except (TypeError, ValueError, AttributeError):
             return None
 
-    def _advance(self, t: float, sample=None) -> Estimate:
+    def _notch_at(self, t: float) -> int:
+        """Controller position the drive is acting on at `t`: the newest command stamped at
+        or before `t - response_delay_s`; neutral before the first one."""
+        deadline = t - self.params.drive.response_delay_s
+        notch = 0
+        for stamp, n in self._cmd:            # bounded: at most CMD_HISTORY entries
+            if stamp <= deadline:
+                notch = n
+            else:
+                break
+        return notch
+
+    def _advance(self, t: float, sample=None, wheel_arrived: bool = False) -> Estimate:
+        jump = self.params.input.max_stamp_jump_s
+        if self._t is not None and self._t - t > jump:
+            # the input clock was resynced back by preprocess (#77, D-043): the state time is
+            # in the future of every input now; follow the input instead of freezing there
+            self._t = t
+            self._filter._rebase_time(t)
+            self._t_wheel_rx = t if self._t_wheel_rx is not None else None
+            self._stop_since, self._stop_snapped = None, False
         now = t if self._t is None else max(self._t, t)
         front, rear = self._wheel['front'], self._wheel['rear']
-        est = self._v if self._t is not None else None
-        st = self._slip.update(front, rear, 0.0, est)    # no drive model yet: accel_model = 0
+        # the detector predicts from the last measured speed over its own dt (last wheel
+        # stamp -> newest wheel stamp): a speed already moved on by the model would count
+        # the acceleration twice
+        est = self._v_measured if self._t is not None else None
+        dt = 0.0 if self._t is None else now - self._t
+        if dt > jump:
+            dt = 0.0     # a clock jump, not travel: no bag holds such a gap (max 2.6 s, D-043)
+            self._filter._rebase_time(now)
+        drive = self.params.drive
+        self._accel_model = (model_accel(self._notch_at(now), self._v, self.params)
+                             if drive.use_model else 0.0)
+        st = self._slip.update(front, rear, self._accel_model, est)
+        if wheel_arrived:
+            self._t_wheel_rx = now
+        if (drive.use_model and self._t_wheel_rx is not None
+                and now - self._t_wheel_rx > self.params.input.stale_timeout_s):
+            # no wheel sample has arrived for stale_timeout_s of state time: both bogies
+            # silent (the detector sees silence only relative to the other bogie) -> trust
+            # neither and predict below. Judged by arrival, not by stamp: wheel stamps may
+            # trail the controller by seconds (docs/data.md trap 5) while the wheels talk
+            st = dataclasses.replace(st, front_trust=0.0, rear_trust=0.0)
         self._slip_state = st
-        self._filter.predict(now, 0.0)  # drive-model dependency #10 is not merged
+        self._filter.predict(now, self._accel_model)
         if sample is not None:
             trust = st.front_trust if sample.bogie == 'front' else st.rear_trust
             self._filter.update(sample, trust)
         self._v, _, _ = self._filter.state()
-        dt = 0.0 if self._t is None else now - self._t
+        if sample is not None and self._filter.diagnostics() is not None:
+            if self._filter.diagnostics().accepted:
+                self._v_measured = self._v
         self._t = now
         ds = self._v * dt
         self._distance += ds
@@ -100,7 +153,7 @@ class Odometry:
         if on_map is not None:
             x, y, z, yaw, pos_cov = on_map
         return Estimate(
-            t=t, speed=self._v, speed_var=var, accel=accel, accel_model=0.0,
+            t=t, speed=self._v, speed_var=var, accel=accel, accel_model=self._accel_model,
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used,

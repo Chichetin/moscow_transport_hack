@@ -46,6 +46,9 @@ class Preprocessor:
         self.t0: Optional[float] = None        # stamp of the first raw input ever seen
         self._last: dict = {}                  # topic -> last accepted stamp (trap 6 gate)
         self._wheel_prev: dict = {}             # bogie -> last accepted WheelSample
+        self._clock: Optional[float] = None    # newest accepted stamp over the vehicle streams
+        self._jump: Optional[tuple] = None     # (topic, stamp) of an unconfirmed jump ahead
+        self._back: dict = {}                  # topic -> stamp far behind its gate, unconfirmed
 
     def accept(self, raw: Any) -> Optional[Sample]:
         topic, msg = raw
@@ -65,10 +68,44 @@ class Preprocessor:
         return None
 
     def _fresh(self, topic: str, t: float) -> bool:
-        """Accept a stream sample only if its stamp is newer than the stream's last one."""
-        if t <= self._last.get(topic, -math.inf):
+        """Accept a stream sample only if its stamp is newer than the stream's last one and
+        not implausibly far from the input clock (#77, D-043).
+
+        Forward: a stamp more than `input.max_stamp_jump_s` ahead of the newest accepted one
+        (over the vehicle streams) is a clock glitch unless the very next sample confirms it
+        -- another stream near the same stamp, or the same stream moving on from it within the
+        limit (a real clock jump, or a stream back after a long silence). Any normal sample
+        in between cancels the pending jump.
+        Backward: if a jump was accepted anyway (two glitches in a row, or the first sample of
+        the bag from the future), the stream's own gate sits in the future and every normal
+        sample looks like a stamp from the past. A stamp more than the limit behind the gate,
+        followed by a sample of the same stream moving on from it within the limit, resyncs
+        the stream there. Ordinary rollbacks (trap 6, up to 3.7 s lag, trap 5) stay dropped.
+        """
+        jump = self.p.input.max_stamp_jump_s
+        last = self._last.get(topic, -math.inf)
+        if t <= last:
+            back = self._back.get(topic)
+            if t < last - jump and back is not None and back < t <= back + jump:
+                self._back.pop(topic, None)
+                self._last[topic] = t          # resync: the gate was in the future
+                self._clock = max(self._last.values())
+                self._jump = None
+                return True
+            if t < last - jump:
+                self._back[topic] = t
             return False
+        if self._clock is not None and t - self._clock > jump:
+            pending = self._jump
+            confirmed = (pending is not None and abs(t - pending[1]) <= jump
+                         and (pending[0] != topic or t > pending[1]))
+            if not confirmed:
+                self._jump = (topic, t)
+                return False
+        self._jump = None                      # accepted: nothing is pending any more
+        self._back.pop(topic, None)
         self._last[topic] = t
+        self._clock = t if self._clock is None else max(self._clock, t)
         return True
 
     def _wheel(self, topic: str, t: float, msg) -> Optional[WheelSample]:

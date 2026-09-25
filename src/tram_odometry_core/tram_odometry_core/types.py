@@ -96,6 +96,7 @@ class InputParams:
     wheel_speed_scale: float
     stale_timeout_s: float
     max_wheel_accel_mps2: float
+    max_stamp_jump_s: float
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,8 @@ class DriveParams:
     brake_accel_table: Tuple[float, ...]
     adhesion_accel_mps2: float
     traction_power_w_per_kg: float
+    response_delay_s: float
+    use_model: bool
 
 
 @dataclass(frozen=True)
@@ -270,6 +273,8 @@ def load_params(path) -> Params:
         raise KeyError("params file must contain '/**' -> 'ros__parameters'") from None
     params = _build(Params, raw, 'params')
     _validate_drive(params.drive)
+    if not (params.input.max_stamp_jump_s > 0):
+        raise ValueError('input.max_stamp_jump_s must be positive')
     _validate_filter(params.filter)
     return params
 
@@ -294,6 +299,8 @@ def _validate_drive(drive: DriveParams) -> None:
         raise ValueError('drive.adhesion_accel_mps2 must be positive')
     if drive.traction_power_w_per_kg <= 0:
         raise ValueError('drive.traction_power_w_per_kg must be positive')
+    if not (drive.response_delay_s >= 0):
+        raise ValueError('drive.response_delay_s must be nonnegative')
     expected = (drive.notch_max + 1) * len(grid)
     for name in ('traction_accel_table', 'brake_accel_table'):
         table = getattr(drive, name)

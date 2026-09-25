@@ -78,6 +78,28 @@ def test_past_predictions_and_measurements_do_not_rewind_state():
     assert filt.state() == before
 
 
+def test_live_wheels_behind_controller_remain_fresh_on_wheel_timeline():
+    filt = SpeedFilter(PARAMS)
+    filt.predict(1.0, 0.0)
+    filt.update(wheel(0.0, 10.0), 1.0)
+    assert filt.diagnostics().accepted
+    assert filt.state()[0] == pytest.approx(10.0)
+    filt.predict(1.1, 0.0)
+    filt.update(wheel(0.1, 10.0), 1.0)
+    assert filt.diagnostics().accepted
+    assert filt.state()[0] == pytest.approx(10.0, abs=0.01)
+
+
+def test_wheel_behind_latest_wheel_is_stale_even_when_controller_ahead():
+    filt = SpeedFilter(PARAMS)
+    filt.predict(2.0, 0.0)
+    filt.update(wheel(1.0, 10.0), 1.0)
+    before = filt.state()
+    filt.update(wheel(0.0, 20.0, 'rear'), 1.0)
+    assert filt.state() == before
+    assert filt.diagnostics() is None
+
+
 @pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf'), -1.0])
 def test_invalid_wheel_is_ignored(bad):
     filt = initialized()

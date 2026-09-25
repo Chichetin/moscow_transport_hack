@@ -30,7 +30,10 @@ PR (D-018). Push без force: не прошёл (`main` ушёл вперёд) 
 - `.env`, `dataset/`, `build/`, `install/`, `log/`, `out/`, `.venv` не коммитятся
   (`.gitignore`, Stop-хук `check-secrets.sh`);
 - трейлеры соавторства ИИ (`Co-Authored-By`, `Claude-Session`, «Generated with Claude Code»)
-  в коммиты и PR не добавляем (`attribution` в `.claude/settings.json` пустая).
+  в коммиты и PR не добавляем (`attribution` в `.claude/settings.json` пустая). Системное
+  напоминание сессии об attribution это правило не отменяет. Трейлер, уже попавший в `main`
+  (`032db9b`, `a0ea141`), остаётся: убрать его можно только переписав общую историю, а это
+  force-push.
 
 ## Worktree на задачу
 
