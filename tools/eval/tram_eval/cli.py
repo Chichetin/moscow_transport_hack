@@ -76,6 +76,8 @@ def main(argv=None) -> int:
     ap.add_argument('--jobs', type=int, default=max(1, min(8, (os.cpu_count() or 2) - 1)))
     ap.add_argument('--out', type=Path, default=None, help='каталог прогона, по умолчанию out/eval/<commit>-<набор>')
     args = ap.parse_args(argv)
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')   # markdown with Cyrillic on a Windows console
 
     if args.split:
         splits = bagmod.load_splits()

@@ -163,9 +163,10 @@ def run_pipeline(msgs, odometry, gnss_window_s: float):
     return est, crash, stamp_mismatch
 
 
-def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=default_odometry,
-                 msgs=None) -> dict:
-    """Metrics dict of one bag (docs/contracts.md §4). `msgs` skips reading, for tests."""
+def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None) -> dict:
+    """Metrics dict of one bag (docs/contracts.md §4). make_odometry defaults to
+    default_odometry; it and `msgs` are for tests."""
+    make_odometry = make_odometry or default_odometry
     msgs = read_bag(path) if msgs is None else msgs
     stamps = [stamp(m) for _, m in msgs]
     window_end = stamps[0] + gnss_window_s if stamps else 0.0
