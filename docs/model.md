@@ -1,18 +1,20 @@
 # Модель резервной одометрии
 
-Состояние документа: реализация `origin/main` после #12 и #14. Модель привода #10 и
+Состояние документа: реализация `origin/main` после #12, #13 и #14. Модель привода #10 и
 оценщик EKF #11 ещё открыты. Их проектные намерения перечислены отдельно, без
 уравнений, которые можно было бы принять за работающий код.
 
 ## Входы, выходы и единицы
 
 Единственная точка расчёта — [`Odometry.step`](../src/tram_odometry_core/tram_odometry_core/pipeline.py).
-Она принимает пару `(topic, ROS message)` от ноды или `tools/eval` и возвращает
-`Estimate` либо `None` для отклонённого входа. В движении используются скорости двух
+Она передаёт пару `(topic, ROS message)` от ноды или `tools/eval` в
+[`Preprocessor.accept`](../src/tram_odometry_core/tram_odometry_core/preprocess/__init__.py),
+а затем обрабатывает нормализованный `Sample`. Метод возвращает `Estimate` либо
+`None` для отклонённого или служебного входа. В движении используются скорости двух
 тележек и позиция контроллера; GNSS master fix/vel допускается только в первые
-`gnss.init_window_s` секунд по `header.stamp`. Сейчас позиция контроллера вызывает
-шаг расчёта, но её значение **не читается**. GNSS rover в ноде подписан, но ядро его
-не использует. Выходы ноды — `/result/velocity` в м/с и `/result/position` в метрах,
+`gnss.init_window_s` секунд по `header.stamp`. Позиция контроллера уже проходит проверку
+и попадает в `CommandSample`, но пока не участвует в расчёте скорости. GNSS rover в ноде
+подписан, но ядро его не использует. Выходы ноды — `/result/velocity` в м/с и `/result/position` в метрах,
 ENU прогона; их заполнение выполняют
 [`velocity_msg` и `position_msg`](../src/tram_odometry/tram_odometry/odometry_node.py).
 
@@ -23,14 +25,17 @@ ENU прогона; их заполнение выполняют
 
 ## Скорость и путь: работающий бейзлайн
 
-[`Odometry._on_wheel`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
+[`Preprocessor._wheel`](../src/tram_odometry_core/tram_odometry_core/preprocess/__init__.py)
 единожды переводит скорость `u_i` тележки из км/ч в м/с и применяет её масштаб:
 
 ```text
 v_i = u_i · input.wheel_speed_scale · vehicle.wheel_scale_i.
 ```
 
-После проверки свежести и доверия [`Odometry._advance`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
+До оценщика предобработчик пропускает только возрастающие stamp каждой тележки
+и отсекает выбросы по пределу ускорения колеса
+`input.max_wheel_accel_mps2`; деталь поведения описана в решении D-031.
+После проверки доверия [`Odometry._advance`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
 считает взвешенное среднее; при отсутствии доверенных тележек оставляет прежнюю
 скорость. Время состояния не откатывается при запоздавшем сообщении:
 
@@ -39,8 +44,8 @@ v = Σ(w_i v_i) / Σw_i,  если Σw_i > 0; иначе v = v_prev;
 dt = max(t, t_prev) − t_prev;  ds = v · dt;  distance += ds.
 ```
 
-Потоковые повторы и не возрастающий stamp отклоняются в
-[`Odometry._fresh`](../src/tram_odometry_core/tram_odometry_core/pipeline.py).
+Повторные и не возрастающие stamp каждого потока отклоняются в
+[`Preprocessor._fresh`](../src/tram_odometry_core/tram_odometry_core/preprocess/__init__.py).
 При молчании обеих тележек это **удержание скорости**, а не прогноз от тяги.
 Ускорение ни из разности скоростей, ни из команды контроллера сейчас не вычисляется.
 
