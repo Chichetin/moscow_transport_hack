@@ -1,4 +1,4 @@
-"""ROS 2 wrapper: /vehicle/* and GNSS -> pipeline.Odometry.step -> /result/velocity, /result/position.
+"""ROS 2 wrapper: /vehicle/* and GNSS -> pipeline.Odometry.step -> /result/*.
 
 Thin by design (D-001): the raw input of Odometry.step is the (topic, message) pair as
 received, exactly what tools/eval passes (tools/eval/tram_eval/bag.py: to_raw); parsing, units
@@ -10,6 +10,7 @@ import os
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus, KeyValue
 from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Odometry as OdometryMsg
 from rclpy.node import Node
@@ -21,6 +22,7 @@ from tram_odometry_core.pipeline import Odometry
 from tram_odometry_core.types import load_params, load_route
 
 UNKNOWN_VAR = 1e6      # contract §1: covariance of an unestimated component is large, never -1
+DIAGNOSTIC_PERIOD_NS = 100_000_000  # 10 Hz maximum, measured in bag stamp time
 INPUT_QUEUE = 100      # messages; bag start delivers a burst of up to ~3.7 s (docs/data.md, trap 5)
 VEHICLE_INPUTS = [('/vehicle/front_bogie_velocity', VelocitySensor),
                   ('/vehicle/rear_bogie_velocity', VelocitySensor),
@@ -81,6 +83,50 @@ def position_msg(est, stamp, params) -> OdometryMsg:
     return m
 
 
+def _stamp_ns(stamp) -> int:
+    return stamp.sec * 1_000_000_000 + stamp.nanosec
+
+
+def _finite_estimate(est) -> bool:
+    return all(math.isfinite(v) for v in (est.speed, est.speed_var, est.x, est.y, est.z,
+                                         est.yaw, *est.pos_cov))
+
+
+def _values(items):
+    return [KeyValue(key=key, value=str(value).lower() if isinstance(value, bool)
+                     else str(value)) for key, value in items]
+
+
+def diagnostics_msg(est, stamp, params, ages) -> DiagnosticArray:
+    """Two statuses from the accepted estimate and ages of accepted vehicle inputs."""
+    m = DiagnosticArray()
+    m.header.stamp = stamp
+    slip = est.slip
+    slip_status = DiagnosticStatus()
+    slip_status.name = 'tram_odometry: slip'
+    slip_status.level = (DiagnosticStatus.WARN if slip.slip_front or slip.slip_rear
+                         else DiagnosticStatus.OK)
+    slip_status.message = ('bogie anomaly' if slip_status.level != DiagnosticStatus.OK
+                           else 'ok')
+    slip_status.values = _values((
+        ('slip_front', slip.slip_front), ('slip_rear', slip.slip_rear),
+        ('adhesion_est', 'unknown' if slip.adhesion_est is None else slip.adhesion_est),
+        ('wheel_scale_front', params.vehicle.wheel_scale_front),
+        ('wheel_scale_rear', params.vehicle.wheel_scale_rear)))
+    input_status = DiagnosticStatus()
+    input_status.name = 'tram_odometry: inputs'
+    input_status.level = (DiagnosticStatus.WARN if any(
+        age == 'unknown' or age > params.input.stale_timeout_s for age in ages)
+                          else DiagnosticStatus.OK)
+    input_status.message = ('stale input' if input_status.level != DiagnosticStatus.OK
+                            else 'ok')
+    input_status.values = _values((
+        ('front_age_s', ages[0]), ('rear_age_s', ages[1]), ('cmd_age_s', ages[2]),
+        ('gnss_used', est.gnss_used)))
+    m.status = [slip_status, input_status]
+    return m
+
+
 class OdometryNode(Node):
     def __init__(self, params_file=None):
         super().__init__('tram_odometry')
@@ -91,6 +137,9 @@ class OdometryNode(Node):
         self.errors = 0
         self.pub_velocity = self.create_publisher(VelocitySensor, '/result/velocity', 10)
         self.pub_position = self.create_publisher(OdometryMsg, '/result/position', 10)
+        self.pub_diagnostics = self.create_publisher(DiagnosticArray, '/result/diagnostics', 10)
+        self._last_input_ns = {}
+        self._last_diagnostic_ns = None
         inputs = VEHICLE_INPUTS + [(self.params.gnss.topic_fix, NavSatFix),
                                    (ROVER_FIX_TOPIC, NavSatFix),
                                    (self.params.gnss.topic_vel, TwistStamped)]
@@ -102,11 +151,29 @@ class OdometryNode(Node):
     def on_input(self, topic: str, msg) -> None:
         """One input -> at most one velocity and one position; a core error skips the input."""
         try:
+            stamp_ns = _stamp_ns(msg.header.stamp)
+            if stamp_ns <= 0:
+                return
             est = self.odometry.step(to_raw(topic, msg))
             if est is None:
                 return
+            if not _finite_estimate(est):
+                self.errors += 1
+                self.get_logger().error(f'{topic} non-finite estimate not published',
+                                        throttle_duration_sec=5.0)
+                return
             self.pub_velocity.publish(velocity_msg(est, msg.header.stamp, self.params))
             self.pub_position.publish(position_msg(est, msg.header.stamp, self.params))
+            if topic in (VEHICLE_INPUTS[0][0], VEHICLE_INPUTS[1][0], VEHICLE_INPUTS[2][0]):
+                self._last_input_ns[topic] = stamp_ns
+            if (self._last_diagnostic_ns is None
+                    or stamp_ns - self._last_diagnostic_ns >= DIAGNOSTIC_PERIOD_NS):
+                ages = tuple('unknown' if self._last_input_ns.get(key) is None else
+                             max(0, stamp_ns - self._last_input_ns[key]) / 1_000_000_000
+                             for key, _ in VEHICLE_INPUTS)
+                self.pub_diagnostics.publish(diagnostics_msg(est, msg.header.stamp,
+                                                              self.params, ages))
+                self._last_diagnostic_ns = stamp_ns
         except Exception as e:  # noqa: BLE001 — the node must outlive any bad input or core bug
             self.errors += 1
             self.get_logger().error(f'{topic} input skipped: {e!r}', throttle_duration_sec=5.0)
