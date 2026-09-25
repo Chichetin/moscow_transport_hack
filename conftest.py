@@ -11,5 +11,5 @@ for _var in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'NUME
     os.environ.setdefault(_var, '1')
 
 ROOT = Path(__file__).resolve().parent
-for sub in ('src/tram_odometry_core', 'tools/eval', 'tools/stand', 'tools/submission'):
+for sub in ('src/tram_odometry_core', 'tools/eval', 'tools/stand', 'tools/submission', 'tools/survey'):
     sys.path.insert(0, str(ROOT / sub))

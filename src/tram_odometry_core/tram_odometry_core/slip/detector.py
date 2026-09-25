@@ -2,8 +2,9 @@
 
 Each bogie is compared with the prediction of the speed filter (`est` moved on by the model
 acceleration). Two bogies that agree with each other are both trusted, even against a stale
-estimate. When they disagree, a bogie reading exactly 0 is blamed, otherwise the one further
-from the prediction. Bogies that are
+estimate. When they disagree, a bogie reading exactly 0 is blamed if the moving one agrees with
+the prediction or the drive pulls (a start from rest), otherwise the one further from the
+prediction. Bogies that are
 silent for longer than `input.stale_timeout_s` get no trust; if the other bogie is talking, the
 silent one is flagged as failed.
 Stateless apart from the previous update time; recovery is immediate when a bogie is consistent again.
@@ -47,9 +48,13 @@ class SlipDetector:
             f, r = live['front'].speed, live['rear'].speed
             if abs(f - r) <= tol:
                 trust['front'] = trust['rear'] = 1.0
-            elif (f == 0.0) != (r == 0.0):
-                # exactly 0 next to a moving bogie is the observed failure (stuck / dead zone,
-                # docs/data.md trap 8) and the estimate may still be at rest: no need for it
+            elif (f == 0.0) != (r == 0.0) and (
+                    pred is None or accel_model > 0.0 or abs(max(f, r) - pred) <= tol):
+                # exactly 0 next to a moving bogie that agrees with the prediction, or while the
+                # drive pulls away from rest (the estimate lags the dead-zone jump), is the
+                # observed failure (stuck / dead zone, docs/data.md trap 8). A moving bogie far
+                # from the prediction next to an honest 0 without traction is a spike (#76):
+                # left to the prediction below
                 bad = 'front' if f == 0.0 else 'rear'
                 trust['rear' if bad == 'front' else 'front'] = 1.0
                 slip[bad] = True

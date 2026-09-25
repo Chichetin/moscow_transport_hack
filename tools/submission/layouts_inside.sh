@@ -7,15 +7,25 @@ LOGS="/out/layouts-$COMMIT"; mkdir -p "$LOGS"
 RES=/tmp/results.tsv; : > "$RES"
 
 # Пакет сообщений у жюри. Оригинал организаторов в Humble не собирается (нет <maintainer>,
-# D-006), значит у жюри рабочая копия — такая же, как наша; оригинал нужен для раскладки «поверх».
+# D-006), значит у жюри рабочая копия — такая же, как вложенная в наш vendor (D-044); оригинал
+# нужен для раскладки «поверх».
 JURY_MSGS=/tmp/jury_msgs/tram_vehicle_msgs
 ORIG_MSGS=/tmp/orig_msgs/tram_vehicle_msgs
-mkdir -p /tmp/jury_msgs /tmp/orig_msgs
-cp -r /repo/src/tram_vehicle_msgs "$JURY_MSGS"
-cp -r /repo/src/tram_vehicle_msgs "$ORIG_MSGS" && sed -i '/<maintainer/d' "$ORIG_MSGS/package.xml"
+mkdir -p "$JURY_MSGS" "$ORIG_MSGS"
+for d in "$JURY_MSGS" "$ORIG_MSGS"; do
+  cp /repo/src/tram_vehicle_msgs/vendor/* "$d/" && cp -r /repo/src/tram_vehicle_msgs/msg "$d/"
+done
+sed -i '/<maintainer/d' "$ORIG_MSGS/package.xml"
 
-build() { # build <раскладка> <каталог workspace>
-  (cd "$2" && colcon build > "$LOGS/$1.build.log" 2>&1)
+build() { # build <раскладка> <каталог workspace> [аргументы colcon build]
+  local name="$1" ws="$2"; shift 2
+  (cd "$ws" && colcon build "$@" > "$LOGS/$name.build.log" 2>&1)
+}
+
+importable() { # importable <раскладка> <каталог workspace>: сообщения и нода видны после source
+  (source "$2/install/setup.bash" &&
+   python3 -c 'from tram_vehicle_msgs.msg import VelocitySensor, DriverControllerCommand' &&
+   python3 -c 'import tram_odometry.odometry_node') > "$LOGS/$1.import.log" 2>&1
 }
 
 layout() { # layout <имя> <что имитирует>; готовит /tmp/<имя>/ws, собирает, пишет строку результата
@@ -27,13 +37,23 @@ layout() { # layout <имя> <что имитирует>; готовит /tmp/<�
     repo_root)         rm -rf "$ws" && cp -r /repo "$ws" ;;
     jury_msgs_in_src)  cp -r "$JURY_MSGS" "$ws/src/" && cp -r /repo "$ws/src/repo" ;;
     over_orig_msgs)    cp -r "$ORIG_MSGS" "$ws/src/" && cp -r /repo/src/* "$ws/src/" ;;
+    jury_msgs_over)    cp -r /repo/src/* "$ws/src/" && cp -r "$JURY_MSGS" "$ws/src/" ;;
+    up_to|merge_install|symlink_install) cp -r /repo/src/* "$ws/src/" ;;
     underlay)          mkdir -p "/tmp/$name/under/src" && cp -r "$JURY_MSGS" "/tmp/$name/under/src/" &&
                        build "$name.underlay" "/tmp/$name/under" &&
                        source "/tmp/$name/under/install/setup.bash" && cp -r /repo/src/* "$ws/src/" ;;
   esac
-  if build "$name" "$ws"; then status=ok; else
+  local args=()
+  case "$name" in
+    up_to)           args=(--packages-up-to tram_odometry) ;;
+    merge_install)   args=(--merge-install) ;;
+    symlink_install) args=(--symlink-install) ;;
+  esac
+  if ! build "$name" "$ws" "${args[@]}"; then
     status=fail; note="$(grep -m1 -E 'Duplicate package|failed|Error' "$LOGS/$name.build.log" | cut -c1-200)"
-  fi
+  elif ! importable "$name" "$ws"; then
+    status=fail; note="не импортируется: $(tail -1 "$LOGS/$name.import.log" | cut -c1-180)"
+  else status=ok; fi
   printf '%s\t%s\t%s\t%s\n' "$name" "$what" "$status" "$note" >> "$RES"
   echo "== $name: $status ${note:+— $note}"
 }
@@ -43,6 +63,10 @@ layout clone_in_src     "git clone репозитория в <ws>/src/ пуст�
 layout repo_root        "colcon build прямо в корне клона"
 layout jury_msgs_in_src "клон в <ws>/src/, где уже лежит tram_vehicle_msgs жюри (README данных, §6.1)"
 layout over_orig_msgs   "cp -r src/* поверх оригинала организаторов в <ws>/src/"
+layout jury_msgs_over   "cp -r src/*, затем tram_vehicle_msgs жюри поверх в <ws>/src/ (README данных, §6.1)"
+layout up_to            "README, но colcon build --packages-up-to tram_odometry"
+layout merge_install    "README, но colcon build --merge-install"
+layout symlink_install  "README, но colcon build --symlink-install"
 layout underlay         "tram_vehicle_msgs жюри собран отдельно (underlay), наш src поверх"
 
 # Запуск: только в раскладке README (install-дерево то же во всех), каждый bag отдельно.
@@ -52,7 +76,9 @@ for b in $BAGS; do
   if [ -z "$LAUNCH" ]; then
     printf '%s\t%s\t%s\n' "$b" skipped "нет launch в tram_odometry" >> "$RUN"; continue
   fi
-  ( source /tmp/readme/ws/install/setup.bash
+  ( # без job control фоновые процессы стартуют с игнорируемым SIGINT и не останавливаются
+    set -m
+    source /tmp/readme/ws/install/setup.bash
     ros2 launch "$LAUNCH" > "$LOGS/run.$b.node.log" 2>&1 & NODE=$!
     sleep 3
     ros2 bag record -o "/tmp/rec_$b" /result/velocity /result/position > "$LOGS/run.$b.record.log" 2>&1 & REC=$!

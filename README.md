@@ -25,17 +25,20 @@ colcon build
 source install/setup.bash
 ```
 
-Собираются три пакета: `tram_vehicle_msgs`, `tram_odometry_core`, `tram_odometry`.
-В `src/` лежит копия пакета сообщений организаторов `tram_vehicle_msgs`. В ней добавлена
-одна строка `<maintainer>`: без неё Humble пакет не собирает. Если в вашем workspace уже
-есть свой `tram_vehicle_msgs`, исключите наш: `touch <ws>/src/tram_vehicle_msgs/COLCON_IGNORE`
-(иначе `colcon` откажется собирать два пакета с одним именем).
+Собираются три пакета: `tram_vehicle_msgs_vendor`, `tram_odometry_core`, `tram_odometry`.
+Свой `tram_vehicle_msgs` ничего исключать не требует. `tram_vehicle_msgs_vendor` (каталог
+`src/tram_vehicle_msgs/`) сначала ищет ваш `tram_vehicle_msgs` — в том же workspace или в
+underlay — и берёт его. Только если его нет, он собирает вложенную копию пакета организаторов
+(`.msg` без изменений, в `package.xml` добавлен `<maintainer>`, без него Humble пакет не
+собирает). Копия вложена в другой пакет, поэтому `colcon` не видит два пакета с одним
+именем ни в какой раскладке (D-044). В `--packages-select` пакет сообщений называется
+`tram_vehicle_msgs_vendor`; `--packages-up-to tram_odometry` включает его сам.
 
-Та же сборка проверяется у нас в шести раскладках workspace, которые может выбрать жюри
-(клон целиком в `src/`, только `src/*`, свой `tram_vehicle_msgs` рядом, underlay и т. д.),
-из `git archive`, без сети, 2 CPU, 512 МБ: `bash tools/submission/jury_layouts.sh`. Пять
-проходят; раскладка «клон рядом со своим `tram_vehicle_msgs` без `COLCON_IGNORE`» падает на
-дубликате имени пакета — открытый blocker #40, обход — строка `COLCON_IGNORE` выше.
+Та же сборка проверяется у нас в десяти раскладках workspace, которые может выбрать жюри
+(клон целиком в `src/`, только `src/*`, свой `tram_vehicle_msgs` рядом или поверх, underlay,
+`--packages-up-to`, `--merge-install`, `--symlink-install`), из `git archive`, без сети,
+2 CPU, 512 МБ: `bash tools/submission/jury_layouts.sh`. После сборки в каждой раскладке проверяется,
+что после `source install/setup.bash` импортируются сообщения и нода.
 
 ### 2. Запуск
 
