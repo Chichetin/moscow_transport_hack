@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Свежее ревью PR перед merge — видит только diff против origin/main. Запускать не на каждый PR, а когда PR трогает контракт (docs/contracts.md, types.py, топики), params.yaml, формат вывода метрик tools/eval или ядро оценщика (estimator, slip, dynamics). Ничего не правит.
+description: Свежее ревью PR перед merge — видит только diff против origin/main. Запускать на каждый PR с кодом, тестами, params.yaml или .claude/ перед merge; особенно строго — когда PR трогает контракт (docs/contracts.md, types.py, топики), формат вывода метрик tools/eval или ядро оценщика (estimator, slip, dynamics). Ничего не правит.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 color: yellow
