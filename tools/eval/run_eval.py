@@ -4,6 +4,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from tram_eval.cli import main  # noqa: E402
-
-sys.exit(main())
+if __name__ == '__main__':   # process-pool workers re-import this file on Windows (spawn)
+    from tram_eval.cli import main
+    sys.exit(main())

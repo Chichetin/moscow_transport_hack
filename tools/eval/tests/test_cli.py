@@ -54,3 +54,17 @@ def test_d012_missing_main_metric_is_not_silently_ok():
            'summary': {'median': dict(base['summary']['median'], speed_rmse=None), 'worst_bag': {}}}
     line = [x for x in cli.summary_table(new, base) if x.startswith('D-012')][0]
     assert 'speed_rmse' in line and 'не хуже' not in line
+
+
+def test_entry_point_with_process_pool(tmp_path):
+    # Windows starts pool workers with spawn: they re-import the entry script, which must not
+    # run main() again (BrokenProcessPool). Uses the real pipeline.Odometry from main.
+    import subprocess
+    import sys
+    if not all((bag.data_dir() / b / 'metadata.yaml').exists() for b in SHORT):
+        pytest.skip('dataset not unpacked (docs/data.md)')
+    cmd = [sys.executable, str(bag.REPO / 'tools' / 'eval' / 'run_eval.py'), '--jobs', '2',
+           '--out', str(tmp_path)] + [a for b in SHORT for a in ('--bag', b)]
+    run = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=300)
+    assert run.returncode == 0, run.stderr[-2000:]
+    assert set(json.loads((tmp_path / 'metrics.json').read_text(encoding='utf-8'))['bags']) == set(SHORT)
