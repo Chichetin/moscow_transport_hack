@@ -1,0 +1,36 @@
+# Секреты и локальная конфигурация
+.env
+.env.*
+!.env.example
+
+# Данные организаторов: тяжёлые, путь через TRAM_DATA_DIR (docs/data.md).
+# Исключение — копия пакета сообщений в src/tram_vehicle_msgs (D-006).
+/dataset/
+/data/
+
+# colcon
+/build/
+/install/
+/log/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Результаты прогонов: в git только сводки в docs/verification/
+/out/
+*.log
+
+# IDE и служебное
+.idea/
+.vscode/
+.DS_Store
+.claude/.last-green-test-run
+.claude/settings.local.json
+.claude/worktrees/

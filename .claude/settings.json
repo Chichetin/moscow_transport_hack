@@ -1,0 +1,133 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "model": "sonnet",
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git fetch:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git pull --ff-only:*)",
+      "Bash(git ls-remote:*)",
+      "Bash(git worktree add:*)",
+      "Bash(git worktree list:*)",
+      "Bash(git merge origin/main)",
+      "Bash(git push -u origin HEAD:*)",
+      "Bash(git worktree remove:*)",
+      "Bash(git worktree prune)",
+      "Bash(git branch -d:*)",
+      "Bash(git branch -D:*)",
+      "Bash(git push origin --delete worktree-*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue edit:*)",
+      "Bash(gh issue comment:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr comment:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(bash docker/dev.sh:*)",
+      "Bash(bash docker/jury-stand.sh:*)",
+      "Bash(bash .claude/hooks/*)",
+      "Bash(.venv/bin/python:*)",
+      "Bash(python3 -m pytest:*)"
+    ],
+    "ask": [
+      "Bash(git push origin HEAD:main)",
+      "Bash(git push origin main)",
+      "Bash(git push -u origin main)",
+      "Bash(git push origin main:*)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f)",
+      "Bash(git push * --delete main)",
+      "Bash(git push * :main)",
+      "Bash(git branch -d main)",
+      "Bash(git branch -D main)",
+      "Bash(git add -A:*)",
+      "Bash(git add --all:*)",
+      "Bash(git add .)",
+      "Bash(git commit -a:*)",
+      "Bash(git commit --amend:*)",
+      "Bash(git rebase:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(gh pr merge * --admin*)",
+      "Bash(gh repo delete:*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/session-context.sh",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-secrets.sh",
+            "timeout": 30,
+            "statusMessage": "Поиск секретов в файлах для коммита…"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-tests.sh",
+            "timeout": 300,
+            "statusMessage": "Тесты (если есть и что-то менялось)…"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-upstream.sh stop",
+            "timeout": 30,
+            "statusMessage": "Чужие коммиты в origin/main против текущей работы…"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-upstream.sh post",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/check-worktrees.sh",
+            "timeout": 60,
+            "statusMessage": "Секреты в worktree субагентов…"
+          }
+        ]
+      }
+    ]
+  }
+}

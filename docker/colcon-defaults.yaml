@@ -1,0 +1,6 @@
+# colcon в dev-контейнере ищет пакеты только в src/: в корне основной копии лежит
+# dataset/tram_vehicle_msgs организаторов, и без этого — «Duplicate package names».
+build:
+  base-paths: [src]
+test:
+  base-paths: [src]

@@ -1,0 +1,3 @@
+# Контекст сборки образа нужен только requirements-dev.txt: код и данные монтируются томами.
+*
+!requirements-dev.txt

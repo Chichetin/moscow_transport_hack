@@ -1,0 +1,47 @@
+# Параметры ноды резервной одометрии. КОНТРАКТ (docs/contracts.md, раздел 3):
+# имена, единицы и смысл меняются только отдельным PR с апрувом потребителей.
+# Значения ниже — заглушки до идентификации (план, пакет ID-1); после неё сюда
+# попадают числа из notebooks/identification с командой, которой они получены.
+/**:
+  ros__parameters:
+    frames:
+      map: map                  # frame_id у /result/position
+      base: base_link           # child_frame_id у /result/position, frame_id у /result/velocity
+
+    input:
+      wheel_speed_scale: 0.2777777778   # вход тележек в км/ч -> м/с (D-003, docs/data.md)
+      stale_timeout_s: 0.5              # датчик молчит дольше -> не доверять ему
+      max_wheel_accel_mps2: 3.0         # физический предел |dv/dt| колеса для отсечки выбросов
+
+    vehicle:
+      mass_kg: 40000.0          # заглушка; наблюдаемо только отношение сил к массе
+      wheel_scale_front: 1.0    # поправка к радиусу колеса (износ), онлайн-подстройка в фильтре
+      wheel_scale_rear: 1.0
+
+    drive:                      # модель тяги/торможения по позиции контроллера, D-008
+      notch_max: 15
+      traction_accel_table: [0.0]  # заглушка a(notch, v); пустой [] ROS 2 не принимает
+      brake_accel_table: [0.0]
+
+    resistance:                 # Дэвис: a_res = c0 + c1*v + c2*v^2 (м/с^2)
+      c0: 0.02
+      c1: 0.0
+      c2: 0.0
+
+    filter:
+      rate_hz: 40.0             # публикация на каждом входе; не ниже 10 Гц (task.md, критерий 4)
+      q_accel: 0.5
+      r_wheel: 0.05
+
+    slip:
+      front_rear_threshold_mps: 0.5
+      model_residual_threshold_mps2: 1.0
+
+    position:
+      map_file: route.csv       # в share/tram_odometry/maps; строится tools/pathgraph из train
+      use_map: true
+
+    gnss:
+      init_window_s: 5.0        # сколько секунд GNSS разрешено для начальной выставки (D-005)
+      topic_fix: /sensing/gnss/master/fix
+      topic_vel: /sensing/gnss/master/vel
