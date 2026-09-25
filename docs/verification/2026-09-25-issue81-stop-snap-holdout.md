@@ -14,6 +14,6 @@
 .venv/bin/python tools/eval/run_eval.py --split holdout --jobs 4 --out <каталог>
 ```
 
-Ветка кандидата до коммита имела dirty marker (`db8513f-dirty`); численные результаты полные и сохранены в `/tmp/eval-81-origin/metrics.json` и `/tmp/eval-81-margin2/metrics.json`. На 26 bag — без падений, `NaN/inf` и несовпадений stamp. Изменённое правило не ухудшает ни медиану, ни худший bag по along RMSE.
+Первое измерение кандидата до коммита имело dirty marker (`db8513f-dirty`); после коммита реализации `04df025` holdout повторён и дал те же медиану и худший bag. Измерения сохранены в `/tmp/eval-81-origin/metrics.json`, `/tmp/eval-81-margin2/metrics.json` и `/tmp/eval-81-committed/metrics.json`. На 26 bag — без падений, `NaN/inf` и несовпадений stamp. Изменённое правило не ухудшает ни медиану, ни худший bag по along RMSE.
 
 Синтетическое обоснование: при местах `s=1500, 1517.8 м` и оценке `s=1510 м` расстояния 10 и 7,8 м отличаются на 2,2 м, что меньше `2·stop_std_m = 4 м`; snap отклоняется. При точной оценке у `s=1500 м` расстояния 0 и 17,8 м различимы, snap сохраняется.
