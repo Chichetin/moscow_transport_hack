@@ -41,3 +41,10 @@ def test_write_stops(tmp_path):
     p = tmp_path / 'stops.csv'
     bs.write_stops(p, [(0, 146.04, 17)], 'h')
     assert p.read_text(encoding='utf-8').splitlines() == ['# h', 'branch,s_m,n_bags', '0,146.0,17']
+
+
+def test_edge_projection_is_not_a_place():
+    s = np.arange(0.0, 100.0, 1.0)
+    assert bs.edge_free(s, 50.0)
+    assert not bs.edge_free(s, 0.0) and not bs.edge_free(s, 1.5)
+    assert not bs.edge_free(s, 99.0) and not bs.edge_free(s, 97.5)

@@ -244,8 +244,8 @@ def load_route(path) -> Route:
     if stops_path.exists():
         rows = np.loadtxt(stops_path, delimiter=',', comments='#', skiprows=2, ndmin=2)
         stops = tuple((int(b), float(s)) for b, s in rows[:, :2])
-        if any(not 0 <= b < len(branches) for b, _ in stops):
-            raise ValueError(f'{stops_path}: stop on a branch that route.csv does not have (§5)')
+        if any(not (0 <= b < len(branches) and 0.0 <= s <= branches[b].s[-1]) for b, s in stops):
+            raise ValueError(f'{stops_path}: stop off the branches of route.csv (§5)')
     return Route(origin=origin, branches=branches, stops=stops)
 
 

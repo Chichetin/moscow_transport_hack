@@ -25,6 +25,7 @@ MASTER_VEL = '/sensing/gnss/master/vel'
 STOP_SPEED_MPS = 0.3    # m/s, Doppler speed under this is standing (docs/contracts.md §4)
 STOP_MIN_S = 5.0        # s, shortest stretch that counts as a stop
 MAX_OFF_M = 10.0        # m, a stop farther than this from every branch is off the map
+EDGE_M = 2.0            # m, a stop this close to a branch end is a stop beyond it: the projection clamps
 GAP_M = 8.0             # m, stops closer than this along a branch are one place
 MIN_BAGS = 5            # bags that must show a place for it to count as recurring
 
@@ -55,6 +56,11 @@ def stop_stretches(t: np.ndarray, speed: np.ndarray) -> list[tuple[float, float]
     return out
 
 
+def edge_free(s: np.ndarray, at: float) -> bool:
+    """False for a projection clamped onto the first or last point of a branch."""
+    return bool(s[0] + EDGE_M < at < s[-1] - EDGE_M)
+
+
 def stops_of_bag(bag: Path, route: dict) -> list[tuple[int, float]]:
     """(branch, s) of every stop of one bag on the route map."""
     fixes = br.read_master_fixes(bag)
@@ -74,7 +80,7 @@ def stops_of_bag(bag: Path, route: dict) -> list[tuple[int, float]]:
             ps, e = br.project(s, poly, p)
             if best is None or abs(e[0]) < best[2]:
                 best = (k, float(ps[0]), float(abs(e[0])))
-        if best[2] <= MAX_OFF_M:
+        if best[2] <= MAX_OFF_M and edge_free(route[best[0]][0], best[1]):
             out.append((best[0], best[1]))
     return out
 

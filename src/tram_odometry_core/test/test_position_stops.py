@@ -46,6 +46,12 @@ def test_stop_far_from_every_place_keeps_s():
     assert _arc(tr, 470.0, origin) == pytest.approx(at)
 
 
+def test_stop_at_a_nan_path_does_nothing():
+    tr = _tracker([(0, 1500.0)])
+    assert not tr.on_stop(float('nan'))
+    assert tr.advance(495.0) is not None
+
+
 def test_stop_without_places_or_alignment_does_nothing():
     assert not _tracker([]).on_stop(100.0)
     assert not PathTracker(PARAMS, _route()).on_stop(100.0)
@@ -109,13 +115,14 @@ def test_load_route_reads_the_stops_next_to_it(tmp_path):
     assert load_route(tmp_path / 'route.csv').stops == ()
     (tmp_path / 'stops.csv').write_text('# h\nbranch,s_m,n_bags\n0,0.5,7\n', encoding='utf-8')
     assert load_route(tmp_path / 'route.csv').stops == ((0, 0.5),)
-    (tmp_path / 'stops.csv').write_text('# h\nbranch,s_m,n_bags\n3,0.5,7\n', encoding='utf-8')
-    with pytest.raises(ValueError):
-        load_route(tmp_path / 'route.csv')
+    for bad in ('3,0.5,7', '0,5.0,7', '0,nan,7'):        # no such branch, past its end, NaN
+        (tmp_path / 'stops.csv').write_text(f'# h\nbranch,s_m,n_bags\n{bad}\n', encoding='utf-8')
+        with pytest.raises(ValueError):
+            load_route(tmp_path / 'route.csv')
 
 
 def test_stops_of_the_repository_map_are_valid():
     r = load_route(ROOT / 'src' / 'tram_odometry' / 'maps' / 'route.csv')
     assert len(r.stops) >= 20
     for b, s in r.stops:
-        assert 0.0 <= s <= r.branches[b].s[-1] + 0.1     # s_m is rounded to 0.1 m
+        assert 0.0 < s < r.branches[b].s[-1]                # none clamped onto a branch end
