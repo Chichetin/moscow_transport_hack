@@ -61,11 +61,12 @@ def test_resistance_is_recovered_and_non_negative():
 
 def test_blas_is_pinned_single_threaded():
     # #68: np.linalg.solve in fit_curve() below once returned a node 0.038 off from the single-
-    # threaded result on CI -- an order of magnitude more than the ~1e-13 rounding noise expected
-    # at this system's condition number (~1e3), so multi-threaded OpenBLAS is the suspect, not
-    # just "a different but still correct" summation order. Root conftest.py pins the thread
-    # count before numpy is imported anywhere in the session; this guards against someone
-    # removing that, and against it being too late (see _NUMPY_ALREADY_IMPORTED there).
+    # threaded result on CI -- roughly 11 orders of magnitude more than the ~1e-13 rounding noise
+    # expected at this system's condition number (~1e3), so multi-threaded OpenBLAS (a race, or a
+    # DYNAMIC_ARCH kernel bug -- not established which) is the suspect, not just "a different but
+    # still correct" summation order. Root conftest.py pins the thread count before numpy is
+    # imported anywhere in the session; this guards against someone removing that, and against it
+    # being too late (see _NUMPY_ALREADY_IMPORTED there).
     import conftest
     assert not conftest._NUMPY_ALREADY_IMPORTED, (
         'numpy was already imported before conftest.py pinned BLAS threads -- the pin came too '
