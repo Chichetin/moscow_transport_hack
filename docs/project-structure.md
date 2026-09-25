@@ -42,6 +42,7 @@
 │   ├── decisions.md, tz-compliance.md    # журнал решений, матрица условий
 │   ├── model.md, parameters.md,          # документы сдачи (создаются по плану)
 │   │   accuracy.md, roadmap.md
+│   ├── onboarding.md                     # промпты для подключения участника
 │   ├── pitch/                            # материалы питча
 │   ├── plans/                            # план и пакеты задач
 │   ├── verification/                     # прогоны eval и стенда: команды и числа

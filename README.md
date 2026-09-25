@@ -65,7 +65,7 @@ TBD: где лог ноды, как посчитать метрики проти
 
 ## Для команды
 
-Правила работы — `CLAUDE.md`, Git — `GIT.md`, формат работы агентов — `docs/agents.md`,
+Подключение нового участника — `docs/onboarding.md` (два промпта для Claude Code). Правила работы — `CLAUDE.md`, Git — `GIT.md`, формат работы агентов — `docs/agents.md`,
 контракты — `docs/contracts.md`, данные — `docs/data.md`.
 
 ```bash
