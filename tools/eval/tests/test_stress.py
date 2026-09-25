@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 from tram_eval.bag import FRONT, GNSS, REAR, stamp
-from tram_eval.stress import SCENARIOS, perturb, recovery_seconds
+from tram_eval.metrics import Estimates
+from tram_eval.stress import SCENARIOS, _errors, perturb, recovery_seconds
 from test_bag import drive
 
 
@@ -136,3 +137,45 @@ def test_report_has_absolute_gnss_error_and_event_coverage():
     assert report['clean_peak_speed_error_mps'] >= 0
     assert report['n_speed_during'] > 0
     assert report['peak_pos3d_error_m'] is not None
+
+
+def test_peak_and_recovery_keep_worst_error_at_duplicate_stamp():
+    times = np.array([1.0, 2.0, 2.0, 3.0, 4.0, 5.0])
+    clean = Estimates(times.copy(), np.zeros(6), np.zeros((6, 3)), np.zeros(6, bool))
+    dirty_speed = np.array([0.0, 0.0, 50.0, 0.0, 0.0, 0.0])
+    dirty = Estimates(times.copy(), dirty_speed, np.zeros((6, 3)), np.zeros(6, bool))
+
+    peak, _, _, _, _, _ = _errors(
+        np.array([1.0, 2.0, 3.0, 4.0, 5.0]), np.zeros(5), clean, dirty,
+        'speed', event_start=1.5, event_end=2.5, threshold=0.2)
+    _, _, _, recovery, _, _ = _errors(
+        np.array([1.0, 2.0, 3.0, 4.0, 5.0]), np.zeros(5), clean, dirty,
+        'speed', event_start=1.5, event_end=1.75, threshold=0.2)
+
+    assert peak == 50.0
+    assert recovery is None
+
+
+@pytest.mark.parametrize('scenario', ['outlier', 'rollback'])
+def test_scenario_skips_when_no_front_sample_can_be_changed(scenario):
+    source = drive(100.0)
+    initial = perturb(source, scenario, 5.0)
+    assert initial is not None
+    _, start, end = initial
+    no_front = [(topic, msg) for topic, msg in source
+                if not (topic == FRONT and start <= stamp(msg) < end)]
+
+    assert perturb(no_front, scenario, 5.0) is None
+
+
+def test_rollback_skips_when_window_has_fewer_than_ten_front_samples():
+    source = drive(100.0)
+    initial = perturb(source, 'rollback', 5.0)
+    assert initial is not None
+    _, start, end = initial
+    first_front = next((topic, msg) for topic, msg in source
+                       if topic == FRONT and start <= stamp(msg) < end)
+    sparse = [(topic, msg) for topic, msg in source
+              if topic != FRONT or not start <= stamp(msg) < end or (topic, msg) == first_front]
+
+    assert perturb(sparse, 'rollback', 5.0) is None
