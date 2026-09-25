@@ -141,7 +141,7 @@ bash docker/jury-stand.sh 30618_27e994fc            # стенд жюри: 2 CPU
   и фильтра.
 - Субагенты — штатная часть работы (D-016), конвейер — `docs/agents.md`: `builder`
   (реализация issue M+), `evaluator` (таблица holdout для PR, стенд, чекпоинты),
-  `reviewer` (каждый PR с кодом или `.claude/` перед merge), `scribe` (документы), `jury`
+  `reviewer` (каждый PR с кодом, тестами, `params.yaml` или `.claude/` перед merge), `scribe` (документы), `jury`
   (чекпоинты и вопросы питча, `opus`). Независимые — параллельно одним сообщением.
 - Скилл `submission-checklist` — проверка комплекта сдачи.
 - `docs/tz-compliance.md` обновляется в том же PR, что и артефакт.
