@@ -355,3 +355,30 @@ def test_stress_stream_through_real_core_never_breaks_outputs(node, monkeypatch)
     rear_age = [float(v.value) for d in diagnostics if STAMP.sec + 110 <= d.header.stamp.sec
                 <= STAMP.sec + 160 for v in d.status[1].values if v.key == 'rear_age_s']
     assert rear_age and max(rear_age) > node.params.input.stale_timeout_s
+    per_second = {}
+    for d in diagnostics:
+        per_second[d.header.stamp.sec] = per_second.get(d.header.stamp.sec, 0) + 1
+    assert max(per_second.values()) <= 10                      # contract §1: 1-10 Hz
+
+
+def test_diagnostics_recover_after_a_stamp_from_the_future(node, monkeypatch):
+    sent = []
+    monkeypatch.setattr(node.pub_diagnostics, 'publish', sent.append)
+    monkeypatch.setattr(node.odometry, 'step', lambda raw: _estimate())
+    future = DriverControllerCommand()
+    future.header.stamp = _stamp(STAMP.sec + 86400, STAMP.nanosec)   # one bad stamp, +1 day
+    node.on_input('/vehicle/driver_position_cmd', future)
+    for i in range(1, 21):                                            # 2 s of normal stream
+        cmd = DriverControllerCommand()
+        ns = STAMP.nanosec + i * 100_000_000
+        cmd.header.stamp = _stamp(STAMP.sec + ns // 1_000_000_000, ns % 1_000_000_000)
+        node.on_input('/vehicle/driver_position_cmd', cmd)
+    assert len(sent) >= 20
+    assert sent[-1].header.stamp.sec < STAMP.sec + 10
+
+
+def test_nonfinite_z_is_not_published(node, monkeypatch):
+    sent = _capture(node, monkeypatch)
+    monkeypatch.setattr(node.odometry, 'step', lambda raw: replace(_estimate(), z=float('nan')))
+    node.on_input('/vehicle/front_bogie_velocity', _wheel())
+    assert sent == [] and node.errors == 1

@@ -88,7 +88,7 @@ def _stamp_ns(stamp) -> int:
 
 
 def _finite_estimate(est) -> bool:
-    return all(math.isfinite(v) for v in (est.speed, est.speed_var, est.x, est.y,
+    return all(math.isfinite(v) for v in (est.speed, est.speed_var, est.x, est.y, est.z,
                                          est.yaw, *est.pos_cov))
 
 
@@ -159,13 +159,19 @@ class OdometryNode(Node):
                 return
             if not _finite_estimate(est):
                 self.errors += 1
+                self.get_logger().error(f'{topic} non-finite estimate not published',
+                                        throttle_duration_sec=5.0)
                 return
             self.pub_velocity.publish(velocity_msg(est, msg.header.stamp, self.params))
             self.pub_position.publish(position_msg(est, msg.header.stamp, self.params))
             if topic in (VEHICLE_INPUTS[0][0], VEHICLE_INPUTS[1][0], VEHICLE_INPUTS[2][0]):
                 self._last_input_ns[topic] = stamp_ns
+            # a stamp far behind the last diagnostic means that one was from the future:
+            # restart the 10 Hz clock instead of staying silent until the bag catches up
+            stale_ns = self.params.input.stale_timeout_s * 1_000_000_000
             if (self._last_diagnostic_ns is None
-                    or stamp_ns - self._last_diagnostic_ns >= DIAGNOSTIC_PERIOD_NS):
+                    or stamp_ns - self._last_diagnostic_ns >= DIAGNOSTIC_PERIOD_NS
+                    or self._last_diagnostic_ns - stamp_ns > stale_ns):
                 ages = tuple('unknown' if self._last_input_ns.get(key) is None else
                              max(0, stamp_ns - self._last_input_ns[key]) / 1_000_000_000
                              for key, _ in VEHICLE_INPUTS)
