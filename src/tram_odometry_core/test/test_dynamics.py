@@ -14,7 +14,7 @@ P = replace(BASE, drive=DriveParams(
     notch_max=2, speed_grid_mps=(0., 4., 10.),
     traction_accel_table=(0., 0., 0., 1., 2., 1., 2., 4., 2.),
     brake_accel_table=(0., 0., 0., 0.5, 1., 2., 1., 2., 4.),
-    adhesion_accel_mps2=3., traction_power_w_per_kg=12.),
+    adhesion_accel_mps2=3., traction_power_w_per_kg=12., response_delay_s=0.3, use_model=True),
     resistance=ResistanceParams(c0=0.02, c1=0.01, c2=0.001))
 
 
@@ -62,6 +62,15 @@ def test_invalid_speed_is_rejected(speed):
         accel(1, speed)
 
 
-def test_default_uncalibrated_tables_have_no_drive():
-    for notch in [-15, 0, 15]:
-        assert accel(notch, 5., BASE) == pytest.approx(-BASE.resistance.c0)
+def test_calibrated_tables_of_params_yaml():
+    """D-033 numbers: neutral is drag only, full traction at 5 m/s is the table row, full
+    brake is the identified adhesion limit."""
+    d = BASE.drive
+    assert accel(0, 5., BASE) == pytest.approx(-BASE.resistance.c0)
+    width = len(d.speed_grid_mps)
+    row = d.traction_accel_table[15 * width:16 * width]
+    expected = min(float(np.interp(5., d.speed_grid_mps, row)), d.adhesion_accel_mps2,
+                   d.traction_power_w_per_kg / 5.)
+    assert accel(15, 5., BASE) == pytest.approx(expected - BASE.resistance.c0)
+    assert 0.5 < accel(15, 5., BASE) < d.adhesion_accel_mps2
+    assert accel(-15, 12., BASE) == pytest.approx(-d.adhesion_accel_mps2 - BASE.resistance.c0)

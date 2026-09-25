@@ -4,13 +4,20 @@ Baseline (D-021): mean of the two bogie speeds, path by integration, straight-li
 reckoning along the heading taken from GNSS during the init window. The modules that
 follow replace the parts of it; the numbers of this version are the first row of the table.
 """
+import dataclasses
 import math
+from collections import deque
 from typing import Any, Optional
 
+from .dynamics import model_accel
 from .position import PathTracker
 from .preprocess import Preprocessor
 from .slip import SlipDetector
 from .types import CommandSample, Estimate, GnssFix, GnssVel, Params, SlipState, WheelSample
+
+# controller samples kept for the drive response delay: bounded memory (O(1) per message);
+# 32 samples at 20 Hz cover 1.6 s, five times the identified delay of 0.3 s (D-033)
+CMD_HISTORY = 32
 
 
 class Odometry:
@@ -27,6 +34,8 @@ class Odometry:
         self._wheel = {'front': None, 'rear': None}   # last WheelSample per bogie, m/s
         self._slip = SlipDetector(params)
         self._slip_state = SlipState(1.0, 1.0, False, False, None)
+        self._cmd = deque(maxlen=CMD_HISTORY)  # (stamp, notch), stamps increasing
+        self._accel_model = 0.0               # m/s^2, drive model at the state time
         self._v = 0.0                         # current speed, m/s
         self._distance = 0.0
         self._x = self._y = 0.0
@@ -46,6 +55,7 @@ class Odometry:
                 self._wheel[sample.bogie] = sample
                 return self._advance(sample.t)
             if isinstance(sample, CommandSample):
+                self._cmd.append((sample.t, sample.notch))
                 return self._advance(sample.t)
             if isinstance(sample, GnssFix):
                 self._on_fix(sample)
@@ -55,18 +65,43 @@ class Odometry:
         except (TypeError, ValueError, AttributeError):
             return None
 
+    def _notch_at(self, t: float) -> int:
+        """Controller position the drive is acting on at `t`: the newest command stamped at
+        or before `t - response_delay_s`; neutral before the first one."""
+        deadline = t - self.params.drive.response_delay_s
+        notch = 0
+        for stamp, n in self._cmd:            # bounded: at most CMD_HISTORY entries
+            if stamp <= deadline:
+                notch = n
+            else:
+                break
+        return notch
+
     def _advance(self, t: float) -> Estimate:
         now = t if self._t is None else max(self._t, t)
         front, rear = self._wheel['front'], self._wheel['rear']
         est = self._v if self._t is not None else None
-        st = self._slip.update(front, rear, 0.0, est)    # no drive model yet: accel_model = 0
+        dt = 0.0 if self._t is None else now - self._t
+        drive = self.params.drive
+        self._accel_model = (model_accel(self._notch_at(now), self._v, self.params)
+                             if drive.use_model else 0.0)
+        st = self._slip.update(front, rear, self._accel_model, est)
+        # the detector sees silence only relative to the other bogie; a pause of both bogies
+        # (every 30618 run, docs/data.md trap 7) is visible here, against the state time
+        stale = self.params.input.stale_timeout_s
+        if front is not None and now - front.t > stale and st.front_trust > 0.0:
+            st = dataclasses.replace(st, front_trust=0.0)
+        if rear is not None and now - rear.t > stale and st.rear_trust > 0.0:
+            st = dataclasses.replace(st, rear_trust=0.0)
         self._slip_state = st
         used = [(w, s.speed) for w, s in ((st.front_trust, front), (st.rear_trust, rear))
                 if s is not None and w > 0.0]
         if used:
             self._v = sum(w * v for w, v in used) / sum(w for w, _ in used)
-        # no trusted bogie: keep the last speed
-        dt = 0.0 if self._t is None else now - self._t
+        elif drive.use_model:
+            # no trusted bogie: predict with the drive model; wheels never report reverse
+            self._v = max(0.0, self._v + self._accel_model * dt)
+        # (without the model: keep the last speed, D-021)
         self._t = now
         ds = self._v * dt
         self._distance += ds
@@ -98,7 +133,7 @@ class Odometry:
         if on_map is not None:
             x, y, z, yaw, pos_cov = on_map
         return Estimate(
-            t=t, speed=self._v, speed_var=var, accel=0.0, accel_model=0.0,
+            t=t, speed=self._v, speed_var=var, accel=0.0, accel_model=self._accel_model,
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used)

@@ -1,0 +1,126 @@
+"""Drive model inside Odometry.step (#10): response delay, prediction on sensor gaps, and
+accel_model handed to the slip detector. Messages are minimal stand-ins for the ROS ones."""
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from tram_odometry_core.dynamics import model_accel
+from tram_odometry_core.pipeline import Odometry
+from tram_odometry_core.types import load_params
+
+ROOT = Path(__file__).resolve().parents[3]
+PARAMS = load_params(ROOT / 'src/tram_odometry/config/params.yaml')
+FRONT, REAR, CMD = ('/vehicle/front_bogie_velocity', '/vehicle/rear_bogie_velocity',
+                    '/vehicle/driver_position_cmd')
+T0 = 1_700_000_000.0
+
+
+def _stamp(t):
+    sec = int(t)
+    return SimpleNamespace(sec=sec, nanosec=int(round((t - sec) * 1e9)))
+
+
+def _wheel(t, kmh):
+    return SimpleNamespace(header=SimpleNamespace(stamp=_stamp(t)), velocity=float(kmh))
+
+
+def _cmd(t, notch):
+    return SimpleNamespace(header=SimpleNamespace(stamp=_stamp(t)), position=int(notch))
+
+
+def _run(odo, events):
+    """events: (t, topic, value); returns the last Estimate per event (None for dropped)."""
+    out = []
+    for t, topic, value in events:
+        msg = _cmd(t, value) if topic == CMD else _wheel(t, value)
+        out.append(odo.step((topic, msg)))
+    return out
+
+
+def _cruise(odo, kmh, t_from, t_to, notch, step=0.1):
+    """Both bogies at `kmh`, controller at `notch`, every `step` s."""
+    t = t_from
+    while t < t_to - 1e-9:
+        _run(odo, [(t, FRONT, kmh), (t, REAR, kmh), (t, CMD, notch), (t + step / 2, CMD, notch)])
+        t += step
+    return t
+
+
+def test_accel_model_follows_the_delayed_controller_position():
+    odo = Odometry(PARAMS)
+    _cruise(odo, 18.0, T0, T0 + 1.0, notch=0)          # 5 m/s, neutral for 1 s
+    # controller goes to 10 at T0+1.0; the drive reacts response_delay_s later
+    delay = PARAMS.drive.response_delay_s
+    events = [(T0 + 1.0, CMD, 10)]
+    for k in range(1, 8):
+        t = T0 + 1.0 + 0.05 * k
+        events.append((t, CMD, 10))
+        events.append((t, FRONT, 18.0))
+    ests = [e for e in _run(odo, events) if e is not None]
+    before = [e for e in ests if e.t < T0 + 1.0 + delay - 1e-6]
+    after = [e for e in ests if e.t >= T0 + 1.0 + delay + 0.05]
+    assert before and after
+    assert all(e.accel_model == pytest.approx(model_accel(0, e.speed, PARAMS)) for e in before)
+    assert all(e.accel_model == pytest.approx(model_accel(10, e.speed, PARAMS)) for e in after)
+    assert after[-1].accel_model > 0.3                   # traction, not drag
+
+
+def test_speed_is_predicted_by_the_model_when_both_bogies_are_silent():
+    odo = Odometry(PARAMS)
+    t = _cruise(odo, 18.0, T0, T0 + 2.0, notch=10)      # 5 m/s, traction 10
+    v0 = odo.step((CMD, _cmd(t, 10))).speed
+    assert v0 == pytest.approx(5.0, abs=0.01)
+    # both wheels silent for 3 s, only the controller keeps coming at 20 Hz
+    last = None
+    for k in range(1, 61):
+        last = odo.step((CMD, _cmd(t + 0.05 * k, 10)))
+    assert last.speed > v0 + 0.5                        # accelerating on the model
+    assert last.speed < v0 + 3.0 * PARAMS.drive.adhesion_accel_mps2
+    assert last.slip.front_trust == 0.0 and last.slip.rear_trust == 0.0
+    assert last.distance > 2.0 * 5.0 + 3.0 * v0         # path integrates the predicted speed
+
+
+def test_without_the_model_the_speed_is_held_on_a_gap():
+    params = replace(PARAMS, drive=replace(PARAMS.drive, use_model=False))
+    odo = Odometry(params)
+    t = _cruise(odo, 18.0, T0, T0 + 2.0, notch=10)
+    last = None
+    for k in range(1, 61):
+        last = odo.step((CMD, _cmd(t + 0.05 * k, 10)))
+    assert last.speed == pytest.approx(5.0, abs=0.01)
+    assert last.accel_model == 0.0
+
+
+def test_braking_prediction_stops_at_zero_and_never_reverses():
+    odo = Odometry(PARAMS)
+    t = _cruise(odo, 3.6, T0, T0 + 2.0, notch=-15)      # 1 m/s, full brake
+    last = None
+    for k in range(1, 201):                             # 10 s without wheels
+        last = odo.step((CMD, _cmd(t + 0.05 * k, -15)))
+        assert last.speed >= 0.0
+    assert last.speed == 0.0
+    assert last.accel_model < 0.0                        # brake + drag still reported
+
+
+def test_neutral_before_any_command_is_drag_only():
+    odo = Odometry(PARAMS)
+    est = odo.step((FRONT, _wheel(T0, 18.0)))
+    assert est.accel_model == pytest.approx(model_accel(0, est.speed, PARAMS))
+
+
+def test_standing_tram_stays_at_zero_on_a_gap():
+    odo = Odometry(PARAMS)
+    t = _cruise(odo, 0.0, T0, T0 + 1.0, notch=0)
+    last = None
+    for k in range(1, 41):
+        last = odo.step((CMD, _cmd(t + 0.05 * k, 0)))
+    assert last.speed == 0.0 and last.distance == 0.0
+
+
+def test_command_history_is_bounded():
+    odo = Odometry(PARAMS)
+    for k in range(500):
+        odo.step((CMD, _cmd(T0 + 0.05 * k, 3)))
+    assert len(odo._cmd) == odo._cmd.maxlen
