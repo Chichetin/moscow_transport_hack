@@ -33,7 +33,7 @@ bash docker/jury-stand.sh <bag_id>      # сборка + нода + bag play + �
 ### 2. Запуск
 
 ```bash
-ros2 launch tram_odometry odometry.launch.py          # TBD: launch появится с нодой
+ros2 launch tram_odometry odometry.launch.py          # params_file:=<yaml> — свой конфиг
 ros2 bag play <путь к bag>                            # в другом терминале
 ```
 
@@ -41,9 +41,9 @@ ros2 bag play <путь к bag>                            # в другом т�
 
 | Топик | Тип | Частота | Содержимое |
 |---|---|---|---|
-| `/result/velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | TBD Гц | `velocity` — продольная скорость, м/с |
-| `/result/position` | `nav_msgs/msg/Odometry` | TBD Гц | `pose.pose.position` — x (восток), y (север), м, frame `map`; `twist.twist.linear.x` — скорость; ковариации |
-| `/result/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | TBD | флаги проскальзывания, оценка сцепления, состояние входов |
+| `/result/velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | на каждом входном сообщении, ~40 Гц | `velocity` — продольная скорость, м/с |
+| `/result/position` | `nav_msgs/msg/Odometry` | на каждом входном сообщении, ~40 Гц | `pose.pose.position` — x (восток), y (север), м, frame `map`; `twist.twist.linear.x` — скорость; ковариации |
+| `/result/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | ещё не публикуется (пакет R2) | флаги проскальзывания, оценка сцепления, состояние входов |
 
 `header.stamp` на обоих выходах — время входного сообщения из bag.
 

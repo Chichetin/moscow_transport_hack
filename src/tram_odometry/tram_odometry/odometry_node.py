@@ -6,12 +6,14 @@ and stamps are the core's job. One publication per accepted input; header.stamp 
 input's stamp (D-015).
 """
 import math
+import os
 
 import rclpy
+from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Odometry as OdometryMsg
 from rclpy.node import Node
-from rclpy.qos import QoSProfile
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import NavSatFix
 from tram_vehicle_msgs.msg import DriverControllerCommand, VelocitySensor
 
@@ -23,6 +25,17 @@ INPUT_QUEUE = 100      # messages; bag start delivers a burst of up to ~3.7 s (d
 VEHICLE_INPUTS = [('/vehicle/front_bogie_velocity', VelocitySensor),
                   ('/vehicle/rear_bogie_velocity', VelocitySensor),
                   ('/vehicle/driver_position_cmd', DriverControllerCommand)]
+# contract §1 input; tools/eval feeds it too (bag.py: GNSS), so the core sees the same stream
+# and its t0 (start of the GNSS window, D-005) is the same in the node and in eval (D-028)
+ROVER_FIX_TOPIC = '/sensing/gnss/rover/fix'
+# best-effort matches a publisher of either reliability; a reliable subscription would never
+# connect to a best-effort `ros2 bag play` (two publishers of the controller in the bag, trap 9)
+INPUT_QOS = QoSProfile(depth=INPUT_QUEUE, reliability=ReliabilityPolicy.BEST_EFFORT)
+
+
+def default_params_file() -> str:
+    """params.yaml installed with the package: `ros2 run` without arguments works too."""
+    return os.path.join(get_package_share_directory('tram_odometry'), 'config', 'params.yaml')
 
 
 def to_raw(topic: str, msg):
@@ -66,17 +79,18 @@ class OdometryNode(Node):
     def __init__(self, params_file=None):
         super().__init__('tram_odometry')
         path = self.declare_parameter('params_file', params_file or '').value
-        self.params = load_params(path)
+        self.params = load_params(path or default_params_file())
         self.odometry = Odometry(self.params)
         self.errors = 0
         self.pub_velocity = self.create_publisher(VelocitySensor, '/result/velocity', 10)
         self.pub_position = self.create_publisher(OdometryMsg, '/result/position', 10)
-        qos = QoSProfile(depth=INPUT_QUEUE)
         inputs = VEHICLE_INPUTS + [(self.params.gnss.topic_fix, NavSatFix),
+                                   (ROVER_FIX_TOPIC, NavSatFix),
                                    (self.params.gnss.topic_vel, TwistStamped)]
         for topic, msg_type in inputs:
             self.create_subscription(msg_type, topic,
-                                     lambda msg, topic=topic: self.on_input(topic, msg), qos)
+                                     lambda msg, topic=topic: self.on_input(topic, msg),
+                                     INPUT_QOS)
 
     def on_input(self, topic: str, msg) -> None:
         """One input -> at most one velocity and one position; a core error skips the input."""

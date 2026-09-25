@@ -109,4 +109,76 @@ def test_node_subscribes_to_inputs_and_gnss_from_params(node):
     topics = {s.topic_name for s in node.subscriptions}
     assert topics == {'/vehicle/front_bogie_velocity', '/vehicle/rear_bogie_velocity',
                       '/vehicle/driver_position_cmd', '/sensing/gnss/master/fix',
-                      '/sensing/gnss/master/vel'}
+                      '/sensing/gnss/rover/fix', '/sensing/gnss/master/vel'}
+
+
+def test_subscriptions_are_best_effort_so_any_bag_publisher_connects(node):
+    from rclpy.qos import ReliabilityPolicy
+    for s in node.subscriptions:
+        infos = node.get_subscriptions_info_by_topic(s.topic_name)
+        assert infos, s.topic_name
+        assert all(i.qos_profile.reliability == ReliabilityPolicy.BEST_EFFORT for i in infos)
+    assert on.INPUT_QOS.depth == on.INPUT_QUEUE      # the graph does not report depth (rmw: 0)
+
+
+def test_node_without_params_file_uses_the_installed_one():
+    rclpy.init()
+    try:
+        n = on.OdometryNode()
+        assert n.params.gnss.topic_fix == '/sensing/gnss/master/fix'
+        n.destroy_node()
+    finally:
+        rclpy.shutdown()
+
+
+def _capture(node, monkeypatch):
+    sent = []
+    monkeypatch.setattr(node.pub_velocity, 'publish', lambda m: sent.append(('v', m)))
+    monkeypatch.setattr(node.pub_position, 'publish', lambda m: sent.append(('p', m)))
+    return sent
+
+
+def _stamp(sec, nanosec=0):
+    return Time(sec=sec, nanosec=nanosec)
+
+
+def test_real_core_converts_kmh_to_mps_once(node, monkeypatch):
+    sent = _capture(node, monkeypatch)
+    node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
+    p = node.params
+    expected = 36.0 * p.input.wheel_speed_scale * p.vehicle.wheel_scale_front
+    assert expected == pytest.approx(10.0, abs=0.5)      # km/h -> m/s happens in the core
+    assert [k for k, _ in sent] == ['v', 'p']
+    assert sent[0][1].velocity == pytest.approx(expected)
+    assert sent[1][1].twist.twist.linear.x == pytest.approx(expected)
+    assert sent[1][1].header.stamp == STAMP
+
+
+def test_real_core_drops_nan_wheel_without_publishing(node, monkeypatch):
+    sent = _capture(node, monkeypatch)
+    node.on_input('/vehicle/front_bogie_velocity', _wheel(float('nan')))
+    node.on_input('/vehicle/rear_bogie_velocity', _wheel(float('inf')))
+    assert sent == [] and node.errors == 0
+
+
+def test_real_core_ignores_gnss_after_window_through_the_node(node, monkeypatch):
+    sent = _capture(node, monkeypatch)
+    t0 = STAMP.sec
+    w = _wheel(36.0)
+    node.on_input('/vehicle/front_bogie_velocity', w)
+    late = t0 + int(node.params.gnss.init_window_s) + 100
+    fix = NavSatFix()
+    fix.header.stamp = _stamp(late)
+    fix.status.status = 2
+    fix.latitude, fix.longitude, fix.altitude = 55.75, 37.62, 150.0
+    vel = TwistStamped()
+    vel.header.stamp = _stamp(late)
+    vel.twist.linear.x, vel.twist.linear.y = 0.0, 5.0          # heading north if it were used
+    node.on_input('/sensing/gnss/master/fix', fix)
+    node.on_input('/sensing/gnss/master/vel', vel)
+    w2 = _wheel(36.0)
+    w2.header.stamp = _stamp(late, 50_000_000)
+    node.on_input('/vehicle/front_bogie_velocity', w2)
+    q = sent[-1][1].pose.pose.orientation
+    assert sent[-1][0] == 'p' and q.z == 0.0 and q.w == 1.0    # yaw stayed 0: GNSS not used
+    assert len(sent) == 4                                       # GNSS inputs publish nothing
