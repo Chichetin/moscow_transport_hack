@@ -19,7 +19,7 @@ from sensor_msgs.msg import NavSatFix
 from tram_vehicle_msgs.msg import DriverControllerCommand, VelocitySensor
 
 from tram_odometry_core.pipeline import Odometry
-from tram_odometry_core.types import load_params
+from tram_odometry_core.types import load_params, load_route
 
 UNKNOWN_VAR = 1e6      # contract §1: covariance of an unestimated component is large, never -1
 DIAGNOSTIC_PERIOD_NS = 100_000_000  # 10 Hz maximum, measured in bag stamp time
@@ -38,6 +38,11 @@ INPUT_QOS = QoSProfile(depth=INPUT_QUEUE, reliability=ReliabilityPolicy.BEST_EFF
 def default_params_file() -> str:
     """params.yaml installed with the package: `ros2 run` without arguments works too."""
     return os.path.join(get_package_share_directory('tram_odometry'), 'config', 'params.yaml')
+
+
+def route_file(params) -> str:
+    """maps/<position.map_file> installed with the package (contract §5); eval reads the same file."""
+    return os.path.join(get_package_share_directory('tram_odometry'), 'maps', params.position.map_file)
 
 
 def to_raw(topic: str, msg):
@@ -60,6 +65,7 @@ def position_msg(est, stamp, params) -> OdometryMsg:
     m.child_frame_id = params.frames.base
     m.pose.pose.position.x = est.x
     m.pose.pose.position.y = est.y
+    m.pose.pose.position.z = est.z
     m.pose.pose.orientation.z = math.sin(est.yaw / 2)
     m.pose.pose.orientation.w = math.cos(est.yaw / 2)
     var_x, var_y, cov_xy = est.pos_cov
@@ -126,7 +132,8 @@ class OdometryNode(Node):
         super().__init__('tram_odometry')
         path = self.declare_parameter('params_file', params_file or '').value
         self.params = load_params(path or default_params_file())
-        self.odometry = Odometry(self.params)
+        route = load_route(route_file(self.params)) if self.params.position.use_map else None
+        self.odometry = Odometry(self.params, route=route)
         self.errors = 0
         self.pub_velocity = self.create_publisher(VelocitySensor, '/result/velocity', 10)
         self.pub_position = self.create_publisher(OdometryMsg, '/result/position', 10)

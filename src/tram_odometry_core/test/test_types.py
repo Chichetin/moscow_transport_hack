@@ -45,6 +45,13 @@ def test_load_params_values_and_types():
     assert p.position.use_map is True
     assert p.drive.notch_max == 15 and isinstance(p.drive.notch_max, int)
     assert isinstance(p.drive.traction_accel_table, tuple)
+    assert p.drive.speed_grid_mps[0] == 0.0
+    assert len(p.drive.speed_grid_mps) >= 2
+    expected = (p.drive.notch_max + 1) * len(p.drive.speed_grid_mps)
+    assert len(p.drive.traction_accel_table) == expected
+    assert len(p.drive.brake_accel_table) == expected
+    assert p.drive.adhesion_accel_mps2 > 0
+    assert p.drive.traction_power_w_per_kg > 0
     assert p.frames.map == 'map'
 
 
@@ -93,7 +100,8 @@ def test_inputs_are_frozen():
 def test_estimate_fields_per_contract():
     names = [f.name for f in dataclasses.fields(T.Estimate)]
     assert names == ['t', 'speed', 'speed_var', 'accel', 'accel_model', 'distance',
-                     'x', 'y', 'yaw', 'pos_cov', 'slip', 'gnss_used']
+                     'x', 'y', 'z', 'yaw', 'pos_cov', 'slip', 'gnss_used',
+                     'filter_diagnostics']
     names = [f.name for f in dataclasses.fields(T.SlipState)]
     assert names == ['front_trust', 'rear_trust', 'slip_front', 'slip_rear', 'adhesion_est']
 
@@ -125,4 +133,21 @@ def test_load_params_wrong_layout_raises(tmp_path):
     f = tmp_path / 'p.yaml'
     f.write_text('foo: 1\n')
     with pytest.raises(KeyError, match='ros__parameters'):
+        T.load_params(f)
+
+
+@pytest.mark.parametrize('change,field', [
+    (lambda d: d.update(speed_grid_mps=[0.0, 0.0]), 'speed_grid_mps'),
+    (lambda d: d.update(speed_grid_mps=[1.0, 16.0]), 'speed_grid_mps'),
+    (lambda d: d.update(traction_accel_table=[0.0]), 'traction_accel_table'),
+    (lambda d: d.update(brake_accel_table=[0.0]), 'brake_accel_table'),
+    (lambda d: d['traction_accel_table'].__setitem__(2, -0.1), 'traction_accel_table'),
+    (lambda d: d['traction_accel_table'].__setitem__(1, 0.1), 'traction_accel_table'),
+    (lambda d: d.update(adhesion_accel_mps2=0.0), 'adhesion_accel_mps2'),
+    (lambda d: d.update(traction_power_w_per_kg=0.0), 'traction_power_w_per_kg'),
+    (lambda d: d.update(notch_max=0), 'notch_max'),
+])
+def test_load_params_rejects_invalid_drive_model(tmp_path, change, field):
+    f = _write(tmp_path, lambda r: change(r['drive']))
+    with pytest.raises(ValueError, match=field):
         T.load_params(f)

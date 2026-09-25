@@ -119,11 +119,14 @@ def default_odometry():
     sys.path.insert(0, str(REPO / 'src' / 'tram_odometry_core'))
     try:
         from tram_odometry_core.pipeline import Odometry
-        from tram_odometry_core.types import load_params
+        from tram_odometry_core.types import load_params, load_route
     except ImportError as e:
         raise SystemExit(f'tram_odometry_core.pipeline is not available yet ({e}); '
                          'contract v1 #1 and baseline #3 must be in main') from e
-    return Odometry(load_params(str(PARAMS_YAML)))
+    params = load_params(str(PARAMS_YAML))
+    # the same map the node installs to share/tram_odometry/maps (contract §5)
+    route = load_route(str(REPO / 'src' / 'tram_odometry' / 'maps' / params.position.map_file))
+    return Odometry(params, route=route)
 
 
 def reference_inputs(msgs):

@@ -22,7 +22,7 @@ STAMP = Time(sec=1756195560, nanosec=123456789)   # float seconds would lose the
 
 def _estimate(t=1756195560.123456789):
     return Estimate(t=t, speed=7.5, speed_var=0.04, accel=0.3, accel_model=0.25,
-                    distance=120.0, x=-35.0, y=12.5, yaw=math.pi / 3,
+                    distance=120.0, x=-35.0, y=12.5, z=3.25, yaw=math.pi / 3,
                     pos_cov=(4.0, 9.0, 1.5),
                     slip=SlipState(1.0, 1.0, False, False, None), gnss_used=False)
 
@@ -64,7 +64,7 @@ def test_position_message_follows_contract():
     assert m.header.stamp == STAMP
     assert m.header.frame_id == 'map' and m.child_frame_id == 'base_link'
     p, q = m.pose.pose.position, m.pose.pose.orientation
-    assert (p.x, p.y, p.z) == (-35.0, 12.5, 0.0)
+    assert (p.x, p.y, p.z) == (-35.0, 12.5, 3.25)     # z: map height + run offset (D-024)
     assert math.atan2(2 * q.w * q.z, 1 - 2 * q.z ** 2) == pytest.approx(math.pi / 3)
     assert (q.x, q.y) == (0.0, 0.0) and q.w ** 2 + q.z ** 2 == pytest.approx(1.0)
     c = m.pose.covariance
@@ -125,6 +125,12 @@ def test_subscriptions_are_best_effort_so_any_bag_publisher_connects(node):
         assert infos, s.topic_name
         assert all(i.qos_profile.reliability == ReliabilityPolicy.BEST_EFFORT for i in infos)
     assert on.INPUT_QOS.depth == on.INPUT_QUEUE      # the graph does not report depth (rmw: 0)
+
+
+def test_node_loads_the_installed_route_map_like_eval(node):
+    assert node.params.position.use_map
+    assert node.odometry.route is not None and len(node.odometry.route.branches) >= 2
+    assert node.odometry._tracker is not None
 
 
 def test_node_without_params_file_uses_the_installed_one():
