@@ -140,20 +140,25 @@ def test_report_has_absolute_gnss_error_and_event_coverage():
 
 
 def test_peak_and_recovery_keep_worst_error_at_duplicate_stamp():
-    times = np.array([1.0, 2.0, 2.0, 3.0, 4.0, 5.0])
-    clean = Estimates(times.copy(), np.zeros(6), np.zeros((6, 3)), np.zeros(6, bool))
-    dirty_speed = np.array([0.0, 0.0, 50.0, 0.0, 0.0, 0.0])
-    dirty = Estimates(times.copy(), dirty_speed, np.zeros((6, 3)), np.zeros(6, bool))
+    times = np.arange(1.0, 4.2, 0.1).round(10)
+    duplicate = int(np.flatnonzero(times == 2.0)[0]) + 1
+    times = np.insert(times, duplicate, 2.0)
+    clean = Estimates(times.copy(), np.zeros(len(times)), np.zeros((len(times), 3)),
+                      np.zeros(len(times), bool))
+    dirty_speed = np.zeros(len(times))
+    dirty_speed[duplicate] = 50.0
+    dirty = Estimates(times.copy(), dirty_speed, np.zeros((len(times), 3)),
+                      np.zeros(len(times), bool))
 
     peak, _, _, _, _, _ = _errors(
-        np.array([1.0, 2.0, 3.0, 4.0, 5.0]), np.zeros(5), clean, dirty,
-        'speed', event_start=1.5, event_end=2.5, threshold=0.2)
+        np.array([1.0, 4.1]), np.zeros(2), clean, dirty,
+        'speed', event_start=1.9, event_end=2.1, threshold=0.2)
     _, _, _, recovery, _, _ = _errors(
-        np.array([1.0, 2.0, 3.0, 4.0, 5.0]), np.zeros(5), clean, dirty,
+        np.array([1.0, 4.1]), np.zeros(2), clean, dirty,
         'speed', event_start=1.5, event_end=1.75, threshold=0.2)
 
     assert peak == 50.0
-    assert recovery is None
+    assert recovery == pytest.approx(0.35)
 
 
 @pytest.mark.parametrize('scenario', ['outlier', 'rollback'])
