@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import statistics
 import subprocess
 import sys
 import time
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from . import bag as bagmod
 from .metrics import MAIN_METRICS, METRIC_KEYS, summarize
+from .stress import SCENARIOS, evaluate_stress_bag
 
 D012_TOL = 0.02   # main metrics may not get worse by more than 2 % (D-012)
 
@@ -66,6 +68,33 @@ def bag_table(result: dict) -> list[str]:
     return lines
 
 
+def stress_table(bags: dict) -> list[str]:
+    lines = ['| Сценарий | bag | пик ошибки скорости, м/с median/max | добавка к пику скорости, м/с median | восстановление скорости, с median (нет) | пик ошибки позиции, м median/max | добавка к пику позиции, м median | восстановление позиции, с median (нет) | нет оценок в событии | падения |',
+             '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
+
+    def vals(rows, key):
+        return [r[key] for r in rows if r[key] is not None]
+
+    def medmax(rows, key):
+        v = vals(rows, key)
+        return f'{fmt(statistics.median(v))}/{fmt(max(v))}' if v else '—'
+
+    for scenario in SCENARIOS:
+        rows = [cases[scenario] for cases in bags.values() if not cases[scenario]['skipped']]
+        speed_recovery = vals(rows, 'speed_recovery_s')
+        pos_recovery = vals(rows, 'pos_recovery_s')
+        recover_speed = f"{fmt(statistics.median(speed_recovery))} ({len(rows) - len(speed_recovery)})" if speed_recovery else f'— ({len(rows)})'
+        recover_pos = f"{fmt(statistics.median(pos_recovery))} ({len(rows) - len(pos_recovery)})" if pos_recovery else f'— ({len(rows)})'
+        excess = vals(rows, 'peak_speed_excess_mps')
+        pos_excess = vals(rows, 'peak_pos3d_excess_m')
+        lines.append(f"| {scenario} | {len(rows)}/{len(bags)} | {medmax(rows, 'peak_speed_error_mps')} | "
+                     f"{fmt(statistics.median(excess)) if excess else '—'} | {recover_speed} | "
+                     f"{medmax(rows, 'peak_pos3d_error_m')} | "
+                     f"{fmt(statistics.median(pos_excess)) if pos_excess else '—'} | {recover_pos} | "
+                     f"{sum(r['n_speed_during'] == 0 for r in rows)} | {sum(r['crashed'] for r in rows)} |")
+    return lines
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog='tram_eval', description=__doc__)
     src = ap.add_mutually_exclusive_group(required=True)
@@ -74,6 +103,7 @@ def main(argv=None) -> int:
     ap.add_argument('--gnss-window', type=float, default=None,
                     help='секунд GNSS для модели, по умолчанию gnss.init_window_s из params.yaml (D-005)')
     ap.add_argument('--compare', type=Path, help='metrics.json базы (например, прогон origin/main)')
+    ap.add_argument('--stress', action='store_true', help='детерминированные сбои входа; отдельный stress.json')
     ap.add_argument('--jobs', type=int, default=max(1, min(8, (os.cpu_count() or 2) - 1)))
     ap.add_argument('--out', type=Path, default=None, help='каталог прогона, по умолчанию out/eval/<commit>-<набор>')
     args = ap.parse_args(argv)
@@ -123,6 +153,18 @@ def main(argv=None) -> int:
     print(f"\n{len(paths)} bag, окно GNSS {window} с, {time.monotonic() - t0:.0f} с; "
           f"упали: {', '.join(crashed) if crashed else 'нет'}; "
           f"оценок NaN/inf (вне метрик): {nonfinite}; t != stamp входа: {mismatch}; -> {out / 'metrics.json'}")
+    if args.stress:
+        if args.jobs > 1 and len(paths) > 1:
+            with ProcessPoolExecutor(min(args.jobs, len(paths))) as ex:
+                diagnostics = list(ex.map(evaluate_stress_bag, paths, [window] * len(paths)))
+        else:
+            diagnostics = [evaluate_stress_bag(p, window) for p in paths]
+        stress = {'commit': commit, 'split': label, 'gnss_window_s': window,
+                  'created': datetime.now().astimezone().isoformat(timespec='seconds'),
+                  'bags': dict(zip(names, diagnostics))}
+        (out / 'stress.json').write_text(json.dumps(stress, ensure_ascii=False, indent=1), encoding='utf-8')
+        print('\n'.join(stress_table(stress['bags'])))
+        print(f"\nСтресс: -> {out / 'stress.json'}")
     return 0
 
 
