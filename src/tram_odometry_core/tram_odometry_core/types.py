@@ -1,14 +1,17 @@
 """Core types and parameters (docs/contracts.md, section 2). SI units, time in seconds.
 
-Python 3.10 compatible (ROS 2 Humble). Imports only the standard library and PyYAML
-(apt python3-yaml); the only place that reads params.yaml is `load_params`.
+Python 3.10 compatible (ROS 2 Humble). Imports the standard library, numpy and PyYAML
+(apt python3-yaml); the only place that reads params.yaml is `load_params`, the only place
+that reads maps/route.csv is `load_route`.
 """
 import dataclasses
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Optional, Tuple, Union, get_type_hints
+from typing import Any, Literal, Optional, Tuple, Union, get_type_hints
 
+import numpy as np
 import yaml
 
 
@@ -64,6 +67,7 @@ class Estimate:
     distance: float           # m, path since the start of the run
     x: float                  # m, frame map
     y: float
+    z: float                  # m, frame map (ENU up)
     yaw: float                # rad, ENU
     pos_cov: Tuple[float, float, float]   # var_x, var_y, cov_xy
     slip: SlipState
@@ -123,6 +127,9 @@ class SlipParams:
 class PositionParams:
     map_file: str
     use_map: bool
+    join_m: float
+    along_drift_frac: float
+    cross_std_m: float
 
 
 @dataclass(frozen=True)
@@ -188,6 +195,32 @@ def _build(cls, raw, path):
         else:
             raise TypeError(f'{key}: unsupported field type {hint}')
     return cls(**kwargs)
+
+
+@dataclass(frozen=True)
+class Branch:                 # one directed track of maps/route.csv (docs/contracts.md §5)
+    s: Any                    # (N,) m, arc length, uniform step, starts at 0
+    x: Any                    # (N,) m, ENU of the map origin
+    y: Any
+    z: Any
+
+
+@dataclass(frozen=True)
+class Route:
+    origin: Tuple[float, float, float]    # lat deg, lon deg, alt m of the map ENU
+    branches: Tuple[Branch, ...]
+
+
+def load_route(path) -> Route:
+    """Read maps/route.csv: origin from the header comment, branches in file order."""
+    text = Path(path).read_text()
+    header = text.splitlines()[0]
+    origin = tuple(float(re.search(rf'origin_{k}=([-0-9.eE+]+)', header).group(1))
+                   for k in ('lat', 'lon', 'alt'))
+    rows = np.loadtxt(path, delimiter=',', comments='#', skiprows=2, ndmin=2)
+    branches = tuple(Branch(*(rows[rows[:, 0] == b, k].copy() for k in (1, 2, 3, 4)))
+                     for b in np.unique(rows[:, 0]))
+    return Route(origin=origin, branches=branches)
 
 
 def load_params(path) -> Params:

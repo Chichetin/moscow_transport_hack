@@ -93,7 +93,7 @@ def test_inputs_are_frozen():
 def test_estimate_fields_per_contract():
     names = [f.name for f in dataclasses.fields(T.Estimate)]
     assert names == ['t', 'speed', 'speed_var', 'accel', 'accel_model', 'distance',
-                     'x', 'y', 'yaw', 'pos_cov', 'slip', 'gnss_used']
+                     'x', 'y', 'z', 'yaw', 'pos_cov', 'slip', 'gnss_used']
     names = [f.name for f in dataclasses.fields(T.SlipState)]
     assert names == ['front_trust', 'rear_trust', 'slip_front', 'slip_rear', 'adhesion_est']
 
