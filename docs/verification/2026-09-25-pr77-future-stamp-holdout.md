@@ -1,4 +1,4 @@
-# Holdout: гейт скачка stamp вперёд в preprocess (#77, D-042), base vs head
+# Holdout: гейт скачка stamp вперёд в preprocess (#77, D-043), base vs head
 
 - base: `33fd556` (origin/main), head: `d6f7a87` — первая версия гейта; финальная версия с ресинхронизацией назад перепроверена ниже
 - Машина: `Linux 7.0.10-zen1-1-zen x86_64`, nproc 24, нативный `.venv`; `--split holdout` (26 bag, окно GNSS 5 с)

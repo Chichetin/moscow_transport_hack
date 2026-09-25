@@ -180,7 +180,7 @@ def test_real_core_ignores_gnss_after_window_through_the_node(node, monkeypatch)
     w = _wheel(36.0)
     node.on_input('/vehicle/front_bogie_velocity', w)
     # after the GNSS window, but within input.max_stamp_jump_s of the last wheel sample: a lone
-    # sample further ahead is treated as a clock glitch until confirmed (#77, D-042)
+    # sample further ahead is treated as a clock glitch until confirmed (#77, D-043)
     late = t0 + int(node.params.gnss.init_window_s) + 2
     fix = NavSatFix()
     fix.header.stamp = _stamp(late)

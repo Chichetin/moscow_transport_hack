@@ -69,7 +69,7 @@ class Preprocessor:
 
     def _fresh(self, topic: str, t: float) -> bool:
         """Accept a stream sample only if its stamp is newer than the stream's last one and
-        not implausibly far from the input clock (#77, D-042).
+        not implausibly far from the input clock (#77, D-043).
 
         Forward: a stamp more than `input.max_stamp_jump_s` ahead of the newest accepted one
         (over the vehicle streams) is a clock glitch unless the very next sample confirms it
