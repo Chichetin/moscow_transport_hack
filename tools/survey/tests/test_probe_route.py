@@ -41,3 +41,8 @@ def test_cluster_centre_is_member_mean():
 def test_to_xy_one_degree_north_is_111_km():
     xy = pr.to_xy([55.0, 56.0], [37.0, 37.0], 55.0, 37.0)
     assert abs(xy[1, 1] - 111319.5) < 1.0 and abs(xy[1, 0]) < 1e-6
+
+
+def test_along_gaps_are_per_branch_and_sorted_by_arc():
+    stops = ((0, 100.0), (1, 5.0), (0, 20.0), (0, 38.5), (1, 60.0))
+    assert pr.along_gaps(stops) == [18.5, 55.0, 61.5]

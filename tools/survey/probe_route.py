@@ -14,6 +14,7 @@ import argparse
 import csv
 import math
 import os
+import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -66,6 +67,15 @@ def cluster(points: np.ndarray, radius: float = CLUSTER_R) -> list[tuple[np.ndar
             centre = points[members].mean(axis=0)
         out.append((centre, members))
     return out
+
+
+def along_gaps(stops) -> list[float]:
+    """Arc distances between neighbouring stop places of one branch, ascending."""
+    out = []
+    for branch in {b for b, _ in stops}:
+        s = sorted(x for b, x in stops if b == branch)
+        out += np.diff(s).tolist()
+    return sorted(out)
 
 
 def to_xy(lat, lon, lat0: float, lon0: float) -> np.ndarray:
@@ -176,6 +186,13 @@ def main() -> None:
           f'соседние места: медиана {np.median(nn):.0f} м, min {np.min(nn):.0f} м')
     print(f'18. holdout: {len(hp)} остановок, ближе 10 м к месту train {np.mean(d < 10) * 100:.0f} %, '
           f'ближе 20 м {np.mean(d < 20) * 100:.0f} %; на bag медиана {np.median(per_bag):.0f}')
+
+    sys.path.insert(0, str(REPO / 'src' / 'tram_odometry_core'))
+    from tram_odometry_core.types import load_route
+    route = load_route(str(REPO / 'src/tram_odometry/maps/route.csv'))
+    gaps = along_gaps(route.stops)
+    print(f'18. maps/stops.csv (ядро, D-034): {len(route.stops)} мест; соседние по дуге ветки: '
+          f'min {gaps[0]:.1f} м, дальше {", ".join(f"{g:.1f}" for g in gaps[1:4])} м, медиана {np.median(gaps):.0f} м')
 
 
 if __name__ == '__main__':
