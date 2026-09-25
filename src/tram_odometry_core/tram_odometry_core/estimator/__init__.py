@@ -26,6 +26,9 @@ class SpeedFilter:
         self._model_accel = 0.0
         self._initialized = False
         self._diagnostic = None
+        self._scale_delta = 0.0
+        self._recent_wheel = {'front': None, 'rear': None}
+        self._zero_wheel = {'front': None, 'rear': None}
 
     def predict(self, t: float, accel_model: float):
         self._diagnostic = None
@@ -49,29 +52,47 @@ class SpeedFilter:
         self._diagnostic = None
         if (sample.bogie not in self._last or not np.isfinite(sample.t)
                 or not np.isfinite(sample.speed) or sample.speed < 0.0
-                or not np.isfinite(trust) or not 0.0 < trust <= 1.0):
+                or not np.isfinite(trust) or not 0.0 <= trust <= 1.0):
             return
         if self._t is not None and self._t - sample.t > self._stale_timeout:
             return
         last = self._last[sample.bogie]
         if last is not None and sample.t <= last:
             return
+        if sample.speed == 0.0:
+            self._zero_wheel[sample.bogie] = sample.t
+        if trust == 0.0:
+            return
         self.predict(sample.t, self._model_accel)
         self._last[sample.bogie] = sample.t
         age = self._t - sample.t
-        measurement = sample.speed + self._model_accel * age
-        measurement_var = self._p.r_wheel / trust + self._p.q_accel * age
+        scale = 1.0 - self._scale_delta if sample.bogie == 'front' else 1.0 + self._scale_delta
+        measurement = sample.speed / scale + self._model_accel * age
+        measurement_var = self._p.r_wheel / (trust * scale ** 2) + self._p.q_accel * age
         if not self._initialized:
             self._x[0] = max(0.0, measurement)
             self._cov = np.diag((measurement_var, self._p.initial_bias_var))
             self._initialized = True
             self._diagnostic = FilterDiagnostics(sample.t, sample.bogie, 0.0, True)
+            self._observe_scale(sample, trust)
             return
 
         observation = np.array((1.0, -age))
         innovation = measurement - observation @ self._x
         projected = self._cov @ observation
         innovation_var = float(observation @ projected + measurement_var)
+        other = 'rear' if sample.bogie == 'front' else 'front'
+        other_zero = self._zero_wheel[other]
+        if (sample.speed == 0.0 and other_zero is not None
+                and abs(sample.t - other_zero) <= 0.02
+                and innovation ** 2 > self._p.nis_gate * innovation_var):
+            # Two independent zero readings expose a real stop that a smooth
+            # motion prior cannot explain. Inflate speed uncertainty so the
+            # ordinary NIS gate can accept the corroborated measurement.
+            self._cov[0, 0] += (innovation ** 2 / self._p.nis_gate
+                                - innovation_var + 1e-8)
+            projected = self._cov @ observation
+            innovation_var = float(observation @ projected + measurement_var)
         nis = float(innovation ** 2 / innovation_var)
         accepted = nis <= self._p.nis_gate
         self._diagnostic = FilterDiagnostics(sample.t, sample.bogie, nis, accepted)
@@ -91,6 +112,19 @@ class SpeedFilter:
             self._x[1] = 0.0
             self._cov[0, 1] = self._cov[1, 0] = 0.0
             self._cov[1, 1] = max(self._cov[1, 1], self._p.initial_bias_var)
+        self._observe_scale(sample, trust)
+
+    def _observe_scale(self, sample: WheelSample, trust: float):
+        self._recent_wheel[sample.bogie] = (sample.t, sample.speed, trust)
+        front, rear = self._recent_wheel['front'], self._recent_wheel['rear']
+        if (front is None or rear is None or abs(front[0] - rear[0]) > 0.02
+                or min(front[2], rear[2]) < 0.8 or min(front[1], rear[1]) < 2.0
+                or abs(front[1] - rear[1]) > 0.5):
+            return
+        # A wheel pair identifies only the relative scale. Keep their common
+        # scale fixed at the train calibration applied by Preprocessor.
+        target = np.clip((rear[1] - front[1]) / (rear[1] + front[1]), -0.03, 0.03)
+        self._scale_delta += 0.02 * (target - self._scale_delta)
 
     def state(self):
         return (float(self._x[0]), float(self._cov[0, 0]),

@@ -35,6 +35,16 @@ def test_predict_integrates_model_and_grows_uncertainty():
     assert accel == pytest.approx(1.0)
 
 
+def test_process_covariance_respects_seconds_and_bias_units():
+    filt = initialized()
+    filt.predict(2.0, 0.0)
+    expected = (PARAMS.filter.r_wheel
+                + PARAMS.filter.initial_bias_var * 2.0 ** 2
+                + PARAMS.filter.q_accel * 2.0
+                + PARAMS.filter.q_bias * 2.0 ** 3 / 3.0)
+    assert filt.state()[1] == pytest.approx(expected)
+
+
 def test_zero_trust_rejects_measurement():
     filt = initialized()
     before = filt.state()
@@ -150,6 +160,15 @@ def test_nis_rejects_outlier_and_identifies_measurement():
     assert diag.nis > PARAMS.filter.nis_gate
 
 
+def test_two_independent_zero_wheels_confirm_a_stop():
+    filt = initialized()
+    filt.update(wheel(0.1, 0.0, 'front'), 0.0)
+    filt.update(wheel(0.1, 0.0, 'rear'), 1.0)
+    assert filt.state()[0] < 0.1
+    assert filt.diagnostics().accepted
+    assert filt.diagnostics().nis <= PARAMS.filter.nis_gate
+
+
 def test_diagnostics_only_for_new_wheel_measurement():
     filt = initialized()
     assert filt.diagnostics() is not None
@@ -172,3 +191,17 @@ def test_stop_does_not_preserve_braking_bias_into_next_start():
         filt.predict(t, 0.0)
         filt.update(wheel(t, 0.5 * (t - 10.0)), 1.0)
     assert filt.state()[0] == pytest.approx(1.0, abs=0.15)
+
+
+def test_relative_wheel_scale_learned_before_one_bogie_gap():
+    filt = SpeedFilter(PARAMS)
+    for k in range(300):
+        t = k * 0.1
+        filt.predict(t, 0.0)
+        filt.update(wheel(t, 10.1, 'front'), 1.0)
+        filt.update(wheel(t, 9.9, 'rear'), 1.0)
+    for k in range(300, 1000):
+        t = k * 0.1
+        filt.predict(t, 0.0)
+        filt.update(wheel(t, 10.1, 'front'), 1.0)
+    assert filt.state()[0] == pytest.approx(10.0, abs=0.03)

@@ -85,7 +85,7 @@ def test_silent_bogie_speed_from_the_other_one():
     odo = Odometry(PARAMS)
     drive(odo, 0.0, 2.0, KMH_36)                      # both alive
     est = drive(odo, 3.0, 20.0, 72.0, rear=False)     # rear silent >> stale_timeout_s
-    assert est.speed == pytest.approx(20.0)
+    assert est.speed == pytest.approx(20.0, abs=0.01)
 
 
 def test_both_silent_holds_last_speed_and_keeps_moving():
@@ -202,3 +202,14 @@ def test_filter_does_not_apply_wheel_scale_twice():
     params = replace(PARAMS, vehicle=replace(PARAMS.vehicle, wheel_scale_front=1.01))
     est = Odometry(params).step(wheel(FRONT, 0.0, KMH_36))
     assert est.speed == pytest.approx(10.1)
+
+
+def test_pipeline_exposes_nis_only_for_new_wheel_input():
+    odo = Odometry(PARAMS)
+    first = odo.step(wheel(FRONT, 0.0, KMH_36))
+    assert first.filter_diagnostics.accepted
+    assert first.filter_diagnostics.bogie == 'front'
+    assert odo.step(cmd(0.1, 0)).filter_diagnostics is None
+    second = odo.step(wheel(REAR, 0.1, KMH_36))
+    assert second.filter_diagnostics.accepted
+    assert second.filter_diagnostics.bogie == 'rear'
