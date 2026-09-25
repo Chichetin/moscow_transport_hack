@@ -18,6 +18,7 @@ rm -rf "$OUT/record" "$OUT/stand.json"   # запись прошлого про�
 docker build -q -f "$ROOT/docker/Dockerfile" --target jury -t tram-odom:jury "$ROOT" >/dev/null
 # src копируется внутрь (read-only монтирование + свой build/), чтобы не пачкать worktree.
 docker run --rm --cpus=2 --memory=512m --memory-swap=512m --network=none \
+  --user "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$ROOT/src:/src:ro" -v "$ROOT/docker:/stand:ro" -v "$ROOT/tools/stand:/stand-tools:ro" -v "$DATA/$BAG:/bag:ro" -v "$OUT:/out" \
   -e RATE="$RATE" tram-odom:jury bash /stand/stand-inside.sh
 echo "Результаты: $OUT"
