@@ -3,10 +3,15 @@ import os
 import sys
 from pathlib import Path
 
-# Однопоточный BLAS (#68): numpy-колёса несут OpenBLAS, и его многопоточная редукция даёт
-# разный порядок суммирования на раннерах CI с разным числом ядер -- один и тот же код и seed
-# дают чуть разный np.linalg.solve в notebooks/identification и изредка выходят за допуск
-# теста подгонки. Ставится здесь, до первого импорта numpy любым тестом в сессии.
+# Однопоточный BLAS (#68): numpy-колёса несут многопоточный OpenBLAS с DYNAMIC_ARCH. На CI
+# один раз np.linalg.solve в notebooks/identification.fit_curve вернул узел 0,038 в стороне от
+# однопоточного результата -- на порядок больше, чем даёт шум округления при числе обусловленности
+# матрицы ~1e3 (~1e-13). Похоже на гонку потоков в самом OpenBLAS, а не просто другой порядок
+# суммирования; однопоточность -- дешёвая защита от этой гипотезы, но не обязательно лечит
+# отдельный баг ядра под конкретный CPU (см. ревью PR #95, D-053: если повторится и с этой
+# защитой, следующий шаг -- numpy.show_config() и lscpu из упавшего прогона CI). Ставится здесь,
+# до первого импорта numpy любым тестом в сессии.
+_NUMPY_ALREADY_IMPORTED = 'numpy' in sys.modules   # too late to pin if True -- guarded by #68's test
 for _var in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
     os.environ.setdefault(_var, '1')
 
