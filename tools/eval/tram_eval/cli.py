@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import bag as bagmod
 from .metrics import MAIN_METRICS, METRIC_KEYS, summarize
+from .plot import plot_bag
 from .stress import SCENARIOS, evaluate_stress_bag
 
 D012_TOL = 0.02   # main metrics may not get worse by more than 2 % (D-012)
@@ -104,6 +105,7 @@ def main(argv=None) -> int:
                     help='секунд GNSS для модели, по умолчанию gnss.init_window_s из params.yaml (D-005)')
     ap.add_argument('--compare', type=Path, help='metrics.json базы (например, прогон origin/main)')
     ap.add_argument('--stress', action='store_true', help='детерминированные сбои входа; отдельный stress.json')
+    ap.add_argument('--plot', action='store_true', help='PNG по каждому bag в <out>/plots (нужен matplotlib)')
     ap.add_argument('--jobs', type=int, default=max(1, min(8, (os.cpu_count() or 2) - 1)))
     ap.add_argument('--out', type=Path, default=None, help='каталог прогона, по умолчанию out/eval/<commit>-<набор>')
     args = ap.parse_args(argv)
@@ -165,6 +167,14 @@ def main(argv=None) -> int:
         (out / 'stress.json').write_text(json.dumps(stress, ensure_ascii=False, indent=1), encoding='utf-8')
         print('\n'.join(stress_table(stress['bags'])))
         print(f"\nСтресс: -> {out / 'stress.json'}")
+    if args.plot:
+        plots = out / 'plots'
+        if args.jobs > 1 and len(paths) > 1:
+            with ProcessPoolExecutor(min(args.jobs, len(paths))) as ex:
+                files = list(ex.map(plot_bag, paths, [window] * len(paths), [plots] * len(paths)))
+        else:
+            files = [plot_bag(p, window, plots) for p in paths]
+        print(f"\nГрафики: {sum(len(f) for f in files)} PNG -> {plots}")
     return 0
 
 
