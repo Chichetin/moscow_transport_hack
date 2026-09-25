@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from .bag import FRONT, REAR, stamp
+from .bag import FRONT, REAR, gnss_window_end, stamp
 
 SCENARIOS = ('outlier', 'gap_1', 'gap_10', 'gap_70', 'spike', 'noise', 'jitter', 'rollback')
 DURATION_S = {'outlier': 0.2, 'gap_1': 1.0, 'gap_10': 10.0, 'gap_70': 70.0,
@@ -35,9 +35,11 @@ def perturb(msgs, scenario: str, gnss_window_s: float):
         return None
     first, last = min(wheel_t), max(wheel_t)
     duration = DURATION_S[scenario]
-    if last - first < gnss_window_s + duration + 3.0:
+    # after the same GNSS window run_pipeline applies, and a 3 s recovery tail before the end
+    begin = max(first, gnss_window_end(msgs, gnss_window_s)) + 1.0
+    if last - begin < duration + 3.0:
         return None
-    start = first + max(gnss_window_s + 1.0, min((last - first) * 0.4, last - first - duration - 3.0))
+    start = max(begin, min(first + (last - first) * 0.4, last - duration - 3.0))
     end = start + duration
     result = []
     front_n = rear_n = 0

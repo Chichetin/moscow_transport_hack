@@ -72,6 +72,20 @@ def test_jitter_and_rollback_modify_stamps_without_reordering_messages():
             assert min(offsets) <= -0.25
 
 
+@pytest.mark.parametrize('length', [10.0, 12.2, 12.7, 13.5, 20.0, 100.0])
+def test_event_starts_after_gnss_window_and_leaves_recovery_tail(length):
+    from tram_eval.bag import gnss_window_end
+
+    source = drive(length)
+    wheel_t = [t for t, _ in wheels(source, FRONT) + wheels(source, REAR)]
+    event = perturb(source, 'spike', 5.0)
+    if event is None:
+        return
+    _, start, end = event
+    assert start >= gnss_window_end(source, 5.0) + 1.0
+    assert max(wheel_t) - end >= 3.0 - 1e-9
+
+
 def test_recovery_requires_sustained_error_below_threshold():
     times = np.arange(0, 12, 0.1).round(1)
     excess = np.full(len(times), 0.1)
