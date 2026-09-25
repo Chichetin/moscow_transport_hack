@@ -24,11 +24,11 @@ ros2 bag record -o /out/record /result/velocity /result/position /result/diagnos
   > /out/record.log 2>&1 &
 REC=$!
 sleep 2
-# CPU/RAM всех процессов ноды раз в секунду (замер RT-1 заменит на точный инструмент)
-( while kill -0 $NODE 2>/dev/null; do
-    ps -eo pid,pcpu,rss,etimes,comm --no-headers | grep -E 'python3|odometry' >> /out/resources.txt
-    sleep 1; done ) &
+# CPU и RSS процессов ноды раз в секунду по /proc (tools/stand/sampler.py); по имени процесса,
+# лаунчер (ros2 launch) в замер не входит
+python3 /stand-tools/sampler.py "${ODOM_PATTERN:-odometry_node}" > /out/resources.csv &
+SAMPLER=$!
 ros2 bag play /bag --rate "$RATE" > /out/play.log 2>&1
 sleep 2
-kill -INT $REC $NODE 2>/dev/null; wait $REC 2>/dev/null
-echo "== запись: /out/record, ресурсы: resources.txt, лог ноды: node.log"
+kill -INT $REC $NODE $SAMPLER 2>/dev/null; wait $REC $SAMPLER 2>/dev/null
+echo "== запись: /out/record, ресурсы: resources.csv, лог ноды: node.log"
