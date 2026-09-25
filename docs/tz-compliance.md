@@ -14,7 +14,7 @@
 |---|---|---|---|---|
 | T1 | ROS 2 Humble, `colcon build` без интернета | `src/`, `docker/jury-stand.sh` | стенд: `build.log`, `--network=none` | ⚠️ каркас собирается (3 пакета, 2026-09-25), нод ещё нет |
 | T2 | Вход только `/vehicle/*` (3 топика); без IMU | `core/preprocess`, нода | `grep -rn subscription src/tram_odometry` | — |
-| T3 | GNSS только для начальной выставки, в проверке — первые секунды | D-005, `gnss.init_window_s` | eval с обрезкой GNSS = выходы ноды; ревью | — |
+| T3 | GNSS только для начальной выставки, в проверке — первые секунды | D-005, `gnss.init_window_s` | eval с обрезкой GNSS = выходы ноды; ревью | ⚠️ `tools/eval` обрезает GNSS после окна (тест `test_gnss_after_window_is_not_fed_but_used_as_reference`); нода — ждёт #5 |
 | T4 | Выход `/result/velocity` `VelocitySensor`, м/с | нода | запись стенда, `ros2 topic echo` | — |
 | T5 | Выход `/result/position` `nav_msgs/Odometry`: stamp, frame_id, позиция, продольная скорость, ковариации | нода | запись стенда, тест формы сообщения | — |
 | T6 | `header.stamp` = время входа из bag, допуск судьи 0,05 с | D-015, нода | тест: stamp выхода ∈ stamps входов | — |
@@ -25,8 +25,8 @@
 
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| S1 | RMSE/MAE скорости по всему прогону vs GNSS | eval `speed_rmse`, `speed_mae` | `docs/accuracy.md`, holdout | — |
-| S2 | Нет bias на разгоне/торможении/остановках | eval `speed_bias_*` | таблица по режимам | — |
+| S1 | RMSE/MAE скорости по всему прогону vs GNSS | eval `speed_rmse`, `speed_mae` | `docs/accuracy.md`, holdout | ⚠️ метрика в `tools/eval` (#6, D-018, тесты на синтетике), чисел модели нет — ждёт #3 |
+| S2 | Нет bias на разгоне/торможении/остановках | eval `speed_bias_*` | таблица по режимам | ⚠️ метрика в `tools/eval` (#6, D-018, тесты на синтетике), чисел модели нет — ждёт #3 |
 | S3 | Нелинейная модель привода: позиция контроллера, скорость вала → момент | `core/dynamics`, `docs/model.md` | тесты; графики идентификации | — |
 | S4 | Продольная динамика: масса, радиус, сопротивление, уклон, тормоза, сцепление | `core/dynamics`, `docs/model.md` | — | — |
 
@@ -34,9 +34,9 @@
 
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| P1 | Дрейф в конце, % от пути | eval `drift_pct` | holdout | — |
-| P2 | Along-track MEAN/MAX/RMSE | eval `along_*` | holdout | — |
-| P3 | Cross-track при привязке к pathgraph | карта (D-007), eval `cross_*` | holdout | — |
+| P1 | Дрейф в конце, % от пути | eval `drift_pct` | holdout | ⚠️ метрика в `tools/eval` (#6, D-018, тесты на синтетике), чисел модели нет — ждёт #3 |
+| P2 | Along-track MEAN/MAX/RMSE | eval `along_*` | holdout | ⚠️ метрика в `tools/eval` (#6, D-018, тесты на синтетике), чисел модели нет — ждёт #3 |
+| P3 | Cross-track при привязке к pathgraph | карта (D-007), eval `cross_*` | holdout | ⚠️ метрика в `tools/eval` (#6, D-018, тесты на синтетике), чисел модели нет — ждёт #3 |
 | P4 | Корректный `nav_msgs/Odometry` | нода, контракт §1 | тест формы, запись стенда | — |
 | P5 | Инициализация абсолютного положения (последняя позиция / старт прогона) | `core/position` | eval: ошибка в первые 10 с | — |
 
