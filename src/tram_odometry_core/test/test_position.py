@@ -68,6 +68,33 @@ def test_not_ready_before_a_fix():
     assert not tr.ready and tr.advance(10.0) is None
 
 
+def test_takes_loop_branch_that_escapes_a_dead_end_at_a_fork():
+    def sampled(points):
+        points = np.asarray(points, dtype=float)
+        coords = [points[0]]
+        for a, b in zip(points, points[1:]):
+            n = int(round(np.linalg.norm(b - a)))
+            coords.extend(np.linspace(a, b, n + 1)[1:])
+        coords = np.asarray(coords)
+        return Branch(s=np.arange(len(coords), dtype=float), x=coords[:, 0],
+                      y=coords[:, 1], z=np.zeros(len(coords)))
+
+    route = Route(
+        origin=ORIGIN,
+        branches=(
+            sampled([(0, 0), (100, 0)]),  # continues straight into a dead end
+            sampled([(50, 0), (50, -30), (90, -30), (90, 0), (70, 0), (70, 20)]),
+            sampled([(70, 20), (70, 70)]),  # the loop has a forward continuation
+        ),
+    )
+    tr = PathTracker(PARAMS, route)
+    tr.on_fix(*_lla(0.0, 0.0), 2, distance=0.0)
+
+    x, y, _, _, _ = tr.advance(60.0)  # 50 m to the fork, then 10 m onto the loop
+
+    assert (x, y) == pytest.approx((50.0, -10.0), abs=0.1)
+
+
 def test_moves_along_branch_in_the_bag_frame():
     route = _route()
     tr = PathTracker(PARAMS, route)
@@ -98,6 +125,29 @@ def test_stops_at_a_dead_end():
     tr.on_fix(*_lla(-5000.0, -250.0), 2, distance=0.0)
     end = tr.advance(60.0)                       # 50 m to the end of branch 1
     assert tr.advance(500.0)[:2] == pytest.approx(end[:2])
+
+
+def test_takes_loop_at_interior_fork_instead_of_terminal_spur():
+    """A directed loop leaves a route branch before its represented spur ends."""
+    from dataclasses import replace
+
+    position = replace(PARAMS.position, join_m=0.5)
+    params = replace(PARAMS, position=position)
+    branch0 = Branch(s=np.arange(11.0), x=np.arange(11.0), y=np.zeros(11), z=np.zeros(11))
+    loop_points = [(5.0, 0.0)]
+    loop_points.extend((5.0, float(y)) for y in range(1, 6))
+    loop_points.extend((float(x), 5.0) for x in range(4, -6, -1))
+    loop_points.extend((-5.0, float(y)) for y in range(4, -1, -1))
+    loop_points.extend((float(x), 0.0) for x in range(-4, 1))
+    loop = np.asarray(loop_points)
+    branch1 = Branch(s=np.arange(len(loop), dtype=float), x=loop[:, 0],
+                     y=loop[:, 1], z=np.zeros(len(loop)))
+    route = Route(origin=ORIGIN, branches=(branch0, branch1))
+    tr = PathTracker(params, route)
+    tr.on_fix(*_lla(0.0, 0.0), 2, distance=0.0)
+
+    x, y, _, _, _ = tr.advance(8.0)              # fork at 5 m, then 3 m along the loop
+    assert (x, y) == pytest.approx((5.0, 3.0), abs=0.1)
 
 
 def test_height_follows_the_map_with_the_run_offset():
