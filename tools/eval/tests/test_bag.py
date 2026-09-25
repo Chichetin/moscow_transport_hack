@@ -145,6 +145,8 @@ class Glitchy(DeadReckoning):
 def test_non_finite_estimates_are_counted_not_scored(capsys):
     m = evaluate_bag('fake', 5.0, make_odometry=Glitchy, msgs=drive())
     assert m['crashed'] is False
+    assert m[bag.NOTES]['nonfinite'] == len(range(50, 1950 + 1, 50)) + len(range(70, 1950 + 1, 70)) \
+        - len(range(350, 1950 + 1, 350))     # every 50th and every 70th of the 1950 fed, both counted once
     assert all(m[k] is not None and m[k] == m[k] for k in ('speed_rmse', 'along_rmse', 'drift_pct'))
     assert 'non-finite' in capsys.readouterr().err
 

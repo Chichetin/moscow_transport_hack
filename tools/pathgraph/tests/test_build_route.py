@@ -92,7 +92,7 @@ def test_route_csv_roundtrip_matches_contract(tmp_path):
     path = tmp_path / 'route.csv'
     br.write_route(path, [(s0, xy0, z0), (s1, xy1, z1)],
                    'frame: ENU, origin_lat=55.8104, origin_lon=37.4623')
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding='utf-8').splitlines()
     assert lines[0].startswith('# frame: ENU, origin_lat=55.8104, origin_lon=37.4623')
     assert 'branch,s_m,x_m,y_m,z_m' in lines
     route = br.read_route(path)

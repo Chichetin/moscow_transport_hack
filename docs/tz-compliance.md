@@ -25,8 +25,8 @@
 
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| S1 | RMSE/MAE скорости по всему прогону vs GNSS | eval `speed_rmse`, `speed_mae` | `docs/accuracy.md`, holdout | ⚠️ метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 |
-| S2 | Нет bias на разгоне/торможении/остановках | eval `speed_bias_*` | таблица по режимам | ⚠️ метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 |
+| S1 | RMSE/MAE скорости по всему прогону vs GNSS | eval `speed_rmse`, `speed_mae` | `docs/accuracy.md`, holdout | ⚠️ бейзлайн holdout (D-021): `speed_rmse` медиана 0,064, MAE 0,039 м/с, худший bag 0,167 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`; повтор на Windows с теми же числами — `docs/verification/2026-09-25-eval-holdout-windows.md`); `docs/accuracy.md` — #21 |
+| S2 | Нет bias на разгоне/торможении/остановках | eval `speed_bias_*` | таблица по режимам | ⚠️ бейзлайн holdout: bias разгон −0,060, торможение +0,038, стоянка −0,006, ход −0,025 м/с (медианы, `docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
 | S3 | Нелинейная модель привода: позиция контроллера, скорость вала → момент | `core/dynamics`, `docs/model.md` | тесты; графики идентификации | — |
 | S4 | Продольная динамика: масса, радиус, сопротивление, уклон, тормоза, сцепление | `core/dynamics`, `docs/model.md` | — | — |
 
@@ -34,8 +34,8 @@
 
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| P1 | Дрейф в конце, % от пути | eval `drift_pct` | holdout | ⚠️ метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 |
-| P2 | Along-track MEAN/MAX/RMSE | eval `along_*` | holdout | ⚠️ метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 |
+| P1 | Дрейф в конце, % от пути | eval `drift_pct` | holdout | ⚠️ бейзлайн holdout: медиана 153 % — прямая по курсу без карты (D-021), планка для #14 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
+| P2 | Along-track MEAN/MAX/RMSE | eval `along_*` | holdout | ⚠️ бейзлайн holdout: along RMSE медиана 3264 м, MEAN 2763 м, MAX 5394 м — без карты (D-021), планка для #14 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
 | P3 | Cross-track при привязке к pathgraph | карта `src/tram_odometry/maps/route.csv` (D-007, D-022), eval `cross_*` | holdout | ⚠️ карта есть: GNSS holdout до карты mean 0,41 м, p99 4,95 м (`docs/verification/2026-09-25-route-map.md`); высота `z_m` (D-024): mean 0,17 м, p99 2,45 м (`docs/verification/2026-09-25-route-height.md`); метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 и PO1 #14 |
 | P4 | Корректный `nav_msgs/Odometry` | нода, контракт §1 | тест формы, запись стенда | ⚠️ `test_position_message_follows_contract` (#5); запись стенда — после стенда |
 | P5 | Инициализация абсолютного положения (последняя позиция / старт прогона) | `core/position` | eval: ошибка в первые 10 с | — |
@@ -44,10 +44,10 @@
 
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| R1 | Проскальзывание: снижаем доверие к одометрии, опираемся на модель, нет всплесков | `core/slip`, `core/estimator` | stress: всплеск одной тележки; 6 bag 30639 | — |
+| R1 | Проскальзывание: снижаем доверие к одометрии, опираемся на модель, нет всплесков | `core/slip`, `core/estimator` | stress: всплеск одной тележки; 6 bag 30639 | ⚠️ детектор в pipeline (D-027): покрытие 98,7 % расхождений на train, ложные флаги 0,00 %; stress (#15) и связка с EKF (#11) впереди |
 | R2 | Пропуски и выбросы входов; нет drift blow-up | `core/preprocess` | stress: дыры 1–70 с, выбросы | — |
 | R3 | Нода не падает на некорректных/неполных данных; восстановление | нода, pipeline | тесты NaN/пусто/немонотонно; stress `crashed=false` | ⚠️ pipeline: NaN/inf/мусор/немонотонный stamp/молчащая тележка покрыты тестами (D-021); нода: NaN/inf без публикации, исключение ядра не роняет ноду (`test_real_core_drops_nan_wheel_without_publishing`, `test_exception_in_pipeline_does_not_kill_node`, D-028); stress — впереди (R2) |
-| R4 | Флаг/диагностика проскальзывания, оценка сцепления, адаптация модели | `/result/diagnostics`, масштабы колёс в фильтре | запись стенда | — |
+| R4 | Флаг/диагностика проскальзывания, оценка сцепления, адаптация модели | `/result/diagnostics`, масштабы колёс в фильтре | запись стенда | ⚠️ флаги и доверие считаются (`core/slip`, D-027); сцепление и диагностика — впереди |
 
 ## Критерий 4. Реальное время (15)
 
