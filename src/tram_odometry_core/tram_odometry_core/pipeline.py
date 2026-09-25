@@ -7,6 +7,7 @@ follow replace the parts of it; the numbers of this version are the first row of
 import math
 from typing import Any, Optional
 
+from .position import PathTracker
 from .slip import SlipDetector
 from .types import Estimate, Params, SlipState, WheelSample
 
@@ -26,6 +27,8 @@ class Odometry:
     def __init__(self, params: Params, route=None):
         self.params = params
         self.route = route
+        self._tracker = (PathTracker(params, route)
+                         if route is not None and params.position.use_map else None)
         self._t0: Optional[float] = None      # stamp of the first input
         self._t: Optional[float] = None       # newest stamp seen; the state is at this time
         self._last = {}                       # stream topic -> newest accepted stamp
@@ -107,10 +110,14 @@ class Odometry:
     def _estimate(self, t: float, now: float) -> Estimate:
         var = self.params.filter.r_wheel
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
+        x, y, z, yaw, pos_cov = self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0)
+        on_map = self._tracker.advance(self._distance) if self._tracker is not None else None
+        if on_map is not None:
+            x, y, z, yaw, pos_cov = on_map
         return Estimate(
             t=t, speed=self._v, speed_var=var, accel=0.0, accel_model=0.0,
-            distance=self._distance, x=self._x, y=self._y, yaw=self._yaw,
-            pos_cov=(pos_var, pos_var, 0.0),
+            distance=self._distance, x=x, y=y, z=z, yaw=yaw,
+            pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used)
 
     def _in_window(self, t: float) -> bool:
@@ -120,6 +127,10 @@ class Odometry:
         # the origin of frame `map` is the first valid fix, so the start is (0, 0)
         if self._in_window(t) and msg.status.status >= 0:
             self._fix_ok = True
+            if self._tracker is not None:
+                self._tracker.on_fix(msg.latitude, msg.longitude, msg.altitude,
+                                     msg.status.status, self._distance)
+                self._gnss_used = self._gnss_used or self._tracker.ready
 
     def _on_vel(self, t: float, msg) -> None:
         if not (self._fix_ok and self._in_window(t)):
