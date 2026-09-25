@@ -101,3 +101,28 @@ def test_estimate_fields_per_contract():
 def test_odometry_stub_returns_none():
     odo = Odometry(T.load_params(PARAMS_YAML))
     assert odo.step(object()) is None
+
+
+@pytest.mark.parametrize('section,key,bad', [
+    ('gnss', 'init_window_s', 'five'),
+    ('gnss', 'init_window_s', float('nan')),
+    ('gnss', 'init_window_s', True),
+    ('drive', 'notch_max', 15.5),
+    ('drive', 'notch_max', True),
+    ('position', 'use_map', 1),
+    ('gnss', 'topic_fix', 3),
+    ('drive', 'traction_accel_table', []),
+    ('drive', 'traction_accel_table', [0.0, 'x']),
+    ('drive', 'brake_accel_table', [float('inf')]),
+])
+def test_load_params_bad_type_raises(tmp_path, section, key, bad):
+    f = _write(tmp_path, lambda r: r[section].update({key: bad}))
+    with pytest.raises(TypeError, match=key):
+        T.load_params(f)
+
+
+def test_load_params_wrong_layout_raises(tmp_path):
+    f = tmp_path / 'p.yaml'
+    f.write_text('foo: 1\n')
+    with pytest.raises(KeyError, match='ros__parameters'):
+        T.load_params(f)

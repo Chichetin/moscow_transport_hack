@@ -4,6 +4,7 @@ Python 3.10 compatible (ROS 2 Humble). Imports only the standard library and PyY
 (apt python3-yaml); the only place that reads params.yaml is `load_params`.
 """
 import dataclasses
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional, Tuple, Union, get_type_hints
@@ -162,8 +163,9 @@ def _build(cls, raw, path):
         if dataclasses.is_dataclass(hint):
             kwargs[name] = _build(hint, value, key)
         elif hint is float:
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise TypeError(f'{key}: expected float, got {value!r}')
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value)):
+                raise TypeError(f'{key}: expected finite float, got {value!r}')
             kwargs[name] = float(value)
         elif hint is int:
             if isinstance(value, bool) or not isinstance(value, int):
@@ -177,14 +179,22 @@ def _build(cls, raw, path):
             if not isinstance(value, str):
                 raise TypeError(f'{key}: expected str, got {value!r}')
             kwargs[name] = value
-        else:  # Tuple[float, ...]
-            if not isinstance(value, (list, tuple)) or not value:
-                raise TypeError(f'{key}: expected a non-empty list, got {value!r}')
+        elif hint == Tuple[float, ...]:
+            if (not isinstance(value, (list, tuple)) or not value
+                    or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                               and math.isfinite(v) for v in value)):
+                raise TypeError(f'{key}: expected a non-empty list of finite floats, got {value!r}')
             kwargs[name] = tuple(float(v) for v in value)
+        else:
+            raise TypeError(f'{key}: unsupported field type {hint}')
     return cls(**kwargs)
 
 
 def load_params(path) -> Params:
     """Read params.yaml (ROS layout `/**: ros__parameters:`) into `Params`."""
     doc = yaml.safe_load(Path(path).read_text())
-    return _build(Params, doc['/**']['ros__parameters'], 'params')
+    try:
+        raw = doc['/**']['ros__parameters']
+    except (KeyError, TypeError):
+        raise KeyError("params file must contain '/**' -> 'ros__parameters'") from None
+    return _build(Params, raw, 'params')
