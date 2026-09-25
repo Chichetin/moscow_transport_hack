@@ -83,6 +83,18 @@ def arc_polyline(xy: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return poly, poly_s, point_s
 
 
+def clean_fixes(fix_t: np.ndarray, fix_llas: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Fixes sorted by stamp (first of equal stamps) without the km jumps of the track."""
+    idx = sort_unique(fix_t)
+    fix_t, fix_llas = fix_t[idx], fix_llas[idx]
+    if len(fix_t):
+        provisional = tuple(np.median(fix_llas[:, :3], axis=0))
+        enu = geodetic_to_enu(fix_llas[:, 0], fix_llas[:, 1], fix_llas[:, 2], provisional)
+        good = ~outlier_mask(enu[:, :2])
+        fix_t, fix_llas = fix_t[good], fix_llas[good]
+    return fix_t, fix_llas
+
+
 @dataclass
 class Reference:
     origin: tuple[float, float, float] | None   # lat, lon, alt of the frame `map` origin
@@ -98,29 +110,29 @@ class Reference:
 def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float) -> Reference:
     """fix_llas: (N, 4) lat, lon, alt, status; vel_en: (K, 2) ENU east/north m/s.
 
-    Origin = first filtered fix with stamp <= window_end (else the first filtered fix): the
-    same rule as frame `map` in docs/contracts.md §1.
+    Origin = the rule of frame `map` of the tracker (docs/contracts.md §1, D-030): the first
+    status-2 fix with stamp <= window_end, else the first valid fix of the window whatever its
+    status, even when the track is status 2 only and they come later (#70); a run without a
+    fix in the window starts at the first fix of the track.
     """
     fix_t, fix_llas = np.asarray(fix_t, float), np.asarray(fix_llas, float).reshape(-1, 4)
     ok = np.isfinite(fix_llas).all(axis=1) & (fix_llas[:, 3] >= MIN_STATUS) \
         & (np.abs(fix_llas[:, 0]) + np.abs(fix_llas[:, 1]) > 0)
+    any_t, any_llas = clean_fixes(fix_t[ok], fix_llas[ok])
     if (fix_llas[ok, 3] >= BEST_STATUS).any():
         ok &= fix_llas[:, 3] >= BEST_STATUS
-    fix_t, fix_llas = fix_t[ok], fix_llas[ok]
-    idx = sort_unique(fix_t)
-    fix_t, fix_llas = fix_t[idx], fix_llas[idx]
+    fix_t, fix_llas = clean_fixes(fix_t[ok], fix_llas[ok])
 
     origin = None
     pos = np.zeros((0, 3))
     if len(fix_t):
-        provisional = tuple(np.median(fix_llas[:, :3], axis=0))
-        enu = geodetic_to_enu(fix_llas[:, 0], fix_llas[:, 1], fix_llas[:, 2], provisional)
-        good = ~outlier_mask(enu[:, :2])
-        fix_t, fix_llas = fix_t[good], fix_llas[good]
-    if len(fix_t):
-        in_window = np.nonzero(fix_t <= window_end)[0]
-        o = in_window[0] if len(in_window) else 0
-        origin = tuple(float(v) for v in fix_llas[o, :3])
+        if (fix_t <= window_end).any():
+            o = fix_llas[np.argmax(fix_t <= window_end)]
+        elif (any_t <= window_end).any():
+            o = any_llas[np.argmax(any_t <= window_end)]
+        else:
+            o = fix_llas[0]
+        origin = tuple(float(v) for v in o[:3])
         pos = geodetic_to_enu(fix_llas[:, 0], fix_llas[:, 1], fix_llas[:, 2], origin)
     vel_t, vel_en = np.asarray(vel_t, float), np.asarray(vel_en, float).reshape(-1, 2)
     speed = np.hypot(vel_en[:, 0], vel_en[:, 1])
