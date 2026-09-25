@@ -10,7 +10,7 @@
 
 Статус: готово (#6). Бейзлайн P0 на holdout — `docs/verification/2026-09-25-pr35-baseline-holdout.md`
 (Linux, 33 с); повтор на Windows-хосте с теми же числами — `docs/verification/2026-09-25-eval-holdout-windows.md`
-(18 с). `--plot` — #16 (ниже), `--stress` — #15.
+(18 с). `--plot` — #16 (ниже), `--stress` — #15. Условие D-005 (GNSS после окна не меняет выход) — сквозной тест `tests/test_gnss_after_window.py` (#57, D-052).
 
 ```bash
 .venv/bin/python tools/eval/run_eval.py --split quick         # 3 bag, цикл разработки, ~15 с
