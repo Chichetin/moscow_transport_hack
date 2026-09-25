@@ -31,7 +31,9 @@ def test_run_writes_contract_json_and_tables(short_bags, tmp_path, capsys):
         assert set(METRIC_KEYS) | {'duration_s', 'distance_m', 'n_matched', 'crashed'} <= set(m)
         assert m['crashed'] is False
     assert set(res['summary']) == {'median', 'worst_bag'}
+    assert not any(bag.NOTES in m for m in res['bags'].values())      # format of §4 unchanged
     assert '**speed_rmse**' in out and short_bags[0] in out
+    assert 'NaN/inf (вне метрик): 0; t != stamp входа: 0' in out
 
     assert cli.main(args + ['--out', str(tmp_path / 'new'), '--compare',
                             str(tmp_path / 'base' / 'metrics.json')]) == 0
