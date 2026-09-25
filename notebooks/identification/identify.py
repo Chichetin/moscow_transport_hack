@@ -30,7 +30,8 @@ FIG_DIR = Path(__file__).resolve().parent / 'figures'
 SPEED_GRID = (0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0)   # m/s
 NOTCH_MAX = 15
 DELAYS = np.round(np.arange(0.0, 1.01, 0.05), 2)     # s, candidates for the drive delay
-DELAY_TIE = 1e-4           # scores within this of the best are the same delay (grid resolution)
+WHEEL_SCALE_MIN_CHANGE = 1e-3   # smaller wheel-scale corrections are not written to params.yaml
+DELAY_TIE = 1e-4          # scores within this of the best are the same delay (grid resolution)
 COAST_HOLD_S = 1.0        # notch 0 for +-this around the sample: steady coasting
 ADHESION_PCT = 99.9        # reported tail of |a_drive| in the data (noise + slip), for comparison
 POWER_PCT = 95.0           # P/m = this percentile of a_drive * v at the top notches above POWER_MIN_V
@@ -171,8 +172,9 @@ def write_params(p, scales, path=PARAMS_YAML):
     def num(x):
         return repr(float(x)) if not isinstance(x, int) else str(x)
     values = {
-        'wheel_scale_front': num(round(scales['front']['wheel_scale'], 4)),
-        'wheel_scale_rear': num(round(scales['rear']['wheel_scale'], 4)),
+        # a correction below WHEEL_SCALE_MIN_CHANGE is under the spread between bags: keep 1.0
+        **{f'wheel_scale_{side}': num(round(scales[side]['wheel_scale'], 4))
+           for side in ('front', 'rear') if abs(scales[side]['wheel_scale'] - 1.0) >= WHEEL_SCALE_MIN_CHANGE},
         'speed_grid_mps': '[' + ', '.join(num(x) for x in p['speed_grid_mps']) + ']',
         'traction_accel_table': '[' + ', '.join(num(x) for x in p['traction_accel_table']) + ']',
         'brake_accel_table': '[' + ', '.join(num(x) for x in p['brake_accel_table']) + ']',

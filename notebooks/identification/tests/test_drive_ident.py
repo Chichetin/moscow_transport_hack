@@ -149,16 +149,19 @@ def test_written_params_pass_the_contract(tmp_path):
     p = true_params()
     p['traction_accel_table'] = [round(x, 3) for x in p['traction_accel_table']]
     p['brake_accel_table'] = [round(x, 3) for x in p['brake_accel_table']]
-    scales = {'front': {'wheel_scale': 1.0012}, 'rear': {'wheel_scale': 0.9991}}
+    scales = {'front': {'wheel_scale': 1.0012}, 'rear': {'wheel_scale': 0.9981}}
     target = tmp_path / 'params.yaml'
     shutil.copy(ident.PARAMS_YAML, target)
     before = target.read_text(encoding='utf-8')
     ident.write_params(p, scales, target)
     loaded = load_params(target)
-    assert loaded.vehicle.wheel_scale_front == 1.0012 and loaded.vehicle.wheel_scale_rear == 0.9991
+    assert loaded.vehicle.wheel_scale_front == 1.0012 and loaded.vehicle.wheel_scale_rear == 0.9981
     assert loaded.drive.speed_grid_mps == tuple(GRID)
     assert loaded.drive.traction_accel_table[len(GRID) * 5 + 2] == pytest.approx(0.4)
     assert (loaded.resistance.c0, loaded.resistance.c1, loaded.resistance.c2) == pytest.approx(C_TRUE)
+    shutil.copy(ident.PARAMS_YAML, target)
+    ident.write_params(p, {'front': {'wheel_scale': 1.0004}, 'rear': {'wheel_scale': 0.9996}}, target)
+    assert load_params(target).vehicle.wheel_scale_front == load_params(ident.PARAMS_YAML).vehicle.wheel_scale_front
     after = target.read_text(encoding='utf-8')
     comments = [ln.split('#', 1)[1] for ln in before.splitlines() if '#' in ln]
     assert all(c in after for c in comments)                           # every comment kept
