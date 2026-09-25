@@ -7,6 +7,7 @@ follow replace the parts of it; the numbers of this version are the first row of
 import math
 from typing import Any, Optional
 
+from .position import PathTracker
 from .preprocess import Preprocessor
 from .slip import SlipDetector
 from .types import CommandSample, Estimate, GnssFix, GnssVel, Params, SlipState, WheelSample
@@ -19,6 +20,8 @@ class Odometry:
         self.params = params
         self.route = route
         self._preprocess = Preprocessor(params)
+        self._tracker = (PathTracker(params, route)
+                         if route is not None and params.position.use_map else None)
         self._t0: Optional[float] = None      # stamp of the first input (from preprocess)
         self._t: Optional[float] = None       # newest stamp seen; the state is at this time
         self._wheel = {'front': None, 'rear': None}   # last WheelSample per bogie, m/s
@@ -72,16 +75,24 @@ class Odometry:
     def _estimate(self, t: float, now: float) -> Estimate:
         var = self.params.filter.r_wheel
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
+        x, y, z, yaw, pos_cov = self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0)
+        on_map = self._tracker.advance(self._distance) if self._tracker is not None else None
+        if on_map is not None:
+            x, y, z, yaw, pos_cov = on_map
         return Estimate(
             t=t, speed=self._v, speed_var=var, accel=0.0, accel_model=0.0,
-            distance=self._distance, x=self._x, y=self._y, yaw=self._yaw,
-            pos_cov=(pos_var, pos_var, 0.0),
+            distance=self._distance, x=x, y=y, z=z, yaw=yaw,
+            pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used)
 
     def _on_fix(self, sample: GnssFix) -> None:
         # the origin of frame `map` is the first valid fix, so the start is (0, 0)
         if sample.status >= 0:
             self._fix_ok = True
+            if self._tracker is not None:
+                self._tracker.on_fix(sample.lat, sample.lon, sample.alt,
+                                     sample.status, self._distance)
+                self._gnss_used = self._gnss_used or self._tracker.ready
 
     def _on_vel(self, sample: GnssVel) -> None:
         if not self._fix_ok:
