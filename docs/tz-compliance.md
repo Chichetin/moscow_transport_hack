@@ -36,7 +36,7 @@
 |---|---|---|---|---|
 | P1 | Дрейф в конце, % от пути | eval `drift_pct` | holdout | — |
 | P2 | Along-track MEAN/MAX/RMSE | eval `along_*` | holdout | — |
-| P3 | Cross-track при привязке к pathgraph | карта (D-007), eval `cross_*` | holdout | — |
+| P3 | Cross-track при привязке к pathgraph | карта `src/tram_odometry/maps/route.csv` (D-007, D-018), eval `cross_*` | holdout | ⚠️ карта есть: GNSS holdout до карты mean 0,41 м, p99 4,95 м (`docs/verification/2026-09-25-route-map.md`); cross-track оценки — после PO1 и eval |
 | P4 | Корректный `nav_msgs/Odometry` | нода, контракт §1 | тест формы, запись стенда | — |
 | P5 | Инициализация абсолютного положения (последняя позиция / старт прогона) | `core/position` | eval: ошибка в первые 10 с | — |
 
