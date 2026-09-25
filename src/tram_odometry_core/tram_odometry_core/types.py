@@ -130,6 +130,7 @@ class PositionParams:
     join_m: float
     along_drift_frac: float
     cross_std_m: float
+    fix_gate_m: float
 
 
 @dataclass(frozen=True)
@@ -213,13 +214,18 @@ class Route:
 
 def load_route(path) -> Route:
     """Read maps/route.csv: origin from the header comment, branches in file order."""
-    text = Path(path).read_text()
-    header = text.splitlines()[0]
-    origin = tuple(float(re.search(rf'origin_{k}=([-0-9.eE+]+)', header).group(1))
-                   for k in ('lat', 'lon', 'alt'))
+    text = Path(path).read_text(encoding='utf-8')
+    header = text.splitlines()[0] if text else ''
+    found = [re.search(rf'origin_{k}=([-0-9.eE+]+)', header) for k in ('lat', 'lon', 'alt')]
+    if not all(found):
+        raise ValueError(f'{path}: header must carry origin_lat/lon/alt (docs/contracts.md §5)')
+    origin = tuple(float(m.group(1)) for m in found)
     rows = np.loadtxt(path, delimiter=',', comments='#', skiprows=2, ndmin=2)
     branches = tuple(Branch(*(rows[rows[:, 0] == b, k].copy() for k in (1, 2, 3, 4)))
                      for b in np.unique(rows[:, 0]))
+    for k, b in enumerate(branches):
+        if len(b.s) < 2 or not np.all(np.diff(b.s) > 0):
+            raise ValueError(f'{path}: branch {k} needs >= 2 points with increasing s_m (§5)')
     return Route(origin=origin, branches=branches)
 
 

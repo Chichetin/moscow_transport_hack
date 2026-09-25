@@ -48,6 +48,8 @@ class PathTracker:
         self._map = [np.column_stack([b.x, b.y, b.z]) for b in route.branches]
         self._next = [self._join(k) for k in range(len(self._map))]
         self._xyz = self._map                 # branches in the frame of the run
+        lat0, lon0, alt0 = route.origin       # the map's own ENU: the outlier gate lives here
+        self._map_rot, self._map_ecef0 = _enu_rotation(lat0, lon0), _ecef(lat0, lon0, alt0)
         self._origin_status: Optional[int] = None
         self._rot = self._ecef0 = None
         self._anchor: Optional[Tuple[int, float, float]] = None   # branch, s, distance
@@ -88,9 +90,15 @@ class PathTracker:
         self._anchor, self._dz = None, []
 
     def _locate(self, xy: np.ndarray) -> Tuple[int, float]:
-        """Nearest branch and arc length of a point (window only: brute force is fine)."""
+        """Nearest branch and arc length of a point in the frame of the run."""
+        k, s, _ = self._nearest(self._xyz, xy)
+        return k, s
+
+    def _nearest(self, branches, xy: np.ndarray) -> Tuple[int, float, float]:
+        """(branch, s, distance) of the nearest point of `branches` (the map's or the run's
+        frame: s is the same in both). Window only: brute force over the map is fine there."""
         best = (0, 0.0, math.inf)
-        for k, xyz in enumerate(self._xyz):
+        for k, xyz in enumerate(branches):
             i = int(np.argmin((xyz[:, 0] - xy[0]) ** 2 + (xyz[:, 1] - xy[1]) ** 2))
             for j in (max(i - 1, 0), min(i, len(xyz) - 2)):
                 a, t = xyz[j, :2], xyz[j + 1, :2] - xyz[j, :2]
@@ -98,7 +106,7 @@ class PathTracker:
                 d = float(np.hypot(*(a + u * t - xy)))
                 if d < best[2]:
                     best = (k, float(self._s[k][j] + u * self._step[k]), d)
-        return best[0], best[1]
+        return best
 
     def _at(self, k: int, s: float):
         """x, y, z, yaw of branch k at arc length s (uniform step: O(1))."""
@@ -112,6 +120,12 @@ class PathTracker:
     def on_fix(self, lat: float, lon: float, alt: float, status: int, distance: float) -> None:
         """A GNSS master fix of the init window; `distance` is the path at that moment."""
         if not all(math.isfinite(v) for v in (lat, lon, alt, distance)) or status < STATUS_FIX:
+            return
+        # a fix farther than fix_gate_m from every branch is an outlier (docs/data.md, trap 10:
+        # kilometres off at the start of a run, lat = lon = 0): it must not become the origin
+        # of the frame, the anchor or a height sample
+        p_map = self._map_rot @ (_ecef(lat, lon, alt) - self._map_ecef0)
+        if self._nearest(self._map, p_map[:2])[2] > self.p.fix_gate_m:
             return
         if self._origin_status is None or self._origin_status < STATUS_GBAS_FIX <= status:
             self._set_origin(lat, lon, alt, status)
@@ -129,7 +143,9 @@ class PathTracker:
             return None
         k, s, d0 = self._anchor
         s += distance - d0
-        for _ in range(len(self._xyz)):       # bounded number of branch changes
+        # bounded number of branch changes per call: a run never crosses more branches than the
+        # map has; at the limit the position stays at the end of the last branch (a dead end)
+        for _ in range(len(self._xyz)):
             end = float(self._s[k][-1])
             if s <= end:
                 break

@@ -180,3 +180,54 @@ def test_pipeline_without_route_keeps_the_baseline():
     odo = Odometry(PARAMS)
     est = _wheels(odo, 0.0, 10.0, 36.0)
     assert est.z == 0.0 and est.y == pytest.approx(0.0)
+
+
+def _aligned_tracker():
+    """A tracker aligned at 1 km along branch 0 with a good GBAS fix."""
+    tr = PathTracker(PARAMS, _route())
+    tr.on_fix(*_lla(-1000.0, 0.0, 170.0), 2, distance=50.0)
+    return tr
+
+
+def test_outlier_fix_first_in_the_window_is_not_the_origin_of_the_frame():
+    """docs/data.md, trap 10: kilometres off at the start of a run, even with status 2."""
+    tr = PathTracker(PARAMS, _route())
+    tr.on_fix(*_lla(-1000.0, 2000.0, 170.0), 2, distance=50.0)   # 2 km off the map
+    assert not tr.ready
+    tr.on_fix(*_lla(-1000.0, 0.0, 170.0), 2, distance=50.0)
+    x, y, z, yaw, cov = tr.advance(50.0)
+    assert math.hypot(x, y) < 0.05 and abs(z) < 0.05
+
+
+def test_outlier_fix_last_in_the_window_does_not_move_the_anchor():
+    tr = _aligned_tracker()
+    tr.on_fix(*_lla(-1000.0, 2000.0, 170.0), 2, distance=50.0)
+    x, y, z, yaw, cov = tr.advance(50.0)
+    assert math.hypot(x, y) < 0.05 and abs(z) < 0.05
+
+
+def test_zero_lat_lon_fix_is_ignored():
+    tr = PathTracker(PARAMS, _route())
+    tr.on_fix(0.0, 0.0, 0.0, 0, distance=0.0)
+    assert not tr.ready
+    tr = _aligned_tracker()
+    tr.on_fix(0.0, 0.0, 0.0, 0, distance=50.0)
+    x, y, z, yaw, cov = tr.advance(50.0)
+    assert math.hypot(x, y) < 0.05
+
+
+def test_fix_within_the_gate_is_accepted():
+    tr = PathTracker(PARAMS, _route())
+    tr.on_fix(*_lla(-1000.0, PARAMS.position.fix_gate_m - 1.0, 170.0), 2, distance=50.0)
+    assert tr.ready
+
+
+def test_load_route_rejects_a_bad_header_and_a_one_point_branch(tmp_path):
+    p = tmp_path / 'route.csv'
+    p.write_text('# frame: ENU, source=test\nbranch,s_m,x_m,y_m,z_m\n0,0.0,0.0,0.0,0.0\n')
+    with pytest.raises(ValueError, match='origin'):
+        load_route(p)
+    p.write_text('# frame: ENU, origin_lat=55.8104, origin_lon=37.4623, origin_alt=168.0\n'
+                 'branch,s_m,x_m,y_m,z_m\n0,0.0,0.0,0.0,0.0\n')
+    with pytest.raises(ValueError, match='branch 0'):
+        load_route(p)
