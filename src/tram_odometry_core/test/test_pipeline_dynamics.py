@@ -143,20 +143,21 @@ def test_wheels_lagging_behind_the_controller_are_still_used():
             assert (est.slip.front_trust, est.slip.rear_trust) == (1.0, 1.0), use_model
 
 
-def test_one_silent_bogie_with_controller_events_in_between():
-    """30639: the rear bogie is silent for up to 73 s while the front one talks; controller
-    events between wheel samples must not switch to prediction (trust 1/0, no 0/0)."""
+@pytest.mark.parametrize('alive', [FRONT, REAR])
+def test_one_silent_bogie_with_controller_events_in_between(alive):
+    """30639: one bogie is silent for up to 73 s while the other talks; controller events
+    between wheel samples must not switch to prediction (trust 1/0 or 0/1, never 0/0)."""
     odo = Odometry(PARAMS)
     _cruise(odo, 36.0, T0, T0 + 1.0, notch=10)
-    t = T0 + 1.0
-    for k in range(50):                                  # 5 s, only the front bogie talks
+    for k in range(50):                                  # 5 s, only one bogie talks
         t = T0 + 1.0 + 0.1 * k
-        odo.step((FRONT, _wheel(t, 36.0)))
+        odo.step((alive, _wheel(t, 36.0)))
         est = odo.step((CMD, _cmd(t + 0.05, 10)))
         if k > 6:
             assert est.speed == pytest.approx(10.0, abs=1e-6)
-            assert (est.slip.front_trust, est.slip.rear_trust) == (1.0, 0.0)
-            assert est.slip.slip_rear
+            trusts = (est.slip.front_trust, est.slip.rear_trust)
+            assert trusts == ((1.0, 0.0) if alive == FRONT else (0.0, 1.0))
+            assert est.slip.slip_rear if alive == FRONT else est.slip.slip_front
 
 
 def test_without_the_model_lagging_wheels_and_gaps_behave_like_the_baseline():
@@ -169,6 +170,7 @@ def test_without_the_model_lagging_wheels_and_gaps_behave_like_the_baseline():
         last = odo.step((CMD, _cmd(t + 2.0 + 0.05 * k, 10)))
     assert last.speed == pytest.approx(10.0, abs=1e-6)
     assert last.accel_model == 0.0
+    assert (last.slip.front_trust, last.slip.rear_trust) == (1.0, 1.0)   # as on main
 
 
 def test_accel_model_changes_which_bogie_the_detector_blames():
