@@ -69,4 +69,6 @@ def test_entry_point_with_process_pool(tmp_path):
            '--out', str(tmp_path)] + [a for b in SHORT for a in ('--bag', b)]
     run = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=300)
     assert run.returncode == 0, run.stderr[-2000:]
-    assert set(json.loads((tmp_path / 'metrics.json').read_text(encoding='utf-8'))['bags']) == set(SHORT)
+    res = json.loads((tmp_path / 'metrics.json').read_text(encoding='utf-8'))
+    assert set(res['bags']) == set(SHORT)
+    assert not any(bag.NOTES in m for m in res['bags'].values())      # pool path keeps §4 format too

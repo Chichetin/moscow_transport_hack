@@ -25,7 +25,7 @@
 
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| S1 | RMSE/MAE скорости по всему прогону vs GNSS | eval `speed_rmse`, `speed_mae` | `docs/accuracy.md`, holdout | ⚠️ бейзлайн holdout (D-021): `speed_rmse` медиана 0,064, MAE 0,039 м/с, худший bag 0,167 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`, тот же результат на Windows-хосте); `docs/accuracy.md` — #21 |
+| S1 | RMSE/MAE скорости по всему прогону vs GNSS | eval `speed_rmse`, `speed_mae` | `docs/accuracy.md`, holdout | ⚠️ бейзлайн holdout (D-021): `speed_rmse` медиана 0,064, MAE 0,039 м/с, худший bag 0,167 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`; повтор на Windows с теми же числами — `docs/verification/2026-09-25-eval-holdout-windows.md`); `docs/accuracy.md` — #21 |
 | S2 | Нет bias на разгоне/торможении/остановках | eval `speed_bias_*` | таблица по режимам | ⚠️ бейзлайн holdout: bias разгон −0,060, торможение +0,038, стоянка −0,006, ход −0,025 м/с (медианы, `docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
 | S3 | Нелинейная модель привода: позиция контроллера, скорость вала → момент | `core/dynamics`, `docs/model.md` | тесты; графики идентификации | — |
 | S4 | Продольная динамика: масса, радиус, сопротивление, уклон, тормоза, сцепление | `core/dynamics`, `docs/model.md` | — | — |
