@@ -126,3 +126,49 @@ def test_invalid_trust_does_not_change_state(trust):
     before = filt.state()
     filt.update(wheel(0.0, 10.2, 'rear'), trust)
     assert filt.state() == before
+
+
+def test_bias_tracks_unmodelled_acceleration():
+    filt = SpeedFilter(PARAMS)
+    for k in range(41):
+        t = k / 10.0
+        filt.predict(t, 0.0)
+        filt.update(wheel(t, 2.0 + 0.5 * t), 1.0)
+    speed, variance, accel = filt.state()
+    assert speed == pytest.approx(4.0, abs=0.12)
+    assert accel > 0.1
+    assert variance >= 0.0
+
+
+def test_nis_rejects_outlier_and_identifies_measurement():
+    filt = initialized()
+    before = filt.state()
+    filt.update(wheel(0.0, 100.0, 'rear'), 1.0)
+    assert filt.state() == before
+    diag = filt.diagnostics()
+    assert (diag.t, diag.bogie, diag.accepted) == (0.0, 'rear', False)
+    assert diag.nis > PARAMS.filter.nis_gate
+
+
+def test_diagnostics_only_for_new_wheel_measurement():
+    filt = initialized()
+    assert filt.diagnostics() is not None
+    filt.predict(0.1, 0.0)
+    assert filt.diagnostics() is None
+    filt.update(wheel(0.1, 10.0, 'rear'), 1.0)
+    assert filt.diagnostics().accepted is True
+
+
+def test_stop_does_not_preserve_braking_bias_into_next_start():
+    filt = SpeedFilter(PARAMS)
+    for k in range(101):
+        t = k / 10.0
+        filt.predict(t, 0.0)
+        filt.update(wheel(t, max(0.0, 3.0 - 0.5 * t)), 1.0)
+    assert filt.state()[0] < 0.1
+    assert filt.state()[2] > -0.1
+    for k in range(101, 121):
+        t = k / 10.0
+        filt.predict(t, 0.0)
+        filt.update(wheel(t, 0.5 * (t - 10.0)), 1.0)
+    assert filt.state()[0] == pytest.approx(1.0, abs=0.15)

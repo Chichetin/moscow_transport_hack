@@ -85,7 +85,8 @@ class Odometry:
             t=t, speed=self._v, speed_var=var, accel=accel, accel_model=0.0,
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
-            slip=self._slip_state, gnss_used=self._gnss_used)
+            slip=self._slip_state, gnss_used=self._gnss_used,
+            filter_diagnostics=self._filter.diagnostics())
 
     def _on_fix(self, sample: GnssFix) -> None:
         # the origin of frame `map` is the first valid fix, so the start is (0, 0)
