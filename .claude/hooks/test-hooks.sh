@@ -57,6 +57,18 @@ if [ "$PY_OK" -eq 1 ]; then
   printf 'def test_bad():\n    assert 1 == 2\n' > t/test_x.py
   touch -d '-1 min' t/test_x.py
   expect pass  "ничего не менялось с зелёного прогона" check-tests.sh
+  # worktree без своего .venv берёт .venv основной копии (раньше падал на python3 без pytest)
+  printf 'def test_bad():\n    assert 1 == 2\n' > t/test_x.py
+  git add t pyproject.toml && git -c user.name=t -c user.email=t@t commit -q -m tests
+  git worktree add -q .claude/worktrees/wt-py -b worktree-wt-py 2>/dev/null
+  if [ -e .venv ] && [ ! -e .claude/worktrees/wt-py/.venv ]; then
+    out="$(cd .claude/worktrees/wt-py && bash "$HOOKS/check-tests.sh" 2>&1)"
+    if printf '%s' "$out" | grep -q 'test_bad' && ! printf '%s' "$out" | grep -q 'No module named pytest'; then
+      echo "ok:   worktree без .venv: pytest из основной копии"
+    else echo "FAIL: worktree без .venv: ожидался прогон pytest основной копии, вывод: $out"; FAIL=1; fi
+  fi
+  git worktree remove --force .claude/worktrees/wt-py; git branch -q -D worktree-wt-py
+  git rm -rq --cached t pyproject.toml; git -c user.name=t -c user.email=t@t commit -q -m untrack
   rm -rf t pyproject.toml .claude/.last-green-test-run
 else
   echo "skip: pytest недоступен (.venv или python3 -m pytest) — случаи pytest не проверены"
