@@ -51,7 +51,7 @@
 ```bash
 bash docker/jury-stand.sh 30618_e9a34502                     # 20 мин bag; заранее
 .venv/bin/python tools/stand/run_stand.py out/stand/30618_e9a34502   # таблица задержка/частота/CPU/RSS
-.venv/bin/python tools/eval/run_eval.py --bag 30618_e9a34502  # ~15 с, таблица против GNSS — вживую
+.venv/bin/python tools/eval/run_eval.py --bag 30618_e9a34502  # таблица против GNSS — вживую, время замерить
 ```
 
 Во время питча вживую — только `run_eval.py --bag` (время замерить заранее) и `ros2 topic hz /result/velocity`
