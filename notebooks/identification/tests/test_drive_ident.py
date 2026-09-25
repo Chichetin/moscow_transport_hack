@@ -1,4 +1,5 @@
 """Identification on synthetic data with known parameters (issue #9)."""
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -56,6 +57,15 @@ def test_resistance_is_recovered_and_non_negative():
     assert c == pytest.approx(C_TRUE, abs=2e-3)
     c_neg = di.fit_resistance(v, -(0.05 - 0.001 * v * v))       # best unconstrained c2 < 0
     assert min(c_neg) >= 0.0
+
+
+def test_blas_is_pinned_single_threaded():
+    # #68: multi-threaded OpenBLAS gives a different summation order per CI runner core count,
+    # so the same seed and code fit slightly differently np.linalg.solve in fit_curve() below --
+    # occasionally enough to cross a pytest.approx tolerance. Root conftest.py pins this before
+    # numpy is imported anywhere in the session; this guards against someone removing that.
+    for var in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+        assert os.environ.get(var) == '1', f'{var} must be pinned for reproducible curve fits'
 
 
 def test_curve_fit_and_sparse_nodes():
