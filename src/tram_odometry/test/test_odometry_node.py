@@ -1,5 +1,6 @@
 """Node tests (need ROS: bash docker/dev.sh python3 -m pytest src/tram_odometry/test)."""
 import math
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 rclpy = pytest.importorskip('rclpy')
 
 from builtin_interfaces.msg import Time  # noqa: E402
+from diagnostic_msgs.msg import DiagnosticStatus  # noqa: E402
 from geometry_msgs.msg import TwistStamped  # noqa: E402
 from sensor_msgs.msg import NavSatFix  # noqa: E402
 from tram_vehicle_msgs.msg import DriverControllerCommand, VelocitySensor  # noqa: E402
@@ -45,6 +47,8 @@ def test_raw_is_topic_and_untouched_message_like_eval(node, monkeypatch):
     seen = []
     monkeypatch.setattr(node.odometry, 'step', lambda raw: seen.append(raw))
     wheel, fix, vel = _wheel(36.0), NavSatFix(), TwistStamped()
+    fix.header.stamp = STAMP
+    vel.header.stamp = STAMP
     node.on_input('/vehicle/front_bogie_velocity', wheel)
     node.on_input('/sensing/gnss/master/fix', fix)
     node.on_input('/sensing/gnss/master/vel', vel)
@@ -100,7 +104,9 @@ def test_exception_in_pipeline_does_not_kill_node(node, monkeypatch):
     def boom(raw):
         raise ValueError('core bug')
     monkeypatch.setattr(node.odometry, 'step', boom)
-    node.on_input('/vehicle/driver_position_cmd', DriverControllerCommand())
+    cmd = DriverControllerCommand()
+    cmd.header.stamp = STAMP
+    node.on_input('/vehicle/driver_position_cmd', cmd)
     node.on_input('/vehicle/front_bogie_velocity', _wheel())
     assert node.errors == 2
 
@@ -182,3 +188,86 @@ def test_real_core_ignores_gnss_after_window_through_the_node(node, monkeypatch)
     q = sent[-1][1].pose.pose.orientation
     assert sent[-1][0] == 'p' and q.z == 0.0 and q.w == 1.0    # yaw stayed 0: GNSS not used
     assert len(sent) == 4                                       # GNSS inputs publish nothing
+
+
+def test_diagnostics_reports_slip_and_input_age_with_input_stamp(node, monkeypatch):
+    sent = []
+    monkeypatch.setattr(node.pub_diagnostics, 'publish', sent.append)
+    node.on_input('/vehicle/front_bogie_velocity', _wheel())
+    assert len(sent) == 1
+    m = sent[0]
+    assert m.header.stamp == STAMP
+    assert [s.name for s in m.status] == ['tram_odometry: slip', 'tram_odometry: inputs']
+    assert m.status[0].level == DiagnosticStatus.OK
+    assert m.status[0].message == 'ok'
+    slip = {v.key: v.value for v in m.status[0].values}
+    inputs = {v.key: v.value for v in m.status[1].values}
+    assert slip == {'slip_front': 'false', 'slip_rear': 'false',
+                    'adhesion_est': 'unknown', 'wheel_scale_front': '1.0',
+                    'wheel_scale_rear': '1.0'}
+    assert inputs == {'front_age_s': '0.0', 'rear_age_s': 'unknown',
+                      'cmd_age_s': 'unknown', 'gnss_used': 'false'}
+
+
+def test_diagnostics_rate_and_warning_for_slipping_bogie(node, monkeypatch):
+    sent = []
+    monkeypatch.setattr(node.pub_diagnostics, 'publish', sent.append)
+    est = replace(_estimate(), slip=SlipState(0.0, 1.0, True, False, 0.8))
+    monkeypatch.setattr(node.odometry, 'step', lambda raw: est)
+    for ns in (0, 50_000_000, 100_000_000, 150_000_000, 200_000_000):
+        cmd = DriverControllerCommand()
+        cmd.header.stamp = _stamp(STAMP.sec, STAMP.nanosec + ns)
+        node.on_input('/vehicle/driver_position_cmd', cmd)
+    assert len(sent) == 3
+    assert all(m.status[0].level == DiagnosticStatus.WARN for m in sent)
+    assert all(m.status[0].message == 'bogie anomaly' for m in sent)
+    assert {v.key: v.value for v in sent[-1].status[0].values}['adhesion_est'] == '0.8'
+    assert sent[-1].header.stamp == _stamp(STAMP.sec, STAMP.nanosec + 200_000_000)
+
+
+def test_empty_zero_stamp_and_nonfinite_output_do_not_publish(node, monkeypatch):
+    sent = _capture(node, monkeypatch)
+    node.on_input('/vehicle/front_bogie_velocity', _wheel(float('nan')))
+    node.on_input('/vehicle/rear_bogie_velocity', _wheel(float('inf')))
+    node.on_input('/vehicle/front_bogie_velocity', _wheel(float('-inf')))
+    empty = _wheel()
+    empty.header.stamp = _stamp(0)
+    node.on_input('/vehicle/front_bogie_velocity', empty)
+    node.on_input('/vehicle/front_bogie_velocity', None)
+    assert sent == []
+    assert node.errors == 1  # malformed None is caught; invalid numeric input is dropped
+    monkeypatch.setattr(node.odometry, 'step', lambda raw: replace(_estimate(), speed=float('inf')))
+    node.on_input('/vehicle/front_bogie_velocity', _wheel())
+    assert sent == []
+
+
+def test_controller_continues_prediction_during_wheel_silence(node, monkeypatch):
+    sent = _capture(node, monkeypatch)
+    diagnostics = []
+    monkeypatch.setattr(node.pub_diagnostics, 'publish', diagnostics.append)
+    node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
+    cmd = DriverControllerCommand()
+    cmd.header.stamp = _stamp(STAMP.sec + 73, STAMP.nanosec)
+    node.on_input('/vehicle/driver_position_cmd', cmd)
+    assert [k for k, _ in sent] == ['v', 'p', 'v', 'p']
+    assert sent[-2][1].header.stamp == cmd.header.stamp
+    assert sent[-2][1].velocity > 0.0
+    assert sent[-1][1].pose.pose.position.x > sent[1][1].pose.pose.position.x
+    ages = {v.key: v.value for v in diagnostics[-1].status[1].values}
+    assert ages['front_age_s'] == '73.0'
+    assert ages['cmd_age_s'] == '0.0'
+    assert diagnostics[-1].status[1].level == DiagnosticStatus.WARN
+    node.on_input('/vehicle/driver_position_cmd', cmd)  # repeated stamp is dropped
+    assert len(sent) == 4
+
+
+def test_diagnostics_marks_missing_bogies_on_controller_start(node, monkeypatch):
+    sent = []
+    monkeypatch.setattr(node.pub_diagnostics, 'publish', sent.append)
+    cmd = DriverControllerCommand()
+    cmd.header.stamp = STAMP
+    node.on_input('/vehicle/driver_position_cmd', cmd)
+    assert len(sent) == 1
+    assert sent[0].status[1].level == DiagnosticStatus.WARN
+    values = {v.key: v.value for v in sent[0].status[1].values}
+    assert values['front_age_s'] == values['rear_age_s'] == 'unknown'
