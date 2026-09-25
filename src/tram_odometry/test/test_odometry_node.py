@@ -277,3 +277,24 @@ def test_diagnostics_marks_missing_bogies_on_controller_start(node, monkeypatch)
     assert sent[0].status[1].level == DiagnosticStatus.WARN
     values = {v.key: v.value for v in sent[0].status[1].values}
     assert values['front_age_s'] == values['rear_age_s'] == 'unknown'
+
+
+def test_diagnostics_inputs_ok_when_fresh_and_warn_after_stale_timeout(node, monkeypatch):
+    sent = []
+    monkeypatch.setattr(node.pub_diagnostics, 'publish', sent.append)
+    monkeypatch.setattr(node.odometry, 'step', lambda raw: _estimate())
+    stale_ns = int(node.params.input.stale_timeout_s * 1e9)
+    for step, (topic, msg) in enumerate((('/vehicle/front_bogie_velocity', _wheel()),
+                                         ('/vehicle/rear_bogie_velocity', _wheel()),
+                                         ('/vehicle/driver_position_cmd', DriverControllerCommand()))):
+        msg.header.stamp = _stamp(STAMP.sec, STAMP.nanosec + step * 100_000_000)  # 10 Hz apart
+        node.on_input(topic, msg)
+    assert len(sent) == 3
+    assert sent[-1].status[1].level == DiagnosticStatus.OK
+    assert sent[-1].status[1].message == 'ok'
+    cmd = DriverControllerCommand()
+    ns = STAMP.nanosec + 200_000_000 + stale_ns + 100_000_000
+    cmd.header.stamp = _stamp(STAMP.sec + ns // 1_000_000_000, ns % 1_000_000_000)
+    node.on_input('/vehicle/driver_position_cmd', cmd)
+    assert sent[-1].status[1].level == DiagnosticStatus.WARN
+    assert sent[-1].status[1].message == 'stale input'
