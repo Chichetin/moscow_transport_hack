@@ -44,7 +44,7 @@ def typestore():
     ts = get_typestore(Stores.ROS2_HUMBLE)
     types = {}
     for name in ('VelocitySensor', 'DriverControllerCommand'):
-        types.update(get_types_from_msg((MSG_DIR / f'{name}.msg').read_text(),
+        types.update(get_types_from_msg((MSG_DIR / f'{name}.msg').read_text(encoding='utf-8'),
                                         f'tram_vehicle_msgs/msg/{name}'))
     ts.register(types)
     return ts
@@ -187,7 +187,7 @@ def main() -> None:
         keys += [k for k in r if k not in keys]
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open('w', newline='') as fh:
+    with out.open('w', newline='', encoding='utf-8') as fh:
         w = csv.DictWriter(fh, fieldnames=keys, lineterminator='\n')
         w.writeheader()
         w.writerows(rows)
