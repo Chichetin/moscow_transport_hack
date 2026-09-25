@@ -34,7 +34,9 @@ PR** с перечнем потребителей в описании. В том
 - `header.stamp` = `header.stamp` входного сообщения, вызвавшего публикацию (D-015). Не wall
   clock, не ноль, не время записи bag.
 - Публикация только онлайн, без задержки «до следующего сообщения» и без сглаживания назад.
-- QoS — по умолчанию (reliable, depth 10); судья подписан best-effort, это совместимо.
+- QoS выходов — по умолчанию (reliable, depth 10); судья подписан best-effort, это совместимо.
+  QoS входов ноды — best-effort, depth 100: соединяется с издателем любой надёжности, в том
+  числе с best-effort `ros2 bag play` (D-028).
 
 `/result/position` (`nav_msgs/msg/Odometry`):
 
@@ -96,6 +98,13 @@ class SlipState:
     adhesion_est: float | None
 
 @dataclass(frozen=True)
+class FilterDiagnostics:
+    t: float
+    bogie: Literal['front', 'rear']
+    nis: float
+    accepted: bool
+
+@dataclass(frozen=True)
 class Estimate:
     t: float                  # = t входа, вызвавшего обновление
     speed: float              # м/с, >= 0
@@ -104,21 +113,44 @@ class Estimate:
     accel_model: float        # м/с^2, прогноз модели привода
     distance: float           # м, путь от начала прогона
     x: float; y: float        # м, frame map
+    z: float                  # м, frame map, ENU up (высота карты + смещение прогона, D-024)
     yaw: float                # рад, ENU
     pos_cov: tuple[float, float, float]   # var_x, var_y, cov_xy
     slip: SlipState
     gnss_used: bool
+    filter_diagnostics: FilterDiagnostics | None = None  # NIS нового измерения тележки
+
+@dataclass(frozen=True)
+class Branch:                 # одна направленная ветка maps/route.csv (§5), массивы numpy (N,)
+    s: ndarray                # м, дуга, равномерный шаг, с 0
+    x: ndarray; y: ndarray; z: ndarray    # м, ENU от начала карты
+
+@dataclass(frozen=True)
+class Route:
+    origin: tuple[float, float, float]    # lat °, lon °, alt м — начало ENU карты
+    branches: tuple[Branch, ...]          # в порядке файла: индекс = `branch`
+    stops: tuple[tuple[int, float], ...] = ()   # (branch, s) места остановок, `maps/stops.csv` (§5), D-034
 ```
+
+`load_route(path) -> Route` в `types.py` — единственное место, где читается `route.csv` (и `stops.csv` рядом с ним, если он есть)
+(как `load_params` для yaml). Нода берёт файл из `share/tram_odometry/maps/<position.map_file>`,
+`tools/eval` — из `src/tram_odometry/maps/` того же worktree; оба передают его в `Odometry(params, route=)`.
+
+`FilterDiagnostics(t, bogie, nis, accepted)` — неизменяемая запись нового измерения:
+`t` — stamp, `bogie` — `front`/`rear`, `nis` — квадрат инновации, делённый на её
+дисперсию (безразмерно), `accepted` — прошло ли измерение порог. На входе
+контроллера и без нового измерения `Estimate.filter_diagnostics` равен `None`.
+Обязательные ROS-топики и формат `metrics.json` не меняются.
 
 Модули и их публичные функции (одна `area:` — один модуль):
 
 | Модуль | Публичное | Контракт поведения |
 |---|---|---|
 | `preprocess` | `Preprocessor(params).accept(raw) -> Sample \| None` | `raw` — сырой вход: пара `(topic, ROS-сообщение)` (км/ч, notch как есть; поля сообщения — как в ROS, у bag и rclpy одинаковые); возвращает нормализованный `Sample` или `None` (выброс, NaN, stamp из прошлого сверх допуска, GNSS вне окна) |
-| `dynamics` | `model_accel(notch: int, speed: float, params) -> float` | чистая функция, м/с²; без состояния |
-| `slip` | `SlipDetector(params).update(front, rear, accel_model, est) -> SlipState` | `front`/`rear` — последний `WheelSample` или `None` (молчит) |
-| `estimator` | `SpeedFilter(params).predict(t, accel_model)`, `.update(sample: WheelSample, trust: float)`, `.state() -> (speed, speed_var, accel)` | монотонное время внутри; `t` меньше текущего — без отката |
-| `position` | `PathTracker(params, route).init(fixes, vel) -> bool`, `.advance(distance) -> (x, y, yaw, pos_cov)` | до успешного `init` — начало координат и курс 0, `gnss_used=False` |
+| `dynamics` | `model_accel(notch: int, speed: float, params) -> float` | чистая функция, м/с²; без состояния: интерполяция таблиц D-029 по `speed_grid_mps`, пределы сцепления и мощности, минус сопротивление Дэвиса. Задержка отклика `drive.response_delay_s` — состояние `pipeline` (буфер команд): в модель идёт позиция контроллера на момент `t − delay`. При `drive.use_model` pipeline передаёт `accel_model` детектору и прогнозирует скорость на паузе обеих тележек (`v ≥ 0`); `Estimate.accel_model` — это значение |
+| `slip` | `SlipDetector(params).update(front, rear, accel_model, est) -> SlipState` | `front`/`rear` — последний `WheelSample` или `None` (молчит); `est` — сглаженная скорость фильтра, м/с, до этого обновления (`None`, пока её нет); `accel_model` — м/с². Возвращает доверие 0..1 и флаги «тележке не доверяем» (аномалия или отказ), D-027 |
+| `estimator` | `SpeedFilter(params).predict(t, accel_model)`, `.update(sample: WheelSample, trust: float)`, `.state() -> (speed, speed_var, accel)`, `.diagnostics() -> FilterDiagnostics \| None` | монотонное время внутри; запоздалое измерение допускается без отката до `input.stale_timeout_s`, более старое отбрасывается; диагностика относится только к новому измерению тележки |
+| `position` | `PathTracker(params, route)`; `.on_fix(lat, lon, alt, status, distance)` — каждый fix master в окне `gnss.init_window_s`; `.ready -> bool`; `.advance(distance) -> (x, y, z, yaw, pos_cov) \| None` | frame `map` прогона — ENU первого fix статуса 2 (иначе первого валидного), как эталон `tools/eval`; карта переводится в него один раз через ECEF; якорь — ближайшая точка ближайшей ветки по последнему fix окна; дальше только вперёд по дуге `s = s₀ + distance − distance₀`, конец ветки продолжается на ближайшей ветке не дальше `position.join_m`; `pos_cov` — `cross_std_m` поперёк, вдоль растёт как `along_drift_frac · путь`; fix окна дальше `position.fix_gate_m` от карты (в ENU карты) — выброс, не участвует ни в начале frame, ни в якоре, ни в высоте; до первого принятого fix `advance` даёт `None`: pipeline публикует прямую D-021 (начало — первый fix, курс — по GNSS vel окна), `z = 0` |
 | `pipeline` | `Odometry(params, route=None).step(raw) -> Estimate \| None` | единственная точка, которую зовут нода и `tools/eval`; `None` — вход отброшен, публиковать нечего |
 
 `params` — `Params` из `types.py`: неизменяемый dataclass, по одному вложенному dataclass на
@@ -134,6 +166,37 @@ class Estimate:
 записанные комментарием у каждого ключа. Значения меняются обычным PR с таблицей метрик.
 Новый ключ — тоже контракт (ядро и нода читают его одинаково). Пустые списки `[]` запрещены:
 ROS 2 не выводит их тип и нода не стартует.
+
+### Шумы фильтра и NIS (D-032)
+
+`filter.q_accel` — спектральная плотность белого шума ускорения, единицы
+`(м/с²)²·с`: добавка к дисперсии скорости за `dt` равна `q_accel·dt`.
+`filter.r_wheel` — дисперсия скорости одной исправной тележки, `(м/с)²`;
+при доверии `trust > 0` эффективная дисперсия измерения равна `r_wheel/trust`.
+`filter.q_bias` — спектральная плотность случайного хода медленного смещения
+ускорения, `(м/с²)²/с`; `filter.initial_bias_var` — его начальная дисперсия,
+`(м/с²)²`. `filter.nis_gate` — безразмерный включительный порог NIS; при NIS
+выше него измерение не обновляет состояние. Принятые и отвергнутые измерения
+дают отдельную запись `FilterDiagnostics`.
+
+### Таблицы привода (D-029)
+
+`drive.speed_grid_mps` — узлы скорости в м/с: не меньше двух, первый равен 0, дальше строго
+возрастают. `drive.notch_max` — положительный целый максимум модуля позиции контроллера.
+`drive.traction_accel_table` и `drive.brake_accel_table` — неотрицательные модули ускорения
+в м/с², по `(notch_max + 1) * len(speed_grid_mps)` чисел каждый. Порядок row-major: сначала
+все скорости для позиции 0, затем для 1, ..., `notch_max`; нулевая строка — нули. При
+скорости между узлами — линейная интерполяция, вне сетки — крайнее значение. Положительная
+позиция выбирает тягу, отрицательная — торможение; значение позиции ограничивается
+`[-notch_max, notch_max]`.
+
+`drive.adhesion_accel_mps2` — положительная верхняя граница модуля ускорения привода по
+сцеплению (м/с²). `drive.traction_power_w_per_kg` — положительный предел удельной тяговой
+мощности `P/m` (Вт/кг = м²/с³): при `v > 0` тяга ограничена `P/(m*v)`, при `v = 0` этот
+предел не действует. Торможение ограничено сцеплением, но не тяговой мощностью. К результату
+привода отдельно применяется сопротивление `c0 + c1*v + c2*v²` из секции `resistance`.
+`types.load_params` отвергает неверную форму таблиц, отрицательные значения, неверную сетку
+и неположительные пределы до старта ноды.
 
 ## 4. Формат метрик `tools/eval`
 
@@ -182,3 +245,17 @@ branch,s_m,x_m,y_m,z_m
 `branch` — 0 — на запад, 1 — на восток; ≥ 2 — пути конечных (петля, пути отстоя), каждая ответвляется от другой ветки или вливается в неё, стык — ближайшая точка другой ветки (`tools/pathgraph/README.md`); номера веток ≥ 2 при перестроении карты могут меняться. `s_m` строго растёт внутри
 ветки; шаг ≤ 2 м. `z_m` — ENU up (м) в той же системе, что x/y: судья сравнивает x/y/z, высота на маршруте меняется на 28 м (D-024). Начало ENU карты — фиксированная точка, не зависит от прогона; перевод в
 frame `map` прогона — сдвиг в `position`. GNSS → ENU — только WGS84 ECEF → ENU от начала из заголовка (`tools/pathgraph/build_route.lla_to_enu`): сферическая равнопрямоугольная проекция расходится с ней на 12 м к западному концу маршрута (D-022).
+
+### Места остановок `maps/stops.csv` (D-034)
+
+```
+# stop places: ..., tools/pathgraph/build_stops.py
+branch,s_m,n_bags
+0,146.4,17
+```
+
+`branch`, `s_m` — место на карте `route.csv` (тот же `s`); `n_bags` — сколько train bag там
+останавливались (справочно, ядро не читает). Файл строит `tools/pathgraph/build_stops.py` из
+train, лежит рядом с `route.csv` и ставится в `share/tram_odometry/maps/` тем же `glob('maps/*.csv')`.
+Отсутствие файла — не ошибка (мест нет, привязки нет). Ключи `position.stop_*`, `position.scale_*`,
+`position.anchor_std_m` (`params.yaml`, §3) — часть контракта.

@@ -31,7 +31,9 @@ def test_run_writes_contract_json_and_tables(short_bags, tmp_path, capsys):
         assert set(METRIC_KEYS) | {'duration_s', 'distance_m', 'n_matched', 'crashed'} <= set(m)
         assert m['crashed'] is False
     assert set(res['summary']) == {'median', 'worst_bag'}
+    assert not any(bag.NOTES in m for m in res['bags'].values())      # format of §4 unchanged
     assert '**speed_rmse**' in out and short_bags[0] in out
+    assert 'NaN/inf (вне метрик): 0; t != stamp входа: 0' in out
 
     assert cli.main(args + ['--out', str(tmp_path / 'new'), '--compare',
                             str(tmp_path / 'base' / 'metrics.json')]) == 0
@@ -67,4 +69,18 @@ def test_entry_point_with_process_pool(tmp_path):
            '--out', str(tmp_path)] + [a for b in SHORT for a in ('--bag', b)]
     run = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=300)
     assert run.returncode == 0, run.stderr[-2000:]
-    assert set(json.loads((tmp_path / 'metrics.json').read_text(encoding='utf-8'))['bags']) == set(SHORT)
+    res = json.loads((tmp_path / 'metrics.json').read_text(encoding='utf-8'))
+    assert set(res['bags']) == set(SHORT)
+    assert not any(bag.NOTES in m for m in res['bags'].values())      # pool path keeps §4 format too
+
+
+def test_stress_writes_separate_diagnostics_without_changing_metrics_schema(short_bags, tmp_path, capsys):
+    out = tmp_path / 'stress'
+    assert cli.main(['--bag', short_bags[0], '--jobs', '1', '--stress', '--out', str(out)]) == 0
+    normal = json.loads((out / 'metrics.json').read_text(encoding='utf-8'))
+    stress = json.loads((out / 'stress.json').read_text(encoding='utf-8'))
+    assert set(normal) == {'commit', 'split', 'gnss_window_s', 'created', 'bags', 'summary'}
+    assert set(normal['bags'][short_bags[0]]) == set(METRIC_KEYS) | {'duration_s', 'distance_m', 'n_matched', 'crashed'}
+    assert set(stress['bags'][short_bags[0]]) == set(cli.SCENARIOS)
+    assert stress['bags'][short_bags[0]]['gap_70']['skipped'] is True
+    assert 'пик ошибки скорости, м/с' in capsys.readouterr().out

@@ -33,6 +33,7 @@ ROVER_FIX = '/sensing/gnss/rover/fix'
 MASTER_VEL = '/sensing/gnss/master/vel'
 INPUTS = (FRONT, REAR, CMD)
 GNSS = (MASTER_FIX, ROVER_FIX, MASTER_VEL)     # model inputs inside the window (contracts §1)
+NOTES = '_notes'   # per-bag counters for the CLI summary line; not part of metrics.json (§4)
 
 
 def main_checkout() -> Path:
@@ -118,11 +119,14 @@ def default_odometry():
     sys.path.insert(0, str(REPO / 'src' / 'tram_odometry_core'))
     try:
         from tram_odometry_core.pipeline import Odometry
-        from tram_odometry_core.types import load_params
+        from tram_odometry_core.types import load_params, load_route
     except ImportError as e:
         raise SystemExit(f'tram_odometry_core.pipeline is not available yet ({e}); '
                          'contract v1 #1 and baseline #3 must be in main') from e
-    return Odometry(load_params(str(PARAMS_YAML)))
+    params = load_params(str(PARAMS_YAML))
+    # the same map the node installs to share/tram_odometry/maps (contract §5)
+    route = load_route(str(REPO / 'src' / 'tram_odometry' / 'maps' / params.position.map_file))
+    return Odometry(params, route=route)
 
 
 def reference_inputs(msgs):
@@ -195,5 +199,7 @@ def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None
         print(f'{name}: {mismatch} estimates with t != input stamp (contract §1, D-015)', file=sys.stderr)
     if nonfinite:
         print(f'{name}: {nonfinite} non-finite estimates (NaN/inf) left out of the metrics', file=sys.stderr)
-    return {k: (None if isinstance(v, float) and not math.isfinite(v) else
-                round(v, 4) if isinstance(v, float) else v) for k, v in m.items()}
+    m = {k: (None if isinstance(v, float) and not math.isfinite(v) else
+             round(v, 4) if isinstance(v, float) else v) for k, v in m.items()}
+    m[NOTES] = {'nonfinite': nonfinite, 'stamp_mismatch': int(mismatch)}
+    return m

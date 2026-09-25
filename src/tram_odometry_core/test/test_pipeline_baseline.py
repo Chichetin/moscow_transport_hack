@@ -88,12 +88,24 @@ def test_silent_bogie_speed_from_the_other_one():
     assert est.speed == pytest.approx(20.0)
 
 
-def test_both_silent_holds_last_speed_and_keeps_moving():
+def test_both_silent_coasts_on_the_drive_model_and_keeps_moving():
     odo = Odometry(PARAMS)
     init_east(odo)
     drive(odo, 1.0, 3.0, KMH_36)
     d0 = odo.step(wheel(FRONT, 3.05, KMH_36)).distance
     est = odo.step(cmd(10.0, 0))                      # only the controller talks for 7 s
+    # neutral: the model coasts against drag (#10); the speed is held only without the model
+    assert est.speed == pytest.approx(10.0 - PARAMS.resistance.c0 * (10.0 - 3.05), abs=1e-6)
+    assert est.distance > d0 + 50.0
+
+
+def test_both_silent_holds_last_speed_without_the_model():
+    from dataclasses import replace
+    odo = Odometry(replace(PARAMS, drive=replace(PARAMS.drive, use_model=False)))
+    init_east(odo)
+    drive(odo, 1.0, 3.0, KMH_36)
+    d0 = odo.step(wheel(FRONT, 3.05, KMH_36)).distance
+    est = odo.step(cmd(10.0, 0))
     assert est.speed == pytest.approx(10.0)
     assert est.distance > d0 + 50.0
 
@@ -172,3 +184,18 @@ def test_gnss_vel_without_valid_fix_is_ignored():
     odo.step(gnss_vel(0.2, 0.0, 8.0))
     est = odo.step(wheel(FRONT, 0.3, KMH_36))
     assert not est.gnss_used and est.yaw == 0.0
+
+
+def test_stuck_rear_bogie_does_not_halve_the_speed():
+    odo = Odometry(PARAMS)
+    init_east(odo)
+    drive(odo, 1.0, 5.0, KMH_36)
+    est = None
+    for k in range(200):                         # rear reads 0 while the front runs at 10 m/s
+        t = 5.1 + k * 0.1
+        odo.step(wheel(REAR, t, 0.0))
+        est = odo.step(wheel(FRONT, t, KMH_36))
+    assert est.speed == pytest.approx(10.0, abs=0.1)
+    assert est.slip.slip_rear and not est.slip.slip_front
+    back = odo.step(wheel(REAR, est.t + 0.1, KMH_36))          # the sensor recovers
+    assert back.slip.rear_trust == 1.0 and back.speed == pytest.approx(10.0, abs=0.1)
