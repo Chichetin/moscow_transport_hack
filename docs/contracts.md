@@ -129,7 +129,7 @@ class Branch:                 # одна направленная ветка map
 class Route:
     origin: tuple[float, float, float]    # lat °, lon °, alt м — начало ENU карты
     branches: tuple[Branch, ...]          # в порядке файла: индекс = `branch`
-    stops: tuple[tuple[int, float], ...] = ()   # (branch, s) места остановок, `maps/stops.csv` (§5), D-033
+    stops: tuple[tuple[int, float], ...] = ()   # (branch, s) места остановок, `maps/stops.csv` (§5), D-034
 ```
 
 `load_route(path) -> Route` в `types.py` — единственное место, где читается `route.csv` (и `stops.csv` рядом с ним, если он есть)
@@ -246,7 +246,7 @@ branch,s_m,x_m,y_m,z_m
 ветки; шаг ≤ 2 м. `z_m` — ENU up (м) в той же системе, что x/y: судья сравнивает x/y/z, высота на маршруте меняется на 28 м (D-024). Начало ENU карты — фиксированная точка, не зависит от прогона; перевод в
 frame `map` прогона — сдвиг в `position`. GNSS → ENU — только WGS84 ECEF → ENU от начала из заголовка (`tools/pathgraph/build_route.lla_to_enu`): сферическая равнопрямоугольная проекция расходится с ней на 12 м к западному концу маршрута (D-022).
 
-### Места остановок `maps/stops.csv` (D-033)
+### Места остановок `maps/stops.csv` (D-034)
 
 ```
 # stop places: ..., tools/pathgraph/build_stops.py

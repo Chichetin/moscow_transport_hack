@@ -1,4 +1,4 @@
-# Holdout: привязка к остановкам (#56, PR #63, D-033), base vs head
+# Holdout: привязка к остановкам (#56, PR #63, D-034), base vs head
 
 - base: `5822740` (origin/main), head: `03a7064` (worktree-56-stop-snap); Linux, нативный `.venv`, набор `--split holdout` (26 bag, окно GNSS 5 с); стенд и stress не запускались
 

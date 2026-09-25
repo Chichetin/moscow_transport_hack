@@ -9,7 +9,7 @@ along its branch (trams here are single-ended): s = s_anchor + distance - distan
 continuing onto the next branch at the end. x, y, z and yaw come from the branch at s, z is
 shifted by the run's median height offset from the map in the window.
 
-Stop places (D-033): a stop of the tram (the pipeline detects it) close to a stop place of the
+Stop places (D-034): a stop of the tram (the pipeline detects it) close to a stop place of the
 map moves s to that place, weighted by the variances, and resets the along-track variance.
 Between two snaps on one branch the ratio of map arc to wheel path updates a slow online wheel
 scale. Both use the map only, never GNSS after the window.
