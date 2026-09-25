@@ -98,6 +98,13 @@ class SlipState:
     adhesion_est: float | None
 
 @dataclass(frozen=True)
+class FilterDiagnostics:
+    t: float
+    bogie: Literal['front', 'rear']
+    nis: float
+    accepted: bool
+
+@dataclass(frozen=True)
 class Estimate:
     t: float                  # = t входа, вызвавшего обновление
     speed: float              # м/с, >= 0
@@ -111,6 +118,7 @@ class Estimate:
     pos_cov: tuple[float, float, float]   # var_x, var_y, cov_xy
     slip: SlipState
     gnss_used: bool
+    filter_diagnostics: FilterDiagnostics | None = None  # NIS нового измерения тележки
 
 @dataclass(frozen=True)
 class Branch:                 # одна направленная ветка maps/route.csv (§5), массивы numpy (N,)
@@ -127,6 +135,12 @@ class Route:
 (как `load_params` для yaml). Нода берёт файл из `share/tram_odometry/maps/<position.map_file>`,
 `tools/eval` — из `src/tram_odometry/maps/` того же worktree; оба передают его в `Odometry(params, route=)`.
 
+`FilterDiagnostics(t, bogie, nis, accepted)` — неизменяемая запись нового измерения:
+`t` — stamp, `bogie` — `front`/`rear`, `nis` — квадрат инновации, делённый на её
+дисперсию (безразмерно), `accepted` — прошло ли измерение порог. На входе
+контроллера и без нового измерения `Estimate.filter_diagnostics` равен `None`.
+Обязательные ROS-топики и формат `metrics.json` не меняются.
+
 Модули и их публичные функции (одна `area:` — один модуль):
 
 | Модуль | Публичное | Контракт поведения |
@@ -134,7 +148,7 @@ class Route:
 | `preprocess` | `Preprocessor(params).accept(raw) -> Sample \| None` | `raw` — сырой вход: пара `(topic, ROS-сообщение)` (км/ч, notch как есть; поля сообщения — как в ROS, у bag и rclpy одинаковые); возвращает нормализованный `Sample` или `None` (выброс, NaN, stamp из прошлого сверх допуска, GNSS вне окна) |
 | `dynamics` | `model_accel(notch: int, speed: float, params) -> float` | чистая функция, м/с²; без состояния |
 | `slip` | `SlipDetector(params).update(front, rear, accel_model, est) -> SlipState` | `front`/`rear` — последний `WheelSample` или `None` (молчит); `est` — сглаженная скорость фильтра, м/с, до этого обновления (`None`, пока её нет); `accel_model` — м/с². Возвращает доверие 0..1 и флаги «тележке не доверяем» (аномалия или отказ), D-027 |
-| `estimator` | `SpeedFilter(params).predict(t, accel_model)`, `.update(sample: WheelSample, trust: float)`, `.state() -> (speed, speed_var, accel)` | монотонное время внутри; `t` меньше текущего — без отката |
+| `estimator` | `SpeedFilter(params).predict(t, accel_model)`, `.update(sample: WheelSample, trust: float)`, `.state() -> (speed, speed_var, accel)`, `.diagnostics() -> FilterDiagnostics \| None` | монотонное время внутри; запоздалое измерение допускается без отката до `input.stale_timeout_s`, более старое отбрасывается; диагностика относится только к новому измерению тележки |
 | `position` | `PathTracker(params, route)`; `.on_fix(lat, lon, alt, status, distance)` — каждый fix master в окне `gnss.init_window_s`; `.ready -> bool`; `.advance(distance) -> (x, y, z, yaw, pos_cov) \| None` | frame `map` прогона — ENU первого fix статуса 2 (иначе первого валидного), как эталон `tools/eval`; карта переводится в него один раз через ECEF; якорь — ближайшая точка ближайшей ветки по последнему fix окна; дальше только вперёд по дуге `s = s₀ + distance − distance₀`, конец ветки продолжается на ближайшей ветке не дальше `position.join_m`; `pos_cov` — `cross_std_m` поперёк, вдоль растёт как `along_drift_frac · путь`; fix окна дальше `position.fix_gate_m` от карты (в ENU карты) — выброс, не участвует ни в начале frame, ни в якоре, ни в высоте; до первого принятого fix `advance` даёт `None`: pipeline публикует прямую D-021 (начало — первый fix, курс — по GNSS vel окна), `z = 0` |
 | `pipeline` | `Odometry(params, route=None).step(raw) -> Estimate \| None` | единственная точка, которую зовут нода и `tools/eval`; `None` — вход отброшен, публиковать нечего |
 
@@ -151,6 +165,18 @@ class Route:
 записанные комментарием у каждого ключа. Значения меняются обычным PR с таблицей метрик.
 Новый ключ — тоже контракт (ядро и нода читают его одинаково). Пустые списки `[]` запрещены:
 ROS 2 не выводит их тип и нода не стартует.
+
+### Шумы фильтра и NIS (D-032)
+
+`filter.q_accel` — спектральная плотность белого шума ускорения, единицы
+`(м/с²)²·с`: добавка к дисперсии скорости за `dt` равна `q_accel·dt`.
+`filter.r_wheel` — дисперсия скорости одной исправной тележки, `(м/с)²`;
+при доверии `trust > 0` эффективная дисперсия измерения равна `r_wheel/trust`.
+`filter.q_bias` — спектральная плотность случайного хода медленного смещения
+ускорения, `(м/с²)²/с`; `filter.initial_bias_var` — его начальная дисперсия,
+`(м/с²)²`. `filter.nis_gate` — безразмерный включительный порог NIS; при NIS
+выше него измерение не обновляет состояние. Принятые и отвергнутые измерения
+дают отдельную запись `FilterDiagnostics`.
 
 ### Таблицы привода (D-029)
 
