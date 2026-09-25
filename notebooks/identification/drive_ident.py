@@ -1,6 +1,6 @@
 """Identification of the drive model (issue #9): pure functions over per-bag samples.
 
-Model identified here (D-029 schema, D-030):
+Model identified here (D-029 schema, D-032):
     a = sign(n) * A(|n|, v) - (c0 + c1 v + c2 v^2) - g * grade,   n = notch(t - delay)
     A = traction table for n > 0 (capped by adhesion and P/(m v)), brake table for n < 0.
 The grade term is removed from the training targets with GNSS altitude (offline only, train

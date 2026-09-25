@@ -25,14 +25,14 @@ def true_params(power=9.0, adhesion=1.3):
             'adhesion_accel_mps2': adhesion, 'traction_power_w_per_kg': power, 'c': C_TRUE}
 
 
-def synthetic_bag(p, delay, seconds=3000.0, grade_amp=0.02, noise=0.0, seed=0):
+def synthetic_bag(p, delay, seconds=3000.0, grade_amp=0.02, noise=0.0, seed=0, grade_const=0.0):
     """A tram driven by random notch steps through the true model with a known delay and grade."""
     rng = np.random.default_rng(seed)
     t = np.arange(0.0, seconds, di.DT)
     cmd_t = np.arange(0.0, seconds, 0.05)
     steps = np.repeat(rng.integers(-8, 16, size=len(cmd_t) // 100 + 1), 100)[:len(cmd_t)]
     notch = di.notch_at(cmd_t, steps, t - di.DT / 2 - delay)     # at the middle of step k-1 -> k
-    grade = grade_amp * np.sin(t / 60.0)
+    grade = grade_const + grade_amp * np.sin(t / 60.0)
     v = np.empty(len(t))
     v[0] = 5.0
     for k in range(1, len(t)):
@@ -99,7 +99,7 @@ def test_grade_from_a_linear_ramp():
 def test_identify_recovers_delay_resistance_and_tables():
     p = true_params()
     bags = [synthetic_bag(p, delay=0.5, seed=s) for s in range(3)]
-    res = ident.identify(bags)
+    res = ident.identify(bags, use_grade=True)
     assert res['delay_s'] == pytest.approx(0.5, abs=di.DT)       # resolution of the 10 Hz grid
     assert res['params']['c'] == pytest.approx(C_TRUE, abs=5e-3)
     notches = np.arange(ident.NOTCH_MAX + 1)[:, None]
@@ -111,6 +111,19 @@ def test_identify_recovers_delay_resistance_and_tables():
     br = np.array(res['params']['brake_accel_table']).reshape(ident.NOTCH_MAX + 1, -1)
     err = np.abs(br - 0.1 * notches)[1:9, cols]                   # brake notches -1..-8 were driven
     assert np.median(err) < 0.015 and err.max() < 0.08
+
+
+def test_default_fit_ignores_grade_and_absorbs_a_constant_slope():
+    # the contract model_accel(notch, v) has no grade: by default the fit does not use it, so a
+    # constant uphill of 1 % shows up as extra resistance g * 0.01; with --grade it is removed
+    p = true_params()
+    bags = [synthetic_bag(p, delay=0.3, seed=s, grade_amp=0.0, grade_const=0.01) for s in range(2)]
+    c_grade = ident.identify(bags, use_grade=True)['params']['c']
+    assert c_grade == pytest.approx(C_TRUE, abs=5e-3)
+    for b in bags:
+        b.grade[:] = np.nan                                        # without any GNSS grade...
+    c0 = ident.identify(bags)['params']['c']                       # ...the default fit still runs
+    assert di.resistance(5.0, c0) == pytest.approx(di.resistance(5.0, C_TRUE) + di.G * 0.01, abs=0.01)
 
 
 def test_model_beats_constant_speed_on_windows():
@@ -141,6 +154,22 @@ def test_extract_converts_units_and_accel():
     assert np.nanmedian(s.a) == pytest.approx(1.0, abs=0.01)
     assert np.isnan(s.grade).all() and np.isnan(s.ratio_front)       # no GNSS
     assert s.valid.all() and set(s.cmd_n) == {7}
+
+
+def test_check_split_is_never_fitted(monkeypatch, tmp_path):
+    # D-011: the check split (holdout) goes only to validate(), never to identify()
+    p = true_params()
+    train = [synthetic_bag(p, delay=0.3, seconds=600.0, seed=s) for s in range(2)]
+    check = [synthetic_bag(p, delay=0.3, seconds=600.0, seed=9)]
+    check[0].name = 'check'
+    monkeypatch.setattr(ident, 'load_split', lambda split, jobs: check if split == 'holdout' else train)
+    monkeypatch.setattr(di.evbag, 'out_dir', lambda: tmp_path)
+    fitted = []
+    real_identify = ident.identify
+    monkeypatch.setattr(ident, 'identify',
+                        lambda bags, **kw: fitted.extend(b.name for b in bags) or real_identify(bags, **kw))
+    assert ident.main(['--check-split', 'holdout', '--no-plots', '--jobs', '1']) == 0
+    assert fitted and 'check' not in fitted
 
 
 def test_written_params_pass_the_contract(tmp_path):

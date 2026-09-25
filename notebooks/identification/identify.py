@@ -1,4 +1,4 @@
-"""Drive model identification on train bags (issue #9, D-030).
+"""Drive model identification on train bags (issue #9, D-032; table schema D-029).
 
     .venv/bin/python notebooks/identification/identify.py                  # report + figures
     .venv/bin/python notebooks/identification/identify.py --write-params   # + params.yaml
@@ -68,10 +68,10 @@ def true_speed(b, fallback_ratio):
     return b.v * k, b.a * k
 
 
-def pooled(bags, fallback_ratio, delay):
+def pooled(bags, fallback_ratio, delay, need_grade=True):
     v, a, g, n, coast = [], [], [], [], []
     for b in bags:
-        ok = di.usable(b)
+        ok = di.usable(b, need_grade)
         if not ok.any():
             continue
         vb, ab = true_speed(b, fallback_ratio)
@@ -84,19 +84,27 @@ def pooled(bags, fallback_ratio, delay):
             np.concatenate(coast))
 
 
-def explained(v, y, n):
-    """Share of variance of y explained by the mean in (notch, 1 m/s speed bin) cells."""
+def _cell_residual(v, y, n):
+    """y minus its mean in (notch, 1 m/s speed bin) cells."""
     key = (n + 64) * 64 + np.clip(v.astype(int), 0, 63)
     _, inv, cnt = np.unique(key, return_inverse=True, return_counts=True)
-    mean = np.bincount(inv, weights=y) / cnt
-    return float(1 - np.var(y - mean[inv]) / np.var(y))
+    return y - (np.bincount(inv, weights=y) / cnt)[inv]
 
 
-def fit_delay(bags, fallback_ratio):
+def explained(v, y, n):
+    """Share of variance of y explained by the mean in (notch, 1 m/s speed bin) cells."""
+    return float(1 - np.var(_cell_residual(v, y, n)) / np.var(y))
+
+
+def cell_resid_std(v, y, n):
+    return float(np.std(_cell_residual(v, y, n)))
+
+
+def fit_delay(bags, fallback_ratio, use_grade=False):
     scores = []
     for d in DELAYS:
-        v, a, g, n, _ = pooled(bags, fallback_ratio, d)
-        scores.append(explained(v, a + di.G * g, n))
+        v, a, g, n, _ = pooled(bags, fallback_ratio, d, need_grade=use_grade)
+        scores.append(explained(v, a + di.G * g if use_grade else a, n))
     # the 10 Hz grid resolves the delay only to DT: equal scores form a plateau, take its middle
     scores = np.asarray(scores)
     top = DELAYS[scores >= scores.max() - DELAY_TIE]
@@ -116,13 +124,15 @@ def fit_tables(v, y, n, grid):
     return di.fill_monotone(trac), di.fill_monotone(brake), counts
 
 
-def identify(bags):
+def identify(bags, use_grade=False):
     grid = np.asarray(SPEED_GRID)
     scales = wheel_scales(bags)
     fallback = float(np.mean([scales['front']['ratio_median'], scales['rear']['ratio_median']]))
-    delay, delay_scores = fit_delay(bags, fallback)
-    v, a, g, n, coast = pooled(bags, fallback, delay)
-    y_ng = a + di.G * g                                  # accel with the grade removed
+    delay, delay_scores = fit_delay(bags, fallback, use_grade)
+    v, a, g, n, coast = pooled(bags, fallback, delay, need_grade=use_grade)
+    # use_grade: targets without the grade, for a model that gets the grade online (map z);
+    # default (the contract model_accel(notch, v) has no grade): tables absorb the mean grade
+    y_ng = a + di.G * g if use_grade else a
     c = di.fit_resistance(v[coast & (v > 1.0)], y_ng[coast & (v > 1.0)])
     y = y_ng + di.resistance(v, c)                       # = sign(n) A(|n|, v)
     trac, brake, counts = fit_tables(v, y, n, grid)
@@ -143,8 +153,12 @@ def identify(bags):
              'accel_residual_by_mode': {m: float(np.std(resid[s])) for m, s in
                                         (('traction', n > 0), ('coast', n == 0), ('brake', n < 0))}}
     return {'params': p, 'wheel': scales, 'delay_s': delay, 'delay_scores': delay_scores,
-            'n_samples': int(len(v)), 'n_coast': int((coast & (v > 1.0)).sum()), 'notch_counts': counts,
-            'explained_notch_speed': explained(v, y_ng, n), 'noise': noise,
+            'n_samples': int(len(v)), 'n_bags': len(bags), 'n_coast': int((coast & (v > 1.0)).sum()), 'notch_counts': counts,
+            'use_grade': use_grade,
+            'cell_resid_std': {'grade_removed': cell_resid_std(v[np.isfinite(g)], (a + di.G * g)[np.isfinite(g)], n[np.isfinite(g)])
+                               if np.isfinite(g).any() else None,
+                               'no_grade': cell_resid_std(v, a, n)},
+            'noise': noise,
             'abs_drive_accel_p999': tail}
 
 
@@ -196,8 +210,9 @@ def plots(res, bags, fallback_ratio):
     import matplotlib.pyplot as plt
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     p, grid = res['params'], np.asarray(SPEED_GRID)
-    v, a, g, n, coast = pooled(bags, fallback_ratio, res['delay_s'])
-    y = a + di.G * g + di.resistance(v, p['c'])
+    v, a, g, n, coast = pooled(bags, fallback_ratio, res['delay_s'], need_grade=res['use_grade'])
+    a_fit = a + di.G * g if res['use_grade'] else a       # the same target as the fit
+    y = a_fit + di.resistance(v, p['c'])
     fig, axes = plt.subplots(1, 2, figsize=(13, 5), sharey=True)
     vv = np.linspace(0, 16, 161)
     cmap = plt.get_cmap('viridis')
@@ -225,12 +240,12 @@ def plots(res, bags, fallback_ratio):
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
     s = coast & (v > 1.0)
-    ax.plot(v[s][::5], -(a + di.G * g)[s][::5], '.', ms=1.5, alpha=0.3, label='выбег, train (каждая 5-я точка)')
+    ax.plot(v[s][::5], -a_fit[s][::5], '.', ms=1.5, alpha=0.3, label='выбег, train (каждая 5-я точка)')
     ax.plot(vv, di.resistance(vv, p['c']), 'r', lw=2,
             label='c0 + c1 v + c2 v² = %.4f + %.5f v + %.6f v²' % p['c'])
     ax.set_ylim(-0.4, 0.4)
     ax.set_xlabel('скорость, м/с')
-    ax.set_ylabel('замедление без уклона, м/с²')
+    ax.set_ylabel('замедление на выбеге' + (' без уклона' if res['use_grade'] else '') + ', м/с²')
     ax.grid(alpha=0.3)
     ax.legend(fontsize=8)
     fig.tight_layout()
@@ -251,18 +266,24 @@ def md_report(res, val, check):
              f"| предел сцепления `adhesion_accel_mps2` = максимум таблиц | {p['adhesion_accel_mps2']} м/с² "
              f"(хвост p99,9 \\|a\\| в данных {res['abs_drive_accel_p999']:.2f} — шум и юз) |",
              f"| удельная мощность `traction_power_w_per_kg` | {p['traction_power_w_per_kg']} Вт/кг |",
-             f"| доля дисперсии ускорения (без уклона), объяснённая ячейкой notch × v | {res['explained_notch_speed']:.3f} |",
-             f"| std невязки ускорения: всё / тяга / выбег / торможение | {res['noise']['accel_residual_std_mps2']:.3f} / "
+             f"| подгонка | {'уклон вычтен из целей (--grade)' if res['use_grade'] else 'без уклона: таблицы впитывают средний уклон'} |",
+             f"| std ускорения вокруг среднего ячейки позиция × v: без уклона / уклон вычтен | "
+             f"{res['cell_resid_std']['no_grade']:.3f} / {res['cell_resid_std']['grade_removed']:.3f} м/с² |",
+             f"| bag: всего / с отношением колесо/GNSS | {res['n_bags']} / {res['wheel']['front']['bags']} |",
+             f"| std невязки модели: всё / тяга / выбег / торможение | {res['noise']['accel_residual_std_mps2']:.3f} / "
              + ' / '.join(f"{res['noise']['accel_residual_by_mode'][m]:.3f}" for m in ('traction', 'coast', 'brake')) + ' м/с² |',
              f"| std (перед − зад) без проскальзывания | {res['noise']['front_minus_rear_std_mps']:.3f} м/с |",
-             '', 'Приёмка: окна 10 с, шаг 5 с, интегрирование модели от измеренной скорости; RMSE скорости в окне, м/с',
-             '', '| Набор | уклон | окон | модель, медиана | модель, среднее | модель, p90 | a = 0, медиана | a = 0, среднее | модель лучше, доля окон |',
+             '', 'Приёмка: окна 10 с, шаг 5 с, интегрирование модели от измеренной скорости; RMSE скорости в окне, м/с.',
+             'Подгонка — таблицы с уклоном в целях или без; симуляция — уклон из GNSS bag подаётся в модель или нет.',
+             '', '| Набор | подгонка | симуляция | окон | модель, медиана | модель, среднее | модель, p90 | a = 0, медиана | модель лучше, доля окон |',
              '|---|---|---|---|---|---|---|---|---|']
-    for split, rows in (('train', val),) + ((('holdout (проверка)', check),) if check else ()):
-        for k, r in rows.items():
-            lines.append(f"| {split} | {'из GNSS' if k == 'with_grade' else 'нет'} | {r['windows']} | {r['model_rmse_median']:.3f} | "
-                         f"{r['model_rmse_mean']:.3f} | {r['model_rmse_p90']:.3f} | {r['zero_rmse_median']:.3f} | "
-                         f"{r['zero_rmse_mean']:.3f} | {r['model_better_share']:.2f} |")
+    for split, fits in (('train', val),) + ((('holdout (проверка)', check),) if check else ()):
+        for fit, rows in fits.items():
+            for k, r in rows.items():
+                lines.append(f"| {split} | {'с уклоном' if fit == 'grade' else 'без уклона'} | "
+                             f"{'уклон из GNSS' if k == 'with_grade' else 'без уклона'} | {r['windows']} | "
+                             f"{r['model_rmse_median']:.3f} | {r['model_rmse_mean']:.3f} | {r['model_rmse_p90']:.3f} | "
+                             f"{r['zero_rmse_median']:.3f} | {r['model_better_share']:.2f} |")
     return '\n'.join(lines)
 
 
@@ -273,22 +294,26 @@ def main(argv=None):
     ap.add_argument('--jobs', type=int, default=max(1, min(8, (os.cpu_count() or 2) - 1)))
     ap.add_argument('--write-params', action='store_true')
     ap.add_argument('--no-plots', action='store_true')
+    ap.add_argument('--grade', action='store_true',
+                    help='писать таблицы с уклоном, вычтенным из целей (для модели, получающей уклон онлайн)')
     args = ap.parse_args(argv)
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
     bags = [b for b in load_split(args.split, args.jobs) if len(b.t)]
-    res = identify(bags)
+    fits = {'no_grade': identify(bags, use_grade=False), 'grade': identify(bags, use_grade=True)}
+    res = fits['grade' if args.grade else 'no_grade']
     fallback = float(np.mean([res['wheel']['front']['ratio_median'], res['wheel']['rear']['ratio_median']]))
-    val = validate(bags, res['params'], res['delay_s'], fallback)
+    val = {k: validate(bags, f['params'], f['delay_s'], fallback) for k, f in fits.items()}
     check = None
     if args.check_split:
         cb = [b for b in load_split(args.check_split, args.jobs) if len(b.t)]
-        check = validate(cb, res['params'], res['delay_s'], fallback)
+        check = {k: validate(cb, f['params'], f['delay_s'], fallback) for k, f in fits.items()}
     commit = subprocess.run(['git', '-C', str(di.REPO), 'rev-parse', '--short', 'HEAD'],
                             capture_output=True, text=True).stdout.strip() or 'nogit'
     out = di.evbag.out_dir() / 'ident' / commit
     out.mkdir(parents=True, exist_ok=True)
     (out / 'ident.json').write_text(json.dumps({'split': args.split, 'bags': len(bags), **res,
+                                                'alternative': fits['no_grade' if args.grade else 'grade'],
                                                 'validation': val, 'check': check},
                                                ensure_ascii=False, indent=1, default=list), encoding='utf-8')
     if not args.no_plots:
