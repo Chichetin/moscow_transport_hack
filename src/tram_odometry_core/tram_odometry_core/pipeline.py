@@ -8,17 +8,9 @@ import math
 from typing import Any, Optional
 
 from .position import PathTracker
+from .preprocess import Preprocessor
 from .slip import SlipDetector
-from .types import Estimate, Params, SlipState, WheelSample
-
-FRONT_TOPIC = '/vehicle/front_bogie_velocity'
-REAR_TOPIC = '/vehicle/rear_bogie_velocity'
-CMD_TOPIC = '/vehicle/driver_position_cmd'
-
-
-def _stamp(msg) -> float:
-    s = msg.header.stamp
-    return s.sec + s.nanosec * 1e-9
+from .types import CommandSample, Estimate, GnssFix, GnssVel, Params, SlipState, WheelSample
 
 
 class Odometry:
@@ -27,12 +19,12 @@ class Odometry:
     def __init__(self, params: Params, route=None):
         self.params = params
         self.route = route
+        self._preprocess = Preprocessor(params)
         self._tracker = (PathTracker(params, route)
                          if route is not None and params.position.use_map else None)
-        self._t0: Optional[float] = None      # stamp of the first input
+        self._t0: Optional[float] = None      # stamp of the first input (from preprocess)
         self._t: Optional[float] = None       # newest stamp seen; the state is at this time
-        self._last = {}                       # stream topic -> newest accepted stamp
-        self._wheel = {FRONT_TOPIC: None, REAR_TOPIC: None}   # last WheelSample per bogie, m/s
+        self._wheel = {'front': None, 'rear': None}   # last WheelSample per bogie, m/s
         self._slip = SlipDetector(params)
         self._slip_state = SlipState(1.0, 1.0, False, False, None)
         self._v = 0.0                         # current speed, m/s
@@ -48,51 +40,24 @@ class Odometry:
     def step(self, raw: Any) -> Optional[Estimate]:
         """Consume one raw input; None means the input was dropped, nothing to publish."""
         try:
-            topic, msg = raw
-            t = _stamp(msg)
-            if not math.isfinite(t):
-                return None
-            if self._t0 is None:
-                self._t0 = t
-            if topic == FRONT_TOPIC or topic == REAR_TOPIC:
-                return self._on_wheel(topic, t, msg.velocity)
-            if topic == CMD_TOPIC:
-                return self._on_stream(topic, t)
-            if topic == self.params.gnss.topic_fix:
-                self._on_fix(t, msg)
-            elif topic == self.params.gnss.topic_vel:
-                self._on_vel(t, msg)
+            sample = self._preprocess.accept(raw)
+            self._t0 = self._preprocess.t0
+            if isinstance(sample, WheelSample):
+                self._wheel[sample.bogie] = sample
+                return self._advance(sample.t)
+            if isinstance(sample, CommandSample):
+                return self._advance(sample.t)
+            if isinstance(sample, GnssFix):
+                self._on_fix(sample)
+            elif isinstance(sample, GnssVel):
+                self._on_vel(sample)
             return None
         except (TypeError, ValueError, AttributeError):
             return None
 
-    def _fresh(self, topic: str, t: float) -> bool:
-        """Accept a stream sample only if its stamp is newer than the stream's last one."""
-        if t <= self._last.get(topic, -math.inf):
-            return False
-        self._last[topic] = t
-        return True
-
-    def _on_wheel(self, topic: str, t: float, kmh) -> Optional[Estimate]:
-        p = self.params
-        if not (isinstance(kmh, (int, float)) and math.isfinite(kmh)) or kmh < 0.0:
-            return None
-        if not self._fresh(topic, t):
-            return None
-        scale = p.vehicle.wheel_scale_front if topic == FRONT_TOPIC else p.vehicle.wheel_scale_rear
-        self._wheel[topic] = WheelSample(                              # the only km/h -> m/s
-            t=t, bogie='front' if topic == FRONT_TOPIC else 'rear',
-            speed=kmh * p.input.wheel_speed_scale * scale)
-        return self._advance(t)
-
-    def _on_stream(self, topic: str, t: float) -> Optional[Estimate]:
-        if not self._fresh(topic, t):
-            return None
-        return self._advance(t)
-
     def _advance(self, t: float) -> Estimate:
         now = t if self._t is None else max(self._t, t)
-        front, rear = self._wheel[FRONT_TOPIC], self._wheel[REAR_TOPIC]
+        front, rear = self._wheel['front'], self._wheel['rear']
         est = self._v if self._t is not None else None
         st = self._slip.update(front, rear, 0.0, est)    # no drive model yet: accel_model = 0
         self._slip_state = st
@@ -137,26 +102,20 @@ class Odometry:
             pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used)
 
-    def _in_window(self, t: float) -> bool:
-        return t - self._t0 <= self.params.gnss.init_window_s
-
-    def _on_fix(self, t: float, msg) -> None:
+    def _on_fix(self, sample: GnssFix) -> None:
         # the origin of frame `map` is the first valid fix, so the start is (0, 0)
-        if self._in_window(t) and msg.status.status >= 0:
+        if sample.status >= 0:
             self._fix_ok = True
             if self._tracker is not None:
-                self._tracker.on_fix(msg.latitude, msg.longitude, msg.altitude,
-                                     msg.status.status, self._distance)
+                self._tracker.on_fix(sample.lat, sample.lon, sample.alt,
+                                     sample.status, self._distance)
                 self._gnss_used = self._gnss_used or self._tracker.ready
 
-    def _on_vel(self, t: float, msg) -> None:
-        if not (self._fix_ok and self._in_window(t)):
+    def _on_vel(self, sample: GnssVel) -> None:
+        if not self._fix_ok:
             return
-        ve, vn = msg.twist.linear.x, msg.twist.linear.y
-        if not (math.isfinite(ve) and math.isfinite(vn)):
-            return
-        speed = math.hypot(ve, vn)
+        speed = math.hypot(sample.ve, sample.vn)
         if speed > self._vel_best:      # heading is only defined while moving
             self._vel_best = speed
-            self._yaw = math.atan2(vn, ve)
+            self._yaw = math.atan2(sample.vn, sample.ve)
             self._gnss_used = True

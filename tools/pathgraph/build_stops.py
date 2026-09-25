@@ -1,4 +1,4 @@
-"""Build the stop places src/tram_odometry/maps/stops.csv from GNSS master of train bags (D-031).
+"""Build the stop places src/tram_odometry/maps/stops.csv from GNSS master of train bags (D-032).
 
 Usage:
     .venv/bin/python tools/pathgraph/build_stops.py [--data $TRAM_DATA_DIR] [--route <route.csv>] [--out <stops.csv>]
