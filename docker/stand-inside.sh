@@ -2,7 +2,7 @@
 # Выполняется внутри контейнера стенда (docker/jury-stand.sh). Не запускать на хосте.
 set -o pipefail  # без -u: setup.bash ROS обращается к неопределённым переменным
 source /opt/ros/humble/setup.bash
-mkdir -p /ws && cp -r /src /ws/src && cd /ws
+mkdir -p /tmp/ws && cp -r /src /tmp/ws/src && cd /tmp/ws
 echo "== colcon build (сеть отключена)"
 colcon build --event-handlers console_cohesion+ > /out/build.log 2>&1
 status=$?; tail -3 /out/build.log
