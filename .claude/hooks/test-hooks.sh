@@ -99,7 +99,8 @@ case "$1 $2" in
   "issue list") cat <<'JSON'
 [{"number":3,"title":"Детектор проскальзывания","assignees":[{"login":"me"}],"labels":[{"name":"area:core-slip"}]},
  {"number":5,"title":"Модель привода","assignees":[{"login":"alice"}],"labels":[{"name":"area:core-dynamics"}]},
- {"number":7,"title":"Никем не взята","assignees":[],"labels":[{"name":"area:eval"}]}]
+ {"number":7,"title":"Никем не взята","assignees":[],"labels":[{"name":"area:eval"}]},
+ {"number":9,"title":"colcon падает на дубликате","assignees":[],"labels":[{"name":"blocker"},{"name":"human"}]}]
 JSON
   ;;
 esac
@@ -110,6 +111,8 @@ expect_out has   "основная копия на main — предупрежд
 expect_out has   "мои issues видны"                         "#3 Детектор проскальзывания"
 expect_out has   "занятая другим area видна"                "area:core-dynamics: #5 alice"
 expect_out lacks "свободная issue не считается занятой"     "area:eval"
+expect_out has   "открытый blocker виден всем"              "#9 colcon падает на дубликате"
+expect_out lacks "обычная issue не считается blocker"       "#7 Никем не взята"
 GH_FAIL=1 expect_out has "gh без авторизации — предупреждение, без падения" "gh не авторизован"
 git worktree add -q .claude/worktrees/wt-test -b worktree-wt-test 2>/dev/null
 (cd .claude/worktrees/wt-test && expect_out lacks "worktree — без предупреждения" "основной копии")
