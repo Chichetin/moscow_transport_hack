@@ -55,7 +55,9 @@ issue соседней `area:`). Владельца у контракта нет
 ## 2. Ядро `tram_odometry_core`
 
 Время везде — секунды `float` из `header.stamp`; скорости — м/с после preprocess; СИ.
-Код — `tram_odometry_core/types.py` (dataclass, `frozen=True` для входов).
+Код — `tram_odometry_core/types.py` (dataclass, `frozen=True` для входов). Ниже — псевдокод
+в синтаксисе Python 3.10; в коде тот же смысл через `typing` (`Union`, `Optional`, `Tuple`). Целое
+значение для float-параметра (ROS может прислать `int`) `load_params` принимает.
 
 ```python
 @dataclass(frozen=True)
