@@ -93,28 +93,32 @@ def test_bad_command_value_dropped(notch):
     assert Preprocessor(PARAMS).accept(cmd(1.0, notch)) is None
 
 
+BASE_MPS = 5.0   # non-zero: the stuck-at-zero exemption must not apply to these cases
+
+
 def test_wheel_acceleration_outlier_dropped():
     """A jump faster than `input.max_wheel_accel_mps2` is a sensor glitch, not real driving."""
     pre = Preprocessor(PARAMS)
-    pre.accept(wheel(FRONT_TOPIC, 0.0, 0.0))                          # 0 m/s
-    jump_mps = ACCEL_LIMIT * 5.0                                      # far beyond the limit over 1 s
+    pre.accept(wheel(FRONT_TOPIC, 0.0, BASE_MPS * 3.6))
+    jump_mps = BASE_MPS + ACCEL_LIMIT * 5.0                           # far beyond the limit over 1 s
     assert pre.accept(wheel(FRONT_TOPIC, 1.0, jump_mps * 3.6)) is None
 
 
 def test_wheel_acceleration_outlier_does_not_poison_state():
     """A rejected sample must not become the new reference for the next comparison."""
     pre = Preprocessor(PARAMS)
-    pre.accept(wheel(FRONT_TOPIC, 0.0, 0.0))
-    assert pre.accept(wheel(FRONT_TOPIC, 1.0, (ACCEL_LIMIT * 5.0) * 3.6)) is None   # rejected glitch
-    within_mps = (ACCEL_LIMIT - 0.1) * 1.0                            # still close to the real 0 m/s
+    pre.accept(wheel(FRONT_TOPIC, 0.0, BASE_MPS * 3.6))
+    jump_mps = BASE_MPS + ACCEL_LIMIT * 5.0
+    assert pre.accept(wheel(FRONT_TOPIC, 1.0, jump_mps * 3.6)) is None   # rejected glitch
+    within_mps = BASE_MPS + (ACCEL_LIMIT - 0.1) * 1.0                 # still close to the real 5 m/s
     sample = pre.accept(wheel(FRONT_TOPIC, 1.0 + 1e-6, within_mps * 3.6))
     assert sample is not None
 
 
 def test_wheel_acceleration_within_limit_accepted():
     pre = Preprocessor(PARAMS)
-    pre.accept(wheel(FRONT_TOPIC, 0.0, 0.0))
-    ok_mps = ACCEL_LIMIT - 0.1                                        # dt=1 s, just under the limit
+    pre.accept(wheel(FRONT_TOPIC, 0.0, BASE_MPS * 3.6))
+    ok_mps = BASE_MPS + (ACCEL_LIMIT - 0.1) * 1.0                     # dt=1 s, just under the limit
     assert pre.accept(wheel(FRONT_TOPIC, 1.0, ok_mps * 3.6)) is not None
 
 
@@ -122,7 +126,23 @@ def test_wheel_deceleration_outlier_dropped_too():
     """The physical limit is on `|dv/dt|`, braking spikes are outliers just like traction ones."""
     pre = Preprocessor(PARAMS)
     pre.accept(wheel(FRONT_TOPIC, 0.0, 100.0))
-    assert pre.accept(wheel(FRONT_TOPIC, 1.0, 0.0)) is None
+    assert pre.accept(wheel(FRONT_TOPIC, 1.0, 20.0)) is None    # not exactly 0: gate applies
+
+
+def test_stuck_at_zero_recovery_is_not_an_outlier():
+    """Trap 8: a bogie stuck exactly at 0 can jump straight back to the real speed."""
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(FRONT_TOPIC, 0.0, 0.0))
+    sample = pre.accept(wheel(FRONT_TOPIC, 0.1, KMH_36))    # 10 m/s in 0.1 s: unstuck, not a glitch
+    assert sample is not None and sample.speed == pytest.approx(10.0)
+
+
+def test_drop_to_zero_is_not_an_outlier():
+    """The mirror direction: getting stuck must reach the detector too, not be filtered out."""
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(FRONT_TOPIC, 0.0, KMH_36))
+    sample = pre.accept(wheel(FRONT_TOPIC, 0.1, 0.0))
+    assert sample is not None and sample.speed == 0.0
 
 
 def test_first_wheel_sample_never_outlier_rejected():
@@ -133,7 +153,7 @@ def test_first_wheel_sample_never_outlier_rejected():
 def test_long_silent_bogie_resume_not_flagged_as_outlier():
     """Trap 7: a bogie silent up to 73 s; the large dt keeps the implied accel small."""
     pre = Preprocessor(PARAMS)
-    pre.accept(wheel(REAR_TOPIC, 0.0, 0.0))
+    pre.accept(wheel(REAR_TOPIC, 0.0, BASE_MPS * 3.6))              # non-zero: not the trap-8 exemption
     sample = pre.accept(wheel(REAR_TOPIC, 73.0, KMH_36))            # 10 m/s over 73 s
     assert sample is not None and sample.speed == pytest.approx(10.0)
 

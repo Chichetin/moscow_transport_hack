@@ -29,10 +29,14 @@ class Preprocessor:
     a repeated or past stamp is dropped, not integrated with `dt < 0`). Wheel speed is
     converted km/h -> m/s here and nowhere else (D-003), then gated by
     `input.max_wheel_accel_mps2`: a jump implying a higher `|dv/dt|` than physically possible
-    is a sensor glitch, not real driving, and is dropped rather than fed to the estimator. A
-    long silent bogie (trap 7, up to 73 s) needs no special handling here — it simply stops
-    producing samples; the gap is large enough that the acceleration implied by whatever
-    speed it reports on return is normally small. GNSS fix/vel outside `gnss.init_window_s`
+    is a sensor glitch, not real driving, and is dropped rather than fed to the estimator. The
+    gate is skipped when the previous or the new sample reads exactly 0: a bogie stuck at 0
+    (trap 8) reports the real speed the instant it gets unstuck, and `slip.SlipDetector`
+    depends on seeing that exact-0 reading to tell a stuck sensor from real motion — rejecting
+    the jump would hide the fault instead of exposing it. A long silent bogie (trap 7, up to
+    73 s) needs no special handling here — it simply stops producing samples; the gap is large
+    enough that the acceleration implied by whatever speed it reports on return is normally
+    small. GNSS fix/vel outside `gnss.init_window_s`
     is dropped (D-005); status filtering and course selection stay in `pipeline` (position is
     not preprocess's job).
     """
@@ -78,7 +82,9 @@ class Preprocessor:
                  else self.p.vehicle.wheel_scale_rear)
         speed = kmh * self.p.input.wheel_speed_scale * scale     # the only km/h -> m/s site
         prev = self._wheel_prev.get(bogie)
-        if prev is not None:
+        # a stuck-at-zero bogie (trap 8) can jump to/from its real speed instantly when it
+        # gets unstuck: that is not physical acceleration, so the gate does not apply to it.
+        if prev is not None and prev.speed != 0.0 and speed != 0.0:
             dt = t - prev.t
             if dt > 0 and abs(speed - prev.speed) / dt > self.p.input.max_wheel_accel_mps2:
                 return None                    # faster than physically possible: sensor glitch
