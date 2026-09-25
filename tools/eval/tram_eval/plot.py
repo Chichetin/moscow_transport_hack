@@ -3,7 +3,7 @@
 Timeline: speed (estimate, reference, both bogies as recorded), speed error, along/cross
 error, driver controller, slip flags. Map: the route of maps/route.csv, reference and
 estimate in the frame of the eval reference (ENU of `Reference.origin`), where the metrics
-compare them; its origin follows the rule of frame `map` of the tracker (D-049, #70). For
+compare them; its origin follows the rule of frame `map` of the tracker (D-050, #70). For
 debugging, docs/accuracy.md and the pitch; not part of
 metrics.json (contracts §4). matplotlib is imported only in `render`: the dev image has
 no matplotlib (docker/Dockerfile, D-039).
