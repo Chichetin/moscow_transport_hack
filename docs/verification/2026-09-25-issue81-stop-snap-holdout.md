@@ -1,19 +1,27 @@
 # #81: неоднозначная привязка к остановке — holdout
 
-Проверка D-012 по тому же holdout из 26 bag до и после изменения правила в `PathTracker.on_stop`.
+Независимая проверка D-012 для PR #85 на holdout из 26 bag до и после изменения правила
+в `PathTracker.on_stop`: `origin/main` @ `97d94df` → ветка @ `8026ba7`.
 
-| Вариант | Along RMSE, медиана | Худший bag | Along RMSE худшего bag |
-|---|---:|---|---:|
-| `origin/main` (`db8513f`) | 2,60975 м | `30639_4285f2bc` | 1425,3827 м |
-| Кандидат: reject при разнице расстояний ≤ 2·`stop_std_m` (`stop_std_m = 2 м`) | 2,60975 м | `30639_4285f2bc` | 1425,3827 м |
-| Изменение | 0 % | без изменения | 0 % |
+| Метрика, медиана по bag | Было | Стало | Δ | Худший bag в обоих прогонах (значение) |
+|---|---:|---:|---:|---|
+| `speed_rmse` | 0,06215 м/с | 0,06215 м/с | 0 % | `30618_27e994fc` (0,1675 м/с) |
+| `along_rmse` | 2,60975 м | 2,60975 м | 0 % | `30639_4285f2bc` (1425,3827 м) |
+| `drift_pct` | 0,0278 % | 0,0278 % | 0 % | `30639_2b4a6347` (171,2264 %) |
 
-Базовая копия `origin/main` собрана без изменения Git worktrees: `git archive origin/main` в `/tmp/issue81-origin-main`; данные holdout — `TRAM_DATA_DIR=/home/ir6/my/moscow_transport_hack/dataset/data`. На обеих копиях выполнено:
+Команды запущены из основной копии на `97d94df` и worktree #81 на `8026ba7`
+соответственно. Данные — общий `dataset/data`, окно GNSS — 5 с:
 
 ```bash
-.venv/bin/python tools/eval/run_eval.py --split holdout --jobs 4 --out <каталог>
+.venv/bin/python tools/eval/run_eval.py --split holdout --jobs 4 --out /tmp/eval-pr85-base
+.venv/bin/python tools/eval/run_eval.py --split holdout --jobs 4 --out /tmp/eval-pr85-head-8026ba7 --compare /tmp/eval-pr85-base/metrics.json
 ```
 
-Первое измерение кандидата до коммита имело dirty marker (`db8513f-dirty`); после коммита реализации `04df025` holdout повторён и дал те же медиану и худший bag. Измерения сохранены в `/tmp/eval-81-origin/metrics.json`, `/tmp/eval-81-margin2/metrics.json` и `/tmp/eval-81-committed/metrics.json`. На 26 bag — без падений, `NaN/inf` и несовпадений stamp. Изменённое правило не ухудшает ни медиану, ни худший bag по along RMSE.
+Файлы `/tmp/eval-pr85-base/metrics.json` и `/tmp/eval-pr85-head-8026ba7/metrics.json` совпадают
+по всем полям `bags` и `summary` как JSON-структуры. На обеих версиях — 0 падений,
+0 оценок NaN/inf и 0 несовпадений `Estimate.t` со stamp входа.
+Маркер `8026ba7-dirty` в выводе eval вызван только незакоммиченным текстом этого отчёта;
+код и параметры во время прогона соответствовали `8026ba7`.
+**D-012: главные метрики не ухудшились.**
 
 Синтетическое обоснование: при местах `s=1500, 1517.8 м` и оценке `s=1510 м` расстояния 10 и 7,8 м отличаются на 2,2 м, что меньше `2·stop_std_m = 4 м`; snap отклоняется. При точной оценке у `s=1500 м` расстояния 0 и 17,8 м различимы, snap сохраняется.
