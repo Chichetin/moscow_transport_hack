@@ -11,6 +11,7 @@ from .bag import FRONT, REAR, stamp
 SCENARIOS = ('outlier', 'gap_1', 'gap_10', 'gap_70', 'spike', 'noise', 'jitter', 'rollback')
 DURATION_S = {'outlier': 0.2, 'gap_1': 1.0, 'gap_10': 10.0, 'gap_70': 70.0,
               'spike': 5.0, 'noise': 10.0, 'jitter': 10.0, 'rollback': 10.0}
+MAX_RECOVERY_GAP_S = 0.3
 
 
 def _set_stamp(msg, t):
@@ -79,38 +80,48 @@ def recovery_seconds(times: np.ndarray, excess: np.ndarray, event_end: float,
     for i in np.flatnonzero(times >= event_end):
         last = int(np.searchsorted(times, times[i] + sustain_s, side='left'))
         if last < len(times) and np.all(np.isfinite(excess[i:last + 1])) \
-                and np.all(excess[i:last + 1] <= threshold):
+                and np.all(excess[i:last + 1] <= threshold) \
+                and np.all(np.diff(times[i:last + 1]) <= MAX_RECOVERY_GAP_S):
             return float(times[i] - event_end)
     return None
 
 
-def _excess(ref_t, ref_value, clean, dirty, value_name, event_start, event_end, threshold):
-    """Align both estimates to the same GNSS stamps before comparing errors."""
+def _errors(ref_t, ref_value, clean, dirty, value_name, event_start, event_end, threshold):
+    """Align clean/dirty estimates, then compare both with unchanged GNSS."""
     from .metrics import match_nearest
 
     if not len(ref_t):
-        return None, None, 0
+        return None, None, None, None, 0, 0
+    # build_reference sorts and deduplicates both GNSS time axes before interpolation.
     di, ce = match_nearest(dirty.t, clean.t)
     keep = (dirty.t[di] >= ref_t[0]) & (dirty.t[di] <= ref_t[-1])
     di, ce = di[keep], ce[keep]
     if not len(di):
-        return None, None, 0
+        return None, None, None, None, 0, 0
     times = dirty.t[di]
     old = getattr(clean, value_name)[ce]
     new = getattr(dirty, value_name)[di]
+    order = np.argsort(times, kind='stable')
+    times, old, new = times[order], old[order], new[order]
+    unique = np.concatenate(([True], np.diff(times) > 0))
+    times, old, new = times[unique], old[unique], new[unique]
     if value_name == 'speed':
         truth = np.interp(times, ref_t, ref_value)
+        old_error, new_error = np.abs(old - truth), np.abs(new - truth)
     else:
         truth = np.column_stack([np.interp(times, ref_t, ref_value[:, k]) for k in range(3)])
-    if value_name == 'speed':
-        excess = np.abs(new - truth) - np.abs(old - truth)
-    else:
-        excess = np.linalg.norm(new - truth, axis=1) - np.linalg.norm(old - truth, axis=1)
+        old_error = np.linalg.norm(old - truth, axis=1)
+        new_error = np.linalg.norm(new - truth, axis=1)
+    excess = new_error - old_error
     during = (times >= event_start) & (times < event_end)
-    peak = float(max(0.0, np.max(excess[during]))) if during.any() else None
+    peak = float(np.max(new_error[during])) if during.any() else None
+    clean_peak = float(np.max(old_error[during])) if during.any() else None
+    excess_peak = float(max(0.0, np.max(excess[during]))) if during.any() else None
     recovery = recovery_seconds(times, excess, event_end, threshold, 2.0)
     return round(peak, 4) if peak is not None else None, \
-        round(recovery, 4) if recovery is not None else None, len(di)
+        round(clean_peak, 4) if clean_peak is not None else None, \
+        round(excess_peak, 4) if excess_peak is not None else None, \
+        round(recovery, 4) if recovery is not None else None, len(times), int(during.sum())
 
 
 def evaluate_stress_bag(path, gnss_window_s: float, make_odometry=None, msgs=None) -> dict:
@@ -133,16 +144,20 @@ def evaluate_stress_bag(path, gnss_window_s: float, make_odometry=None, msgs=Non
         changed, start, end = event
         dirty, crash, mismatch = bag.run_pipeline(changed, make_odometry(), window_end)
         dirty, nonfinite = bag.finite_only(dirty)
-        speed_peak, speed_recovery, n_speed = _excess(
+        speed_peak, clean_speed_peak, speed_excess, speed_recovery, n_speed, n_speed_during = _errors(
             ref.vel_t, ref.speed, clean, dirty, 'speed', start, end, 0.2)
-        pos_peak, pos_recovery, n_pos = _excess(
+        pos_peak, clean_pos_peak, pos_excess, pos_recovery, n_pos, n_pos_during = _errors(
             ref.pos_t, ref.pos, clean, dirty, 'pos', start, end, 2.0)
         result[scenario] = {
             'skipped': False, 'event_start_s': round(start, 4), 'event_end_s': round(end, 4),
-            'peak_speed_excess_mps': speed_peak, 'peak_pos3d_excess_m': pos_peak,
-            'speed_recovery_s': speed_recovery if crash is None else None,
-            'pos_recovery_s': pos_recovery if crash is None else None,
+            'peak_speed_error_mps': speed_peak, 'clean_peak_speed_error_mps': clean_speed_peak,
+            'peak_speed_excess_mps': speed_excess,
+            'peak_pos3d_error_m': pos_peak, 'clean_peak_pos3d_error_m': clean_pos_peak,
+            'peak_pos3d_excess_m': pos_excess,
+            'speed_recovery_s': speed_recovery if clean_crash is None and crash is None else None,
+            'pos_recovery_s': pos_recovery if clean_crash is None and crash is None else None,
             'n_speed': n_speed, 'n_pos': n_pos,
+            'n_speed_during': n_speed_during, 'n_pos_during': n_pos_during,
             'crashed': bool(clean_crash or crash), 'nonfinite': nonfinite,
             'stamp_mismatch': mismatch,
         }

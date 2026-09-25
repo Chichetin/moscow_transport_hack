@@ -83,4 +83,4 @@ def test_stress_writes_separate_diagnostics_without_changing_metrics_schema(shor
     assert set(normal['bags'][short_bags[0]]) == set(METRIC_KEYS) | {'duration_s', 'distance_m', 'n_matched', 'crashed'}
     assert set(stress['bags'][short_bags[0]]) == set(cli.SCENARIOS)
     assert stress['bags'][short_bags[0]]['gap_70']['skipped'] is True
-    assert 'пик скорости, м/с' in capsys.readouterr().out
+    assert 'пик ошибки скорости, м/с' in capsys.readouterr().out

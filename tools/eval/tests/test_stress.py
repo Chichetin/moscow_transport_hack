@@ -73,10 +73,12 @@ def test_jitter_and_rollback_modify_stamps_without_reordering_messages():
 
 
 def test_recovery_requires_sustained_error_below_threshold():
-    times = np.arange(0, 12, dtype=float)
-    excess = np.array([0, 0, 0, 1, 1, 0.1, 0.1, 1, 0.1, 0.1, 0.1, 0.1])
-    assert recovery_seconds(times, excess, event_end=5.0, threshold=0.2, sustain_s=2.0) == 3.0
-    assert recovery_seconds(times[:9], excess[:9], event_end=5.0, threshold=0.2, sustain_s=2.0) is None
+    times = np.arange(0, 12, 0.1).round(1)
+    excess = np.full(len(times), 0.1)
+    excess[(times >= 3.0) & (times < 5.0)] = 1.0
+    excess[(times >= 7.0) & (times < 8.0)] = 1.0
+    assert recovery_seconds(times, excess, event_end=5.0, threshold=0.2, sustain_s=2.0) == pytest.approx(3.0)
+    assert recovery_seconds(times[:90], excess[:90], event_end=5.0, threshold=0.2, sustain_s=2.0) is None
 
 
 def test_stress_evaluation_measures_peak_and_recovery_without_touching_reference():
@@ -103,3 +105,20 @@ def test_short_bag_skips_long_gap_with_explanation():
     result = evaluate_stress_bag('fake', 5.0, make_odometry=DeadReckoning, msgs=drive(20.0))
     assert result['gap_70']['skipped'] is True
     assert result['gap_70']['reason']
+
+
+def test_recovery_rejects_sparse_publications():
+    times = np.array([5.0, 5.1, 7.1, 9.1])
+    excess = np.zeros(4)
+    assert recovery_seconds(times, excess, event_end=5.0, threshold=0.2, sustain_s=2.0) is None
+
+
+def test_report_has_absolute_gnss_error_and_event_coverage():
+    from tram_eval.stress import evaluate_stress_bag
+    from test_bag import DeadReckoning
+
+    report = evaluate_stress_bag('fake', 5.0, make_odometry=DeadReckoning, msgs=drive(20.0))['spike']
+    assert report['peak_speed_error_mps'] >= report['peak_speed_excess_mps'] > 0
+    assert report['clean_peak_speed_error_mps'] >= 0
+    assert report['n_speed_during'] > 0
+    assert report['peak_pos3d_error_m'] is not None

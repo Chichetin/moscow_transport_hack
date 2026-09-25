@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import statistics
 import subprocess
 import sys
 import time
@@ -68,14 +69,29 @@ def bag_table(result: dict) -> list[str]:
 
 
 def stress_table(bags: dict) -> list[str]:
-    cols = ('peak_speed_excess_mps', 'speed_recovery_s', 'peak_pos3d_excess_m', 'pos_recovery_s')
-    lines = ['| Сценарий | bag | пик скорости, м/с | восстановление скорости, с | пик позиции, м | восстановление позиции, с |',
-             '|---|---|---|---|---|---|']
+    lines = ['| Сценарий | bag | пик ошибки скорости, м/с median/max | добавка к пику скорости, м/с median | восстановление скорости, с median (нет) | пик ошибки позиции, м median/max | добавка к пику позиции, м median | восстановление позиции, с median (нет) | нет оценок в событии | падения |',
+             '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|']
+
+    def vals(rows, key):
+        return [r[key] for r in rows if r[key] is not None]
+
+    def medmax(rows, key):
+        v = vals(rows, key)
+        return f'{fmt(statistics.median(v))}/{fmt(max(v))}' if v else '—'
+
     for scenario in SCENARIOS:
-        for name, scenarios in sorted(bags.items()):
-            m = scenarios[scenario]
-            values = ['пропуск: короткий bag'] * 4 if m['skipped'] else [fmt(m[c]) for c in cols]
-            lines.append(f"| {scenario} | {name} | {' | '.join(values)} |")
+        rows = [cases[scenario] for cases in bags.values() if not cases[scenario]['skipped']]
+        speed_recovery = vals(rows, 'speed_recovery_s')
+        pos_recovery = vals(rows, 'pos_recovery_s')
+        recover_speed = f"{fmt(statistics.median(speed_recovery))} ({len(rows) - len(speed_recovery)})" if speed_recovery else f'— ({len(rows)})'
+        recover_pos = f"{fmt(statistics.median(pos_recovery))} ({len(rows) - len(pos_recovery)})" if pos_recovery else f'— ({len(rows)})'
+        excess = vals(rows, 'peak_speed_excess_mps')
+        pos_excess = vals(rows, 'peak_pos3d_excess_m')
+        lines.append(f"| {scenario} | {len(rows)}/{len(bags)} | {medmax(rows, 'peak_speed_error_mps')} | "
+                     f"{fmt(statistics.median(excess)) if excess else '—'} | {recover_speed} | "
+                     f"{medmax(rows, 'peak_pos3d_error_m')} | "
+                     f"{fmt(statistics.median(pos_excess)) if pos_excess else '—'} | {recover_pos} | "
+                     f"{sum(r['n_speed_during'] == 0 for r in rows)} | {sum(r['crashed'] for r in rows)} |")
     return lines
 
 
