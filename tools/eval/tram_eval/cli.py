@@ -102,6 +102,9 @@ def main(argv=None) -> int:
             results = list(ex.map(bagmod.evaluate_bag, paths, [window] * len(paths)))
     else:
         results = [bagmod.evaluate_bag(p, window) for p in paths]
+    notes = [r.pop(bagmod.NOTES, {}) for r in results]
+    nonfinite = sum(n.get('nonfinite', 0) for n in notes)
+    mismatch = sum(n.get('stamp_mismatch', 0) for n in notes)
     commit = git_commit()
     label = args.split or (names[0] if len(names) == 1 else 'bags')
     result = {'commit': commit, 'split': label, 'gnss_window_s': window,
@@ -118,7 +121,8 @@ def main(argv=None) -> int:
     print('\n'.join(bag_table(result)))
     crashed = sorted(b for b, m in result['bags'].items() if m['crashed'])
     print(f"\n{len(paths)} bag, окно GNSS {window} с, {time.monotonic() - t0:.0f} с; "
-          f"упали: {', '.join(crashed) if crashed else 'нет'}; -> {out / 'metrics.json'}")
+          f"упали: {', '.join(crashed) if crashed else 'нет'}; "
+          f"оценок NaN/inf (вне метрик): {nonfinite}; t != stamp входа: {mismatch}; -> {out / 'metrics.json'}")
     return 0
 
 

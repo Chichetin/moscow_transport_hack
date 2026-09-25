@@ -85,8 +85,8 @@ def main(argv=None) -> int:
         print(f'нет записи {record}: нода не запускалась (стенд проверил только сборку)', file=sys.stderr)
         return 2
     res_file = args.stand_dir / 'resources.csv'
-    rows = analyze.parse_samples(res_file.read_text()) if res_file.exists() else []
+    rows = analyze.parse_samples(res_file.read_text(encoding='utf-8')) if res_file.exists() else []
     res = measure(read_record(record), rows, os.sysconf('SC_CLK_TCK'))
-    (args.stand_dir / 'stand.json').write_text(json.dumps(res, indent=2, ensure_ascii=False))
+    (args.stand_dir / 'stand.json').write_text(json.dumps(res, indent=2, ensure_ascii=False), encoding='utf-8')
     print(table(res))
     return 0

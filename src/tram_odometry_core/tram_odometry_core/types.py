@@ -225,7 +225,7 @@ def load_route(path) -> Route:
 
 def load_params(path) -> Params:
     """Read params.yaml (ROS layout `/**: ros__parameters:`) into `Params`."""
-    doc = yaml.safe_load(Path(path).read_text())
+    doc = yaml.safe_load(Path(path).read_text(encoding='utf-8'))
     try:
         raw = doc['/**']['ros__parameters']
     except (KeyError, TypeError):
