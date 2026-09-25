@@ -2,7 +2,8 @@
 # Stop hook: ход не считается завершённым, если тесты проекта красные.
 # Сам находит тесты:
 #   pytest     — если в корне pyproject.toml с [tool.pytest.ini_options]; интерпретатор —
-#                .venv/bin/python, иначе python3 (в dev-контейнере). Код выхода 5
+#                .venv этого worktree, иначе .venv основной копии, иначе python3 (dev-контейнер);
+#                pytest не установлен нигде — молчит (не настроено окружение). Код выхода 5
 #                («тестов не найдено») — не ошибка: пока тестов нет, хук молчит.
 #   colcon test — только если colcon доступен (dev-контейнер с ROS) и в src/*/test есть
 #                test_*.py. На хосте без ROS молча пропускается.
@@ -24,10 +25,14 @@ OUTPUT=""
 STATUS=0
 
 if [ -f pyproject.toml ] && grep -q '^\[tool\.pytest\.ini_options\]' pyproject.toml; then
-  PY=python3
-  [ -x .venv/bin/python ] && PY=.venv/bin/python
-  OUT="$($PY -m pytest -q -p no:cacheprovider 2>&1)"
-  code=$?
+  # .venv этого worktree, иначе .venv основной копии, иначе python3 из PATH
+  MAIN="$(cd "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)"
+  PY=""
+  for cand in .venv/bin/python "${MAIN:+$MAIN/.venv/bin/python}" python3; do
+    [ -n "$cand" ] && "$cand" -c 'import pytest' >/dev/null 2>&1 && { PY="$cand"; break; }
+  done
+  # pytest нигде нет — окружение не настроено (docs/onboarding.md), а не красные тесты
+  [ -z "$PY" ] && code=5 || { OUT="$($PY -m pytest -q -p no:cacheprovider 2>&1)"; code=$?; }
   if [ "$code" -ne 5 ]; then
     RAN=1
     [ "$code" -ne 0 ] && STATUS=1
