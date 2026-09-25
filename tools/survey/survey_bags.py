@@ -188,7 +188,7 @@ def main() -> None:
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open('w', newline='') as fh:
-        w = csv.DictWriter(fh, fieldnames=keys)
+        w = csv.DictWriter(fh, fieldnames=keys, lineterminator='\n')
         w.writeheader()
         w.writerows(rows)
     print(f'{len(rows)} bags -> {out}')
