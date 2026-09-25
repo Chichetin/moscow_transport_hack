@@ -34,11 +34,11 @@
 
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| P1 | Дрейф в конце, % от пути | eval `drift_pct` | holdout | ⚠️ метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 |
-| P2 | Along-track MEAN/MAX/RMSE | eval `along_*` | holdout | ⚠️ метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 |
-| P3 | Cross-track при привязке к pathgraph | карта `src/tram_odometry/maps/route.csv` (D-007, D-022), eval `cross_*` | holdout | ⚠️ карта есть: GNSS holdout до карты mean 0,41 м, p99 4,95 м (`docs/verification/2026-09-25-route-map.md`); высота `z_m` (D-024): mean 0,17 м, p99 2,45 м (`docs/verification/2026-09-25-route-height.md`); метрика в `tools/eval` (#6, D-020, тесты на синтетике), чисел модели нет — ждёт #3 и PO1 #14 |
+| P1 | Дрейф в конце, % от пути | eval `drift_pct`, `core/position` (`PathTracker`, D-027) | holdout | ⚠️ бейзлайн `main` 153 % (D-021, `docs/verification/2026-09-25-pr35-baseline-holdout.md`); положение по карте — PR #14, число holdout «было → стало» в его таблице |
+| P2 | Along-track MEAN/MAX/RMSE | eval `along_*`, `core/position` (`PathTracker`, D-027) | holdout | ⚠️ бейзлайн `main` RMSE 3264 м (D-021); положение по карте — PR #14, число holdout в его таблице |
+| P3 | Cross-track при привязке к pathgraph | карта `src/tram_odometry/maps/route.csv` (D-007, D-022), eval `cross_*` | holdout | ⚠️ карта есть: GNSS holdout до карты mean 0,41 м, p99 4,95 м (`docs/verification/2026-09-25-route-map.md`); высота `z_m` (D-024): mean 0,17 м, p99 2,45 м (`docs/verification/2026-09-25-route-height.md`); положение по карте — `PathTracker` (PR #14, D-027): `x/y/z` — точка ветки на дуге пробега, тесты `test_position.py` (выставка, переход ветки, ковариация); `cross_*` holdout — в таблице PR #14 |
 | P4 | Корректный `nav_msgs/Odometry` | нода, контракт §1 | тест формы, запись стенда | — |
-| P5 | Инициализация абсолютного положения (последняя позиция / старт прогона) | `core/position` | eval: ошибка в первые 10 с | — |
+| P5 | Инициализация абсолютного положения (последняя позиция / старт прогона) | `core/position`: `PathTracker.on_fix` по каждому fix окна `gnss.init_window_s`, якорь — последний (D-027) | eval: ошибка в первые 10 с; тест `test_position.py` | ⚠️ выставка есть, до первого fix — начало координат (`gnss_used=False`); ошибка первых 10 с holdout — в таблице PR #14 |
 
 ## Критерий 3. Устойчивость (20)
 

@@ -104,11 +104,26 @@ class Estimate:
     accel_model: float        # м/с^2, прогноз модели привода
     distance: float           # м, путь от начала прогона
     x: float; y: float        # м, frame map
+    z: float                  # м, frame map, ENU up (высота карты + смещение прогона, D-024)
     yaw: float                # рад, ENU
     pos_cov: tuple[float, float, float]   # var_x, var_y, cov_xy
     slip: SlipState
     gnss_used: bool
+
+@dataclass(frozen=True)
+class Branch:                 # одна направленная ветка maps/route.csv (§5), массивы numpy (N,)
+    s: ndarray                # м, дуга, равномерный шаг, с 0
+    x: ndarray; y: ndarray; z: ndarray    # м, ENU от начала карты
+
+@dataclass(frozen=True)
+class Route:
+    origin: tuple[float, float, float]    # lat °, lon °, alt м — начало ENU карты
+    branches: tuple[Branch, ...]          # в порядке файла: индекс = `branch`
 ```
+
+`load_route(path) -> Route` в `types.py` — единственное место, где читается `route.csv`
+(как `load_params` для yaml). Нода берёт файл из `share/tram_odometry/maps/<position.map_file>`,
+`tools/eval` — из `src/tram_odometry/maps/` того же worktree; оба передают его в `Odometry(params, route=)`.
 
 Модули и их публичные функции (одна `area:` — один модуль):
 
@@ -118,7 +133,7 @@ class Estimate:
 | `dynamics` | `model_accel(notch: int, speed: float, params) -> float` | чистая функция, м/с²; без состояния |
 | `slip` | `SlipDetector(params).update(front, rear, accel_model, est) -> SlipState` | `front`/`rear` — последний `WheelSample` или `None` (молчит) |
 | `estimator` | `SpeedFilter(params).predict(t, accel_model)`, `.update(sample: WheelSample, trust: float)`, `.state() -> (speed, speed_var, accel)` | монотонное время внутри; `t` меньше текущего — без отката |
-| `position` | `PathTracker(params, route).init(fixes, vel) -> bool`, `.advance(distance) -> (x, y, yaw, pos_cov)` | до успешного `init` — начало координат и курс 0, `gnss_used=False` |
+| `position` | `PathTracker(params, route)`; `.on_fix(lat, lon, alt, status, distance)` — каждый fix master в окне `gnss.init_window_s`; `.ready -> bool`; `.advance(distance) -> (x, y, z, yaw, pos_cov) \| None` | frame `map` прогона — ENU первого fix статуса 2 (иначе первого валидного), как эталон `tools/eval`; карта переводится в него один раз через ECEF; якорь — ближайшая точка ближайшей ветки по последнему fix окна; дальше только вперёд по дуге `s = s₀ + distance − distance₀`, конец ветки продолжается на ближайшей ветке не дальше `position.join_m`; `pos_cov` — `cross_std_m` поперёк, вдоль растёт как `along_drift_frac · путь`; до первого fix `advance` даёт `None`: pipeline публикует начало координат, курс 0, `z = 0`, `gnss_used=False` |
 | `pipeline` | `Odometry(params, route=None).step(raw) -> Estimate \| None` | единственная точка, которую зовут нода и `tools/eval`; `None` — вход отброшен, публиковать нечего |
 
 `params` — `Params` из `types.py`: неизменяемый dataclass, по одному вложенному dataclass на
