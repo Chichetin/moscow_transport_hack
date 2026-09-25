@@ -29,7 +29,7 @@ def _params_leaves(obj, prefix=()):
 
 
 def test_load_params_reads_every_key():
-    raw = yaml.safe_load(PARAMS_YAML.read_text())['/**']['ros__parameters']
+    raw = yaml.safe_load(PARAMS_YAML.read_text(encoding='utf-8'))['/**']['ros__parameters']
     expected = dict(_yaml_leaves(raw))
     got = dict(_params_leaves(T.load_params(PARAMS_YAML)))
     assert set(got) == set(expected)
@@ -55,10 +55,10 @@ def test_params_frozen():
 
 
 def _write(tmp_path, mutate):
-    raw = yaml.safe_load(PARAMS_YAML.read_text())
+    raw = yaml.safe_load(PARAMS_YAML.read_text(encoding='utf-8'))
     mutate(raw['/**']['ros__parameters'])
     f = tmp_path / 'p.yaml'
-    f.write_text(yaml.safe_dump(raw))
+    f.write_text(yaml.safe_dump(raw), encoding='utf-8')
     return f
 
 

@@ -146,8 +146,8 @@ def test_real_core_converts_kmh_to_mps_once(node, monkeypatch):
     sent = _capture(node, monkeypatch)
     node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
     p = node.params
-    expected = 36.0 * p.input.wheel_speed_scale * p.vehicle.wheel_scale_front
-    assert expected == pytest.approx(10.0, abs=0.5)      # km/h -> m/s happens in the core
+    assert p.input.wheel_speed_scale == pytest.approx(1 / 3.6)   # km/h -> m/s, in the core only
+    expected = 10.0 * p.vehicle.wheel_scale_front
     assert [k for k, _ in sent] == ['v', 'p']
     assert sent[0][1].velocity == pytest.approx(expected)
     assert sent[1][1].twist.twist.linear.x == pytest.approx(expected)
