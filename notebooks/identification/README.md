@@ -48,6 +48,6 @@
 ```
 
 Остановки по `v < 0,1 м/с` ≥ 3 с (без GNSS в детекции) сравнены с местами `stops.csv`
-(#56/D-034): 80,4 % train / 82,6 % holdout ближе 20 м — порог `stop_snap_max_m` подтверждён
-независимо. Отчёт — `docs/research/2026-09-25-stops-vs-speed.md`, график —
+(#56/D-034): 84,3 % train / 85,8 % holdout ближе 20 м — порядок величины `stop_snap_max_m`
+не противоречит числу. Отчёт — `docs/research/2026-09-25-stops-vs-speed.md`, график —
 `docs/data/stops_vs_speed_hist.png`.

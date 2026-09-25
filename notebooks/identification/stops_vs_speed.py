@@ -20,13 +20,11 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools' / 'pathgraph'))
-import build_route as br  # noqa: E402
+import build_route as br      # noqa: E402
+import build_stops as bstops  # noqa: E402
 
 REPO = br.REPO
 FRONT = '/vehicle/front_bogie_velocity'
@@ -100,12 +98,14 @@ def asof(series: np.ndarray, t: np.ndarray) -> np.ndarray:
 
 
 def combined_speed(front: np.ndarray, rear: np.ndarray) -> np.ndarray:
-    """(t, v m/s): mean of the last known front/rear reading at every sample time of either."""
+    """(t, v m/s): mean of the last known front/rear reading at every sample time of either.
+    NaN while neither bogie has spoken yet -- not a stop (`wheel_stop_stretches` requires
+    `isfinite`); a real reading is never turned into a false zero."""
     if len(front) == 0 and len(rear) == 0:
         return np.zeros((0, 2))
     t = np.union1d(front[:, 0] if len(front) else [], rear[:, 0] if len(rear) else [])
     v = np.nanmean(np.column_stack([asof(front, t), asof(rear, t)]), axis=1) * WHEEL_SPEED_SCALE
-    return np.column_stack([t, np.nan_to_num(v, nan=0.0)])
+    return np.column_stack([t, v])
 
 
 def wheel_stop_stretches(t: np.ndarray, v: np.ndarray) -> list[tuple[float, float]]:
@@ -120,16 +120,16 @@ def wheel_stop_stretches(t: np.ndarray, v: np.ndarray) -> list[tuple[float, floa
 
 
 def cumulative_distance(t: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """m, integral of v dt from the first sample (monotone non-decreasing)."""
+    """m, integral of v dt from the first sample (monotone non-decreasing); NaN speed (neither
+    bogie has spoken yet) contributes no distance, same as a silent tram at rest."""
     dt = np.diff(t, prepend=t[0] if len(t) else 0.0)
-    return np.cumsum(np.maximum(v, 0.0) * dt)
+    return np.cumsum(np.maximum(np.nan_to_num(v, nan=0.0), 0.0) * dt)
 
 
-def true_position(fixes: np.ndarray, route: dict, t_start: float, t_end: float):
-    """(branch, s_m) of the median GNSS fix in [t_start, t_end], or (None, None) off the map
-    or without a fix in the window (same rule as tools/pathgraph/build_stops.py)."""
-    statuses = (br.MAP_STATUS,) if (fixes[:, 4] == br.MAP_STATUS).any() else (0, 1, 2)
-    ft, xy, _ = br.clean_track(fixes, statuses)
+def true_position(ft: np.ndarray, xy: np.ndarray, route: dict, t_start: float, t_end: float):
+    """(branch, s_m) of the median GNSS fix in [t_start, t_end], or (None, None) off the map,
+    without a fix in the window, or projecting onto a branch's clamped end (same rule as
+    tools/pathgraph/build_stops.py:stops_of_bag)."""
     sel = (ft >= t_start) & (ft <= t_end)
     if sel.sum() < 3:
         return None, None
@@ -139,7 +139,9 @@ def true_position(fixes: np.ndarray, route: dict, t_start: float, t_end: float):
         ps, e = br.project(s, poly, p)
         if best is None or abs(e[0]) < best[2]:
             best = (k, float(ps[0]), float(abs(e[0])))
-    return (best[0], best[1]) if best[2] <= MAX_OFF_M else (None, None)
+    if best[2] > MAX_OFF_M or not bstops.edge_free(route[best[0]][0], best[1]):
+        return None, None
+    return best[0], best[1]
 
 
 def nearest_known_stop_m(branch: int, s: float, stops: list[tuple[int, float]]) -> float:
@@ -154,12 +156,17 @@ def bag_stop_events(bag: Path, route: dict, stops: list[tuple[int, float]]) -> l
         return []
     dist = cumulative_distance(t, v)
     fixes = br.read_master_fixes(bag)
+    if len(fixes):
+        statuses = (br.MAP_STATUS,) if (fixes[:, 4] == br.MAP_STATUS).any() else (0, 1, 2)
+        ft, xy, _ = br.clean_track(fixes, statuses)
+    else:
+        ft, xy = np.zeros(0), np.zeros((0, 2))
     events = []
     prev_end_dist = 0.0
     for a, b in wheel_stop_stretches(t, v):
         before = cmd[(cmd[:, 0] >= a - FEATURE_WINDOW_S) & (cmd[:, 0] < a)]
         after = cmd[(cmd[:, 0] > b) & (cmd[:, 0] <= b + FEATURE_WINDOW_S)]
-        branch, s = true_position(fixes, route, a, b) if len(fixes) else (None, None)
+        branch, s = true_position(ft, xy, route, a, b) if len(ft) else (None, None)
         nearest = nearest_known_stop_m(branch, s, stops) if branch is not None else None
         events.append(StopEvent(
             bag=bag.name, t_start=a, t_end=b, duration_s=b - a,
@@ -193,7 +200,10 @@ def summarize(events: list[StopEvent]) -> None:
     d = np.array([e.nearest_known_m for e in on_covered_branch])
     print(f'distance to nearest known place, m (branches with a known place only): '
           f'p50={np.percentile(d, 50):.1f} p90={np.percentile(d, 90):.1f} '
-          f'p99={np.percentile(d, 99):.1f} <=20m: {(d <= 20.0).mean() * 100:.1f}%')
+          f'p99={np.percentile(d, 99):.1f}')
+    thresholds = (5.0, 10.0, 20.0, 50.0)
+    frac = ' '.join(f'<={t:.0f}m: {(d <= t).mean() * 100:.1f}%' for t in thresholds)
+    print(f'  {frac}')
     near = [e for e in on_covered_branch if e.nearest_known_m <= 20.0]
     far = [e for e in on_covered_branch if e.nearest_known_m > 20.0]
     for label, group in (('near (<=20 m)', near), ('far (>20 m)', far)):
@@ -209,10 +219,16 @@ def summarize(events: list[StopEvent]) -> None:
 
 
 def plot_hist(events: list[StopEvent], out: Path) -> None:
+    """matplotlib is a host/dev-image only dependency (docker/Dockerfile): imported here, not
+    at module level, so importing this module (and running its tests) stays possible in the
+    jury/CI container that only has numpy and rosbags."""
     d = np.array([e.nearest_known_m for e in events
                  if e.nearest_known_m is not None and np.isfinite(e.nearest_known_m)])
     if len(d) == 0:
         return
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
     out.parent.mkdir(parents=True, exist_ok=True)
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.hist(np.clip(d, 0, 100), bins=40)
