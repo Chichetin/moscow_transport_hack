@@ -49,6 +49,18 @@ def test_stop_with_two_places_inside_gate_does_not_snap_to_neighbour():
     assert tr._scale == 1.0
 
 
+@pytest.mark.parametrize("distance", [518.0, 519.0])
+def test_stop_with_indistinguishable_second_place_just_outside_gate_does_not_snap(distance):
+    tr = _tracker([(0, 1500.0), (0, 1540.0)])
+    origin = _anchor_xy(tr)
+    at = _arc(tr, distance, origin)
+
+    assert not tr.on_stop(distance)
+    assert _arc(tr, distance, origin) == pytest.approx(at)
+    assert tr._last_snap is None
+    assert tr._scale == 1.0
+
+
 def test_stop_clear_of_neighbour_still_snaps():
     tr = _tracker([(0, 1500.0), (0, 1517.8)])
     assert tr.on_stop(500.0)

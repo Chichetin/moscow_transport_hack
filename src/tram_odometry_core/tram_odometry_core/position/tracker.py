@@ -183,8 +183,7 @@ class PathTracker:
             return False                      # not at a stop place: a signal, keep s
         if len(places) > 1:
             second = float(np.partition(distances, 1)[1])
-            if second <= self.p.stop_snap_max_m and \
-                    second - distances[nearest] <= 2.0 * self.p.stop_std_m:
+            if second - distances[nearest] <= 2.0 * self.p.stop_std_m:
                 return False                  # map uncertainty cannot distinguish close candidates
         place = float(places[nearest])
         var = self._var_along(distance)
