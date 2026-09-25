@@ -44,10 +44,12 @@ def perturb(msgs, scenario: str, gnss_window_s: float):
     result = []
     front_n = rear_n = 0
     outlier_done = False
+    changed_count = removed_count = 0
     for topic, msg in msgs:
         t = stamp(msg)
         inside = start <= t < end
         if topic == FRONT and inside and scenario.startswith('gap_'):
+            removed_count += 1
             continue
         if not inside or topic not in (FRONT, REAR):
             result.append((topic, msg))
@@ -72,7 +74,11 @@ def perturb(msgs, scenario: str, gnss_window_s: float):
         else:
             rear_n += 1
             new.velocity += 3.0 * math.sin(2 * math.pi * rear_n / 10 + math.pi)
+        if stamp(new) != t or new.velocity != msg.velocity:
+            changed_count += 1
         result.append((topic, new))
+    if changed_count + removed_count == 0:
+        return None
     return result, start, end
 
 
@@ -105,8 +111,6 @@ def _errors(ref_t, ref_value, clean, dirty, value_name, event_start, event_end, 
     new = getattr(dirty, value_name)[di]
     order = np.argsort(times, kind='stable')
     times, old, new = times[order], old[order], new[order]
-    unique = np.concatenate(([True], np.diff(times) > 0))
-    times, old, new = times[unique], old[unique], new[unique]
     if value_name == 'speed':
         truth = np.interp(times, ref_t, ref_value)
         old_error, new_error = np.abs(old - truth), np.abs(new - truth)
@@ -119,7 +123,12 @@ def _errors(ref_t, ref_value, clean, dirty, value_name, event_start, event_end, 
     peak = float(np.max(new_error[during])) if during.any() else None
     clean_peak = float(np.max(old_error[during])) if during.any() else None
     excess_peak = float(max(0.0, np.max(excess[during]))) if during.any() else None
-    recovery = recovery_seconds(times, excess, event_end, threshold, 2.0)
+    # Keep the worst publication at each timestamp: selecting the first duplicate
+    # can hide an error spike and falsely satisfy the recovery sustain window.
+    group_starts = np.r_[0, np.flatnonzero(np.diff(times) > 0) + 1]
+    unique_times = times[group_starts]
+    worst_excess = np.maximum.reduceat(excess, group_starts)
+    recovery = recovery_seconds(unique_times, worst_excess, event_end, threshold, 2.0)
     return round(peak, 4) if peak is not None else None, \
         round(clean_peak, 4) if clean_peak is not None else None, \
         round(excess_peak, 4) if excess_peak is not None else None, \
@@ -141,7 +150,10 @@ def evaluate_stress_bag(path, gnss_window_s: float, make_odometry=None, msgs=Non
     for scenario in SCENARIOS:
         event = perturb(msgs, scenario, gnss_window_s)
         if event is None:
-            result[scenario] = {'skipped': True, 'reason': 'bag too short for event and recovery tail'}
+            result[scenario] = {
+                'skipped': True,
+                'reason': 'bag too short for event/recovery tail or no target wheel sample changed',
+            }
             continue
         changed, start, end = event
         dirty, crash, mismatch = bag.run_pipeline(changed, make_odometry(), window_end)
