@@ -1,18 +1,18 @@
 # Holdout: привязка к остановкам (#56, PR #63, D-034), base vs head
 
-- base: `5822740` (origin/main), head: `03a7064` (worktree-56-stop-snap); Linux, нативный `.venv`, набор `--split holdout` (26 bag, окно GNSS 5 с); стенд и stress не запускались
+- base: `bc94825` (origin/main), head: `032bd2d` (worktree-56-stop-snap); Linux, нативный `.venv`, набор `--split holdout` (26 bag, окно GNSS 5 с); стенд и stress не запускались
 
 ## Команды
 
 ```bash
 git worktree add --detach <tmp>/base origin/main
-cd <tmp>/base && .venv/bin/python tools/eval/run_eval.py --split holdout   # -> out/eval/5822740-holdout/metrics.json
-cd <wt> && .venv/bin/python tools/eval/run_eval.py --split holdout --compare <tmp>/base/out/eval/5822740-holdout/metrics.json
+cd <tmp>/base && .venv/bin/python tools/eval/run_eval.py --split holdout   # -> out/eval/bc94825-holdout/metrics.json
+cd <wt> && .venv/bin/python tools/eval/run_eval.py --split holdout --compare <tmp>/base/out/eval/bc94825-holdout/metrics.json
 ```
 
 Историю см. в PR: первая версия с местами на концах веток (37 мест) ухудшала cross_max на 5 bag до 12–15 м (ревью #63); места на концах веток убраны.
 
-Было: `5822740` (holdout), стало: `03a7064` (holdout)
+Было: `bc94825` (holdout), стало: `032bd2d` (holdout)
 
 | Метрика (медиана по bag) | было | стало | Δ, % |
 |---|---|---|---|
@@ -64,4 +64,4 @@ D-012: главные метрики не хуже
 | 30639_9f0b519f | 5389.5 | 0.039 | 5.344 | 0.175 | 0.935 | 5.434 | 9833 |  |
 | 30639_d927f360 | 5403.0 | 0.056 | 3.875 | 0.035 | 0.035 | 3.832 | 8986 |  |
 
-26 bag, окно GNSS 5.0 с, 34 с; упали: нет; оценок NaN/inf (вне метрик): 0; t != stamp входа: 0; -> /home/chichetin/PycharmProjects/moscow_transport_hack/.claude/worktrees/56-stop-snap/out/eval/03a7064-holdout/metrics.json
+26 bag, окно GNSS 5.0 с, 34 с; упали: нет; оценок NaN/inf (вне метрик): 0; t != stamp входа: 0; -> /home/chichetin/PycharmProjects/moscow_transport_hack/.claude/worktrees/56-stop-snap/out/eval/032bd2d-holdout/metrics.json
