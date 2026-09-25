@@ -85,7 +85,8 @@ class Odometry:
         if self._stop_since is None:
             self._stop_since = now
         if (self._tracker is not None and not self._stop_snapped
-                and now - self._stop_since >= p.stop_min_s and not self._in_window(now)):
+                and now - self._stop_since >= p.stop_min_s
+                and now - self._t0 > self.params.gnss.init_window_s):
             self._stop_snapped = True
             self._tracker.on_stop(self._distance)
 
