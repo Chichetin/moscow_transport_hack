@@ -24,7 +24,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            # 'odometry_node = tram_odometry.odometry_node:main',  # issue: ROS-обёртка
+            'odometry_node = tram_odometry.odometry_node:main',
         ],
     },
 )

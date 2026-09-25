@@ -66,7 +66,7 @@ def default_data_dir() -> Path:
 
 def split_bags(path: Path, key: str) -> list[str]:
     # BaseLoader: safe_load reads 30618_68847170 as an int (YAML 1.1 allows '_' in numbers)
-    return list(yaml.load(Path(path).read_text(), Loader=yaml.BaseLoader)[key])
+    return list(yaml.load(Path(path).read_text(encoding='utf-8'), Loader=yaml.BaseLoader)[key])
 
 
 def _ecef(lat, lon, alt):
@@ -250,12 +250,12 @@ def write_route(path: Path, branches: list[tuple[np.ndarray, np.ndarray, np.ndar
     lines = [f'# {header}', 'branch,s_m,x_m,y_m,z_m']
     for b, (s, xy, z) in enumerate(branches):
         lines += [f'{b},{si:.3f},{x:.3f},{y:.3f},{zi:.3f}' for si, (x, y), zi in zip(s, xy, z)]
-    Path(path).write_text('\n'.join(lines) + '\n')
+    Path(path).write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 
 def read_route(path: Path) -> dict[int, tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """branch -> (s, xy, z)."""
-    rows = [ln for ln in Path(path).read_text().splitlines()
+    rows = [ln for ln in Path(path).read_text(encoding='utf-8').splitlines()
             if ln and not ln.startswith('#') and not ln.startswith('branch')]
     a = np.array([[float(v) for v in ln.split(',')] for ln in rows])
     return {int(b): (a[a[:, 0] == b, 1], a[a[:, 0] == b, 2:4], a[a[:, 0] == b, 4])
