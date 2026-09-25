@@ -7,6 +7,9 @@ Usage:
 Reads every unique bag of train, holdout and no_gnss_train (tools/eval/splits.yaml) with the
 reader of survey_bags.py and prints the numbers quoted in docs/data.md. Scale per bag is taken
 from docs/data/survey.csv (wheel_over_gnss_med).
+The 5 s window of trap 14 starts at the first front-bogie stamp (D-005 counts from the first
+input of any topic; with 0 of 97 bags moving the difference does not matter). Trap 16 looks at
+one bag per vehicle.
 """
 from __future__ import annotations
 
