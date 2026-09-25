@@ -5,7 +5,7 @@ Both are fitted on train only (the same pooled samples, delay and resistance as 
 compared on holdout by integrating the model from the measured speed over windows of 5, 20 and
 60 s -- the length of sensor gaps the model has to bridge (docs/data.md, trap 7).
 
-    .venv/bin/python notebooks/identification/compare_forms.py            # ~2-3 min
+    .venv/bin/python notebooks/identification/compare_forms.py            # ~1 min on 24 cores
     .venv/bin/python notebooks/identification/compare_forms.py --json out/ident/forms.json
 """
 import argparse
@@ -21,6 +21,7 @@ import identify as idn            # noqa: E402
 
 WINDOWS_S = (5.0, 20.0, 60.0)
 STEP_S = 5.0
+RARE_MIN = 2000          # train samples of a signed notch below this: a rare cell of the table
 F_GRID = np.round(np.arange(0.0, 2.0001, 0.01), 3)       # m/s^2, candidate F (traction plateau)
 P_GRID = np.round(np.arange(0.5, 15.0001, 0.1), 2)       # W/kg = m^2/s^3, candidate P/m
 
@@ -107,27 +108,38 @@ def run(jobs=8):
     v, a, _, n, _ = idn.pooled(train, fallback, delay, need_grade=False)
     y = a + di.resistance(v, p['c'])                            # = sign(n) A(|n|, v), as the tables
     q = fit_forms(v, y, n)
+    table = lambda nn, vv: di.drive_accel(nn, vv, p)                       # noqa: E731
+    form = lambda nn, vv: form_accel(nn, vv, q, p['c'], p['adhesion_accel_mps2'])  # noqa: E731
     models = {
-        'table': lambda nn, vv: di.drive_accel(nn, vv, p),
-        'form': lambda nn, vv: form_accel(nn, vv, q, p['c'], p['adhesion_accel_mps2']),
+        'table': table,
+        'form': form,
+        # hybrids: which half of the form (traction or brake) costs the accuracy
+        'form_traction+table_brake': lambda nn, vv: np.where(np.asarray(nn) > 0, form(nn, vv), table(nn, vv)),
+        'table_traction+form_brake': lambda nn, vv: np.where(np.asarray(nn) < 0, form(nn, vv), table(nn, vv)),
         'zero': lambda nn, vv: np.zeros(np.broadcast(nn, vv).shape),
     }
+    counts = {int(u): int((n == u).sum()) for u in range(-idn.NOTCH_MAX, idn.NOTCH_MAX + 1) if u}
+    rare_notches = [u for u, c in counts.items() if c < RARE_MIN]
     # point residuals on train (fit quality) and on holdout (generalisation)
     fit = {}
     for split, bags in (('train', train), ('holdout', hold)):
         vv, aa, _, nn, _ = idn.pooled(bags, fallback, delay, need_grade=False)
         fit[split] = {m: float(np.std(aa - f(nn, vv))) for m, f in models.items()}
-        rare = np.isin(np.abs(nn), [u for u in range(1, idn.NOTCH_MAX + 1)
-                                    if (np.abs(n) == u).sum() < 2000])
+        for mode, sel in (('traction', nn > 0), ('brake', nn < 0)):
+            fit[f'{split}_{mode}'] = {m: float(np.std((aa - f(nn, vv))[sel])) for m, f in models.items()}
+        rare = np.isin(nn, rare_notches)
         fit[split + '_rare_notches'] = ({m: float(np.std((aa - f(nn, vv))[rare])) for m, f in models.items()}
                                         if rare.any() else None)
-    out = {'delay_s': delay, 'n_params': {'table': 2 * len(p['traction_accel_table']), 'form': 3 * idn.NOTCH_MAX},
+    width = len(p['speed_grid_mps'])
+    out = {'delay_s': round(delay, 3), 'rare_notches': rare_notches, 'train_counts': counts,
+           'n_params': {'table': 2 * (len(p['traction_accel_table']) - width), 'form': 3 * idn.NOTCH_MAX},
            'form_params': q, 'point_resid_std': fit, 'windows': {}}
     hb = [with_true_speed(b, fallback) for b in hold]
     for w in WINDOWS_S:
         errs = {m: np.concatenate([simulate(b, f, delay, w) for b in hb]) for m, f in models.items()}
         out['windows'][str(int(w))] = {
             'n': int(len(errs['table'])),
+            'hybrid_median': {m: float(np.median(errs[m])) for m in ('form_traction+table_brake', 'table_traction+form_brake')},
             **{m: {'median': float(np.median(e)), 'mean': float(np.mean(e)), 'p90': float(np.percentile(e, 90)),
                    'max': float(np.max(e))} for m, e in errs.items() if len(e)},
             'form_better_than_table_share': float(np.mean(errs['form'] < errs['table'])) if len(errs['table']) else None,
@@ -145,10 +157,18 @@ def md(out):
         rows.append(f"| {w} | {r['n']} | {f('table')} | {f('form')} | {f('zero')} | {r['form_better_than_table_share']:.2f} |")
     fit = out['point_resid_std']
     rows += ['', '| std невязки ускорения, м/с² | таблица | форма F0/P | a = 0 |', '|---|---|---|---|']
-    for k in ('train', 'holdout', 'train_rare_notches', 'holdout_rare_notches'):
+    for k in ('train', 'holdout', 'train_traction', 'holdout_traction', 'train_brake', 'holdout_brake',
+              'train_rare_notches', 'holdout_rare_notches'):
         if fit.get(k):
             rows.append(f"| {k} | {fit[k]['table']:.3f} | {fit[k]['form']:.3f} | {fit[k]['zero']:.3f} |")
-    rows.append(f"\nПараметров: таблица {out['n_params']['table']}, форма {out['n_params']['form']}; задержка {out['delay_s']} с.")
+    rows += ['', '| окно, с | тяга формы + торможение таблицы | тяга таблицы + торможение формы |', '|---|---|---|']
+    for w, r in out['windows'].items():
+        if r['n']:
+            h = r['hybrid_median']
+            rows.append(f"| {w} | {h['form_traction+table_brake']:.3f} | {h['table_traction+form_brake']:.3f} |")
+    rows.append(f"\nПараметров (без нулевой строки позиции 0): таблица {out['n_params']['table']}, форма "
+                f"{out['n_params']['form']}; задержка {out['delay_s']} с; редкие позиции (< {RARE_MIN} точек train): "
+                f"{out['rare_notches']}.")
     return '\n'.join(rows)
 
 

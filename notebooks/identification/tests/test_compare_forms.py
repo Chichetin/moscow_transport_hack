@@ -30,6 +30,7 @@ def test_fit_forms_is_monotone_and_fills_missing_notches():
     assert q['F'][2] == q['F'][1]                               # missing notch takes the lower one
     assert np.all(np.diff(q['F']) >= 0) and np.all(np.diff(q['B']) >= 0)
     assert q['B'][1] == pytest.approx(0.5, abs=1e-6) and q['B'][2] == pytest.approx(1.0, abs=1e-6)
+    assert q['B'][3] == q['B'][2]                                # missing brake notch: lower one
 
 
 def test_form_accel_sign_drag_and_adhesion():
