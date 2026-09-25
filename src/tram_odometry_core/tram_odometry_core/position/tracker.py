@@ -52,6 +52,7 @@ class PathTracker:
         self._step = [float(b.s[1] - b.s[0]) for b in route.branches]
         self._map = [np.column_stack([b.x, b.y, b.z]) for b in route.branches]
         self._next = [self._join(k) for k in range(len(self._map))]
+        self._fork = [self._fork_join(k) for k in range(len(self._map))]
         self._xyz = self._map                 # branches in the frame of the run
         lat0, lon0, alt0 = route.origin       # the map's own ENU: the outlier gate lives here
         self._map_rot, self._map_ecef0 = _enu_rotation(lat0, lon0), _ecef(lat0, lon0, alt0)
@@ -88,6 +89,32 @@ class PathTracker:
                 continue
             if best is None or d[i] < best[2]:
                 best = (j, float(self._s[j][i]), float(d[i]))
+        return None if best is None else best[:2]
+
+    def _fork_join(self, k: int):
+        """A forward branch start that bypasses this branch's dead end, if one exists."""
+        if self._next[k] is not None:
+            return None
+        parent = self._map[k]
+        best = None
+        for j, child in enumerate(self._map):
+            if j == k or self._next[j] is None:
+                continue
+            start = child[0, :2]
+            i = int(np.argmin((parent[:, 0] - start[0]) ** 2 +
+                              (parent[:, 1] - start[1]) ** 2))
+            d = float(np.hypot(*(parent[i, :2] - start)))
+            if d > self.p.join_m or i >= len(parent) - 1:
+                continue
+            tangent = parent[i + 1, :2] - parent[i, :2]
+            child_tangent = child[1, :2] - child[0, :2]
+            cos = float(np.dot(tangent, child_tangent) /
+                        (np.linalg.norm(tangent) * np.linalg.norm(child_tangent)))
+            if cos < math.cos(JOIN_MAX_TURN_RAD):
+                continue
+            candidate = (float(self._s[k][i]), j, d)
+            if best is None or d < best[2]:
+                best = candidate
         return None if best is None else best[:2]
 
     def _set_origin(self, lat: float, lon: float, alt: float, status: int) -> None:
@@ -153,16 +180,24 @@ class PathTracker:
         """(branch, s) at path `distance`, following the joins at the ends of branches."""
         k, s, d0 = self._anchor
         s += self._scale * (distance - d0)
+        entry_s = self._anchor[1]
         # bounded number of branch changes per call: a run never crosses more branches than the
         # map has; at the limit the position stays at the end of the last branch (a dead end)
         for _ in range(len(self._xyz)):
+            fork = self._fork[k]
+            if fork is not None and entry_s <= fork[0] < s:
+                fork_s, next_k = fork
+                s = self._s[next_k][0] + s - fork_s
+                k, entry_s = next_k, float(self._s[next_k][0])
+                continue
             end = float(self._s[k][-1])
             if s <= end:
                 break
             if self._next[k] is None:
                 s = end
                 break
-            k, s = self._next[k][0], self._next[k][1] + s - end
+            k, entry_s = self._next[k]
+            s = entry_s + s - end
         return k, max(s, 0.0)
 
     def _var_along(self, distance: float) -> float:
