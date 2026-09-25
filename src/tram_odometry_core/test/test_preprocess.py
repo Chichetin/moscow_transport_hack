@@ -341,3 +341,74 @@ def test_odometry_keeps_publishing_after_a_future_command():
     assert outs[-1].t == pytest.approx(t0 + 1.0 + 0.05 * 199)
     assert outs[-1].speed == pytest.approx(10.0, abs=1e-6)
 
+
+def test_two_future_glitches_in_a_row_do_not_freeze_the_stream():
+    """A 100 ms clock glitch at 20 Hz: two future stamps in a row get accepted as a jump;
+    the stream then resyncs back on the normal clock, losing one sample."""
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0 + 0.05 * k, 3) for k in range(20)])
+    _feed(pp, [cmd(t0 + 86400.0, 3), cmd(t0 + 86400.05, 3)])
+    out = _feed(pp, [cmd(t0 + 1.0 + 0.05 * k, 3) for k in range(200)])
+    assert out[0] is None
+    assert all(isinstance(s, CommandSample) for s in out[1:])
+
+
+def test_glitches_on_two_streams_do_not_freeze_the_second_one():
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0, 0), wheel(FRONT_TOPIC, t0, 18.0), wheel(REAR_TOPIC, t0, 18.0)])
+    _feed(pp, [cmd(t0 + 86400.0, 0), wheel(FRONT_TOPIC, t0 + 86401.0, 18.0)])
+    out = _feed(pp, [wheel(FRONT_TOPIC, t0 + 0.1 * k, 18.0) for k in range(1, 100)])
+    assert sum(isinstance(s, WheelSample) for s in out) >= 97
+    assert isinstance(out[-1], WheelSample)
+
+
+def test_first_sample_of_the_bag_from_the_future_does_not_freeze_the_stream():
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    assert pp.accept(cmd(t0 + 86400.0, 0)) is not None          # nothing to compare yet
+    out = _feed(pp, [cmd(t0 + 0.05 * k, 0) for k in range(100)])
+    assert sum(isinstance(s, CommandSample) for s in out) >= 98
+    assert isinstance(out[-1], CommandSample)
+
+
+def test_ordinary_rollbacks_are_still_dropped_after_a_resync_is_possible():
+    """Trap 6: small rollbacks (well within the limit) are never resynced to."""
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0 + 0.05 * k, 0) for k in range(100)])
+    assert pp.accept(cmd(t0 + 2.0, 0)) is None
+    assert pp.accept(cmd(t0 + 2.05, 0)) is None
+    assert isinstance(pp.accept(cmd(t0 + 5.0, 0)), CommandSample)
+
+
+def test_a_stale_pending_jump_does_not_confirm_a_later_unrelated_glitch():
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0, 0), wheel(REAR_TOPIC, t0, 18.0)])
+    assert pp.accept(cmd(t0 + 15.0, 0)) is None                    # glitch, pending
+    for k in range(1, 61):                                          # 6 s of normal flow
+        pp.accept(cmd(t0 + 0.1 * k, 0))
+        pp.accept(wheel(REAR_TOPIC, t0 + 0.1 * k, 18.0))
+    assert pp.accept(wheel(REAR_TOPIC, t0 + 6.0 + 11.0, 18.0)) is None   # unrelated glitch
+    assert isinstance(pp.accept(wheel(REAR_TOPIC, t0 + 6.1, 18.0)), WheelSample)
+
+
+def test_resync_needs_the_stream_to_move_on_not_back():
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0 + 86400.0, 0)])                            # gate in the future
+    assert pp.accept(cmd(t0 + 1.0, 0)) is None                    # far behind: pending
+    assert pp.accept(cmd(t0 + 0.5, 0)) is None                    # behind the pending one
+    assert isinstance(pp.accept(cmd(t0 + 0.55, 0)), CommandSample)
+
+
+def test_after_a_resync_the_clock_is_back_and_a_new_glitch_is_rejected():
+    pp = Preprocessor(PARAMS)
+    t0 = 1000.0
+    _feed(pp, [cmd(t0 + 86400.0, 0), cmd(t0, 0), cmd(t0 + 0.05, 0)])    # resynced
+    assert pp.accept(cmd(t0 + 0.1, 0)) is not None
+    assert pp.accept(cmd(t0 + 20.0, 0)) is None                   # +20 s over the real clock
+    assert isinstance(pp.accept(cmd(t0 + 0.15, 0)), CommandSample)
+
