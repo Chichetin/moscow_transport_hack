@@ -38,6 +38,7 @@ class Odometry:
         self._accel_model = 0.0               # m/s^2, drive model at the state time
         self._v = 0.0                         # current speed, m/s
         self._v_measured = 0.0                # speed at the last accepted wheel sample
+        self._t_wheel_rx: Optional[float] = None   # state time when a wheel last arrived
         self._distance = 0.0
         self._x = self._y = 0.0
         self._yaw = 0.0
@@ -90,12 +91,14 @@ class Odometry:
         self._accel_model = (model_accel(self._notch_at(now), self._v, self.params)
                              if drive.use_model else 0.0)
         st = self._slip.update(front, rear, self._accel_model, est)
-        stamps = [s.t for s in (front, rear) if s is not None]
-        if (drive.use_model and stamps and not wheel_arrived
-                and now - max(stamps) > self.params.input.stale_timeout_s):
-            # both bogies silent against the state time (the detector sees silence only
-            # relative to the other bogie): trust neither and predict below. A wheel sample
-            # that arrived in this very event is a late measurement, better than the model
+        if wheel_arrived:
+            self._t_wheel_rx = now
+        if (drive.use_model and self._t_wheel_rx is not None
+                and now - self._t_wheel_rx > self.params.input.stale_timeout_s):
+            # no wheel sample has arrived for stale_timeout_s of state time: both bogies
+            # silent (the detector sees silence only relative to the other bogie) -> trust
+            # neither and predict below. Judged by arrival, not by stamp: wheel stamps may
+            # trail the controller by seconds (docs/data.md trap 5) while the wheels talk
             st = dataclasses.replace(st, front_trust=0.0, rear_trust=0.0)
         self._slip_state = st
         used = [(w, s.speed) for w, s in ((st.front_trust, front), (st.rear_trust, rear))

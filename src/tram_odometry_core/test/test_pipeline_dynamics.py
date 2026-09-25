@@ -128,18 +128,35 @@ def test_command_history_is_bounded():
 
 def test_wheels_lagging_behind_the_controller_are_still_used():
     """docs/data.md trap 5: wheel stamps can trail the controller by seconds; a late wheel
-    sample is a measurement, not silence."""
+    sample is a measurement, not silence — on wheel and on controller events alike."""
     for use_model in (True, False):
         params = replace(PARAMS, drive=replace(PARAMS.drive, use_model=use_model))
         odo = Odometry(params)
-        last = None
+        on_cmd, on_wheel = [], []
         for k in range(40):                              # 4 s, controller 1.0 s ahead
             t = T0 + 0.1 * k
-            odo.step((CMD, _cmd(t + 1.0, 0)))
-            last = odo.step((FRONT, _wheel(t, 36.0)))
+            on_cmd.append(odo.step((CMD, _cmd(t + 1.0, 10))))
+            on_wheel.append(odo.step((FRONT, _wheel(t, 36.0))))
             odo.step((REAR, _wheel(t, 36.0)))
-        assert last.speed == pytest.approx(10.0, abs=1e-6), use_model
-        assert last.slip.front_trust == 1.0 and last.slip.rear_trust == 1.0
+        for est in on_cmd[10:] + on_wheel[10:]:
+            assert est.speed == pytest.approx(10.0, abs=1e-6), use_model
+            assert (est.slip.front_trust, est.slip.rear_trust) == (1.0, 1.0), use_model
+
+
+def test_one_silent_bogie_with_controller_events_in_between():
+    """30639: the rear bogie is silent for up to 73 s while the front one talks; controller
+    events between wheel samples must not switch to prediction (trust 1/0, no 0/0)."""
+    odo = Odometry(PARAMS)
+    _cruise(odo, 36.0, T0, T0 + 1.0, notch=10)
+    t = T0 + 1.0
+    for k in range(50):                                  # 5 s, only the front bogie talks
+        t = T0 + 1.0 + 0.1 * k
+        odo.step((FRONT, _wheel(t, 36.0)))
+        est = odo.step((CMD, _cmd(t + 0.05, 10)))
+        if k > 6:
+            assert est.speed == pytest.approx(10.0, abs=1e-6)
+            assert (est.slip.front_trust, est.slip.rear_trust) == (1.0, 0.0)
+            assert est.slip.slip_rear
 
 
 def test_without_the_model_lagging_wheels_and_gaps_behave_like_the_baseline():
