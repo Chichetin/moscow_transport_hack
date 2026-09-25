@@ -72,7 +72,7 @@ Claude Code.
 - ML разрешён, если обучен только на разрешённых данных и работает в реальном времени.
   Офлайн-калибровка параметров разрешена.
 
-## Сдача не ломается молча (D-024)
+## Сдача не ломается молча (D-025)
 
 На Сбере (КТ7) решение получило 0 из 15: установщик жюри разложил файлы иначе, точка входа
 упала на импорте. Риск был записан как «остаточный», а своя проверка гоняла свою раскладку.
@@ -158,7 +158,7 @@ bash tools/submission/jury_layouts.sh --run         # сборка и запус
 - Формат команды — `docs/agents.md`. Каждый участник — одна сессия в своём worktree на
   одну issue. Модель по умолчанию `sonnet`. На математику модели и фильтра основная сессия
   сама запускает `builder` с `model: opus` (параметр инструмента Agent), человека не ждёт;
-  `reviewer` и `jury` — `opus` (D-025).
+  `reviewer` и `jury` — `opus` (D-026).
 - Субагенты — штатная часть работы (D-016), конвейер — `docs/agents.md`: `builder`
   (реализация issue M+), `evaluator` (таблица holdout для PR, стенд, чекпоинты),
   `reviewer` (каждый PR с кодом, тестами, `params.yaml` или `.claude/` перед merge), `scribe` (документы), `jury`
@@ -166,7 +166,7 @@ bash tools/submission/jury_layouts.sh --run         # сборка и запус
 - Скилл `submission-checklist` — проверка комплекта сдачи.
 - `docs/tz-compliance.md` обновляется в том же PR, что и артефакт.
 - CI (`.github/workflows/ci.yml`) на каждый PR и `main`: pytest, `colcon build` и
-  `colcon test` в dev-образе, раскладки жюри. Job `tests` зелёный — условие merge (D-025).
+  `colcon test` в dev-образе, раскладки жюри. Job `tests` зелёный — условие merge (D-026).
 - Хуки: `session-context.sh` (ветка, открытые `blocker`, мои issues, занятые области), `check-secrets.sh`,
   `check-tests.sh`, `check-upstream.sh` (чужие коммиты в твоих файлах и контрактах),
   `check-worktrees.sh`. Проверка хуков: `bash .claude/hooks/test-hooks.sh`.

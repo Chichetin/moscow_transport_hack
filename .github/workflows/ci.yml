@@ -1,4 +1,4 @@
-# Проверки на каждый PR и на main (D-025). Окружение — docker/Dockerfile, как у участников:
+# Проверки на каждый PR и на main (D-026). Окружение — docker/Dockerfile, как у участников:
 # ros:humble-ros-base, numpy 1.21. Данных в CI нет: holdout и стенд с bag — за evaluator.
 name: CI
 
@@ -32,7 +32,7 @@ jobs:
               colcon test --return-code-on-test-failure --event-handlers console_cohesion-
               colcon test-result --verbose'
 
-  # Сборка в раскладках жюри из git archive, без сети, 2 CPU, 512 МБ (D-024).
+  # Сборка в раскладках жюри из git archive, без сети, 2 CPU, 512 МБ (D-025).
   jury-layouts:
     runs-on: ubuntu-latest
     timeout-minutes: 20

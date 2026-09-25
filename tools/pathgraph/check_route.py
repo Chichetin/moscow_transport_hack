@@ -5,7 +5,8 @@ Usage:
 
 "own" — distance to the main branch of the bag's direction or to a terminal branch (>= 2): the
 stricter number, the two main tracks are ~8 m apart; "nearest" — to the closest branch. Fixes: every status >= 0, the same
-outlier filter as the map. Prints a markdown table.
+outlier filter as the map. "height" — |ENU up of the fix − z_m of the nearest branch at the
+fix's projection|. Prints markdown tables.
 """
 from __future__ import annotations
 
@@ -24,21 +25,29 @@ STATUSES = (0, 1, 2)  # NavSatFix status >= 0: every fix with a position
 def _load(bag: Path):
     f = br.read_master_fixes(bag)
     f = f[np.isin(f[:, 4], STATUSES) & np.all(np.isfinite(f[:, 1:4]), axis=1)]
-    e, n, _ = br.lla_to_enu(f[:, 1], f[:, 2], f[:, 3], *br.ORIGIN)
+    e, n, u = br.lla_to_enu(f[:, 1], f[:, 2], f[:, 3], *br.ORIGIN)
     xy = np.column_stack([e, n])
     keep = br.reject_outliers(xy, br.OUTLIER_WIN, br.OUTLIER_M)
-    return bag.name, xy[keep], f[keep, 4]
+    return bag.name, xy[keep], f[keep, 4], u[keep]
 
 
 def cross_track(route: dict, xy: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """|lateral| distance to the bag's own branches and to the nearest branch."""
-    dist = np.column_stack([np.abs(br.project(s, poly, xy)[1]) for s, poly in route.values()])
+    dist = np.column_stack([np.abs(br.project(s, poly, xy)[1]) for s, poly, _ in route.values()])
     if abs(xy[0, 0] - xy[-1, 0]) >= br.MIN_SPAN_M:
         main = 0 if xy[0, 0] > xy[-1, 0] else 1
         own = np.min(dist[:, [main] + list(range(2, dist.shape[1]))], axis=1)
     else:
         own = dist.min(axis=1)
     return own, dist.min(axis=1)
+
+
+def height_error(route: dict, xy: np.ndarray, u: np.ndarray) -> np.ndarray:
+    """|u - map height| on the nearest branch."""
+    proj = [br.project(s, poly, xy) for s, poly, _ in route.values()]
+    nearest = np.argmin(np.column_stack([np.abs(e) for _, e in proj]), axis=1)
+    z_map = np.column_stack([np.interp(ps, s, z) for (ps, _), (s, _, z) in zip(proj, route.values())])
+    return np.abs(u - z_map[np.arange(len(u)), nearest])
 
 
 def _stats(d: np.ndarray) -> str:
@@ -54,9 +63,9 @@ def plot(route: dict, tracks: list, path: Path) -> None:
              ('западная конечная', (-4560, -1185, 90)), ('перегон, две колеи', (-1000, -575, 25))]
     fig, axs = plt.subplots(2, 2, figsize=(16, 13))
     for ax, (title, box) in zip(axs.flat, views):
-        for _, xy, _ in tracks:
+        for _, xy, _, _ in tracks:
             ax.plot(xy[:, 0], xy[:, 1], '.', ms=0.6 if box else 0.3, color='0.6', alpha=0.4)
-        for b, (s, poly) in route.items():
+        for b, (s, poly, _) in route.items():
             ax.plot(poly[:, 0], poly[:, 1], '-', lw=1.2, color=f'C{(3, 0, 2, 1, 4, 5)[b]}',
                     label=('ветка 0 — на запад', 'ветка 1 — на восток')[b] if b < 2
                     else f'ветка {b} — путь конечной')
@@ -82,16 +91,19 @@ def main() -> None:
     bags = [args.data / n for n in br.split_bags(br.SPLITS, 'holdout')]
     with ProcessPoolExecutor(max(1, (os.cpu_count() or 2) - 2)) as ex:
         tracks = [t for t in ex.map(_load, bags) if len(t[1]) > br.OUTLIER_WIN]
-    own_all, near_all, status_all = [], [], []
-    print('| bag | фиксов | own mean, м | own p99, м | nearest mean, м |')
-    print('|---|---|---|---|---|')
-    for name, xy, status in tracks:
+    own_all, near_all, status_all, height_all = [], [], [], []
+    print('| bag | фиксов | own mean, м | own p99, м | nearest mean, м | height mean, м |')
+    print('|---|---|---|---|---|---|')
+    for name, xy, status, u in tracks:
         own, near = cross_track(route, xy)
+        height = height_error(route, xy, u)
         own_all.append(own)
         near_all.append(near)
         status_all.append(status)
-        print(f'| {name} | {len(xy)} | {own.mean():.2f} | {np.percentile(own, 99):.2f} | {near.mean():.2f} |')
-    own, near, status = map(np.concatenate, (own_all, near_all, status_all))
+        height_all.append(height)
+        print(f'| {name} | {len(xy)} | {own.mean():.2f} | {np.percentile(own, 99):.2f} | '
+              f'{near.mean():.2f} | {height.mean():.2f} |')
+    own, near, status, height = map(np.concatenate, (own_all, near_all, status_all, height_all))
     print(f'\nholdout: {len(tracks)} bag, {len(own)} фиксов\n')
     print('| выборка | mean, м | median, м | p95, м | p99, м | max, м |')
     print('|---|---|---|---|---|---|')
@@ -100,6 +112,10 @@ def main() -> None:
     for st in STATUSES:
         if (status == st).any():
             print(f'| own, status {st} ({(status == st).mean():.0%}) | {_stats(own[status == st])} |')
+    print(f'| height, все статусы | {_stats(height)} |')
+    for st in STATUSES:
+        if (status == st).any():
+            print(f'| height, status {st} | {_stats(height[status == st])} |')
     if args.plot:
         plot(route, tracks, args.plot)
         print(f'\n{args.plot}')

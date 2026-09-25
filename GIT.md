@@ -73,7 +73,7 @@ rebase, иначе правило уборки «нет коммитов све�
 Мержит автор, когда:
 
 - проверки зелёные после `git merge origin/main`;
-- CI: job `tests` зелёный на последнем commit PR — `gh pr checks <N> --watch` (D-025);
+- CI: job `tests` зелёный на последнем commit PR — `gh pr checks <N> --watch` (D-026);
 - таблица holdout не хуже `origin/main` (D-012) или в PR есть `D-…` с обоснованием;
 - PR с кодом, тестами, `params.yaml` или `.claude/` — есть вердикт `reviewer` `merge` на
   последнем commit ветки (D-016); PR только с документами — по желанию;
@@ -123,7 +123,7 @@ gh issue list --assignee @me          # мои задачи
 ## Сдача и тег
 
 Тег — **после** проверки по скиллу `submission-checklist`, на commit из `origin/main`, и только
-если машинный гейт вернул 0 (D-024):
+если машинный гейт вернул 0 (D-025):
 
 ```bash
 git fetch --prune

@@ -1,4 +1,4 @@
-"""Machine gate for the submission (D-024): green only on evidence, anything unknown is red.
+"""Machine gate for the submission (D-025): green only on evidence, anything unknown is red.
 
 Usage (from the repo root or a worktree):
     .venv/bin/python tools/submission/check_submission.py
