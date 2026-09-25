@@ -10,7 +10,7 @@
 ```text
 .
 ├── src/                                  # colcon workspace (жюри копирует это в свой ws)
-│   ├── tram_vehicle_msgs/                # tram_vehicle_msgs_vendor: копия сообщений организаторов, если у жюри нет своей (D-006, D-041)
+│   ├── tram_vehicle_msgs/                # tram_vehicle_msgs_vendor: копия сообщений организаторов, если у жюри нет своей (D-006, D-042)
 │   ├── tram_odometry_core/               # ядро: чистый Python + numpy, без rclpy (D-001, D-004)
 │   │   ├── tram_odometry_core/
 │   │   │   ├── types.py                  # КОНТРАКТ: dataclass-типы, Params, load_params
