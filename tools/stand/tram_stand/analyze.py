@@ -1,6 +1,6 @@
 """Stand measurements from a recording: latency, rate, CPU, RSS. Pure functions, no ROS.
 
-Thresholds are criterion 4 of task.md; RSS-growth limit is ours (D-022).
+Thresholds are criterion 4 of task.md; RSS-growth limit is ours (D-023).
 """
 from __future__ import annotations
 
