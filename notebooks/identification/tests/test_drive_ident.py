@@ -111,6 +111,8 @@ def test_identify_recovers_delay_resistance_and_tables():
     br = np.array(res['params']['brake_accel_table']).reshape(ident.NOTCH_MAX + 1, -1)
     err = np.abs(br - 0.1 * notches)[1:9, cols]                   # brake notches -1..-8 were driven
     assert np.median(err) < 0.015 and err.max() < 0.08
+    adhesion = res['params']['adhesion_accel_mps2']                # never cuts a table cell
+    assert adhesion >= max(tr.max(), br.max()) and adhesion == round(adhesion, 2)
 
 
 def test_default_fit_ignores_grade_and_absorbs_a_constant_slope():
