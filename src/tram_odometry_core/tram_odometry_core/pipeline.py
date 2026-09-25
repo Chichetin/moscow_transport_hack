@@ -34,6 +34,8 @@ class Odometry:
         self._gnss_used = False
         self._fix_ok = False                  # valid master fix seen in the window
         self._vel_best = 0.0                  # fastest GNSS speed seen in the window
+        self._stop_since: Optional[float] = None   # stamp when the current standstill began
+        self._stop_snapped = False            # this standstill was already offered to the map
 
     def step(self, raw: Any) -> Optional[Estimate]:
         """Consume one raw input; None means the input was dropped, nothing to publish."""
@@ -70,7 +72,23 @@ class Odometry:
         self._distance += ds
         self._x += ds * math.cos(self._yaw)
         self._y += ds * math.sin(self._yaw)
+        self._on_standstill(now)
         return self._estimate(t, now)
+
+    def _on_standstill(self, now: float) -> None:
+        """After `stop_min_s` of standing, once per standstill, let the map snap the position
+        to a stop place. Not in the GNSS window: the anchor is still being set there."""
+        p = self.params.position
+        if self._v >= p.stop_speed_mps:
+            self._stop_since, self._stop_snapped = None, False
+            return
+        if self._stop_since is None:
+            self._stop_since = now
+        if (self._tracker is not None and not self._stop_snapped
+                and now - self._stop_since >= p.stop_min_s
+                and now - self._t0 > self.params.gnss.init_window_s):
+            self._stop_snapped = True
+            self._tracker.on_stop(self._distance)
 
     def _estimate(self, t: float, now: float) -> Estimate:
         var = self.params.filter.r_wheel
