@@ -65,7 +65,9 @@ for b in $BAGS; do
   if [ -z "$LAUNCH" ]; then
     printf '%s\t%s\t%s\n' "$b" skipped "нет launch в tram_odometry" >> "$RUN"; continue
   fi
-  ( source /tmp/readme/ws/install/setup.bash
+  ( # без job control фоновые процессы стартуют с игнорируемым SIGINT и не останавливаются
+    set -m
+    source /tmp/readme/ws/install/setup.bash
     ros2 launch "$LAUNCH" > "$LOGS/run.$b.node.log" 2>&1 & NODE=$!
     sleep 3
     ros2 bag record -o "/tmp/rec_$b" /result/velocity /result/position > "$LOGS/run.$b.record.log" 2>&1 & REC=$!
