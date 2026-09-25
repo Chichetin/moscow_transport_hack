@@ -19,7 +19,9 @@ color: cyan
 
 ```bash
 git -C <base-wt> rev-parse --short HEAD; git -C <wt> rev-parse --short HEAD
-.venv/bin/python -m tram_eval --split holdout --out out/eval/<commit>   # точная команда — tools/eval/README.md
+cd <base-wt> && .venv/bin/python tools/eval/run_eval.py --split holdout          # -> out/eval/<commit>-holdout/
+cd <wt> && .venv/bin/python tools/eval/run_eval.py --split holdout --compare <base-wt>/out/eval/<base>-holdout/metrics.json
+# точные команды — tools/eval/README.md; строка «D-012: …» в выводе — вердикт по главным метрикам
 ```
 
 Таблица «метрика | было | стало | Δ» по главным метрикам holdout (speed RMSE/MAE, bias на

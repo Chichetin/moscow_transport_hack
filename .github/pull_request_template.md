@@ -6,7 +6,7 @@ Closes #
 
 ## Метрики holdout: было → стало
 
-Команда: `.venv/bin/python -m tram_eval --split holdout --compare out/eval/<base>/metrics.json`
+Команда: `.venv/bin/python tools/eval/run_eval.py --split holdout --compare out/eval/<base>-holdout/metrics.json`
 База: `origin/main` @ `<hash>`; ветка @ `<hash>`.
 
 | Метрика (медиана по bag) | было | стало | Δ |

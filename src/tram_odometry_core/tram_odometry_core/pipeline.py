@@ -1,6 +1,6 @@
 """Single entry point used by the ROS node and tools/eval (docs/contracts.md, section 2).
 
-Baseline (D-020): mean of the two bogie speeds, path by integration, straight-line dead
+Baseline (D-021): mean of the two bogie speeds, path by integration, straight-line dead
 reckoning along the heading taken from GNSS during the init window. The modules that
 follow replace the parts of it; the numbers of this version are the first row of the table.
 """
