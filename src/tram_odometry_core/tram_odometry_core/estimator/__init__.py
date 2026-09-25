@@ -3,6 +3,8 @@ import numpy as np
 
 from ..types import FilterDiagnostics, Params, WheelSample
 
+BIAS_RELEASE_MPS = 0.5  # near-stop region: do not extrapolate braking through v=0
+
 
 class SpeedFilter:
     """Kalman state [speed, acceleration bias] driven by the drive model.
@@ -16,7 +18,7 @@ class SpeedFilter:
         self._p = params.filter
         self._stale_timeout = params.input.stale_timeout_s
         self._max_wheel_accel = params.input.max_wheel_accel_mps2
-        self._rest_speed = params.position.stop_speed_mps
+        self._rest_speed = max(params.position.stop_speed_mps, BIAS_RELEASE_MPS)
         if (self._p.q_accel < 0.0 or self._p.r_wheel <= 0.0
                 or self._p.q_bias < 0.0 or self._p.initial_bias_var < 0.0
                 or self._p.nis_gate <= 0.0):

@@ -204,11 +204,11 @@ def test_stop_does_not_preserve_braking_bias_into_next_start():
 
 def test_braking_bias_released_near_rest():
     filt = SpeedFilter(PARAMS)
-    for k in range(56):
+    for k in range(53):
         t = k / 10.0
         filt.predict(t, 0.0)
         filt.update(wheel(t, 3.0 - 0.5 * t), 1.0)
-    assert filt.state()[0] < PARAMS.position.stop_speed_mps
+    assert PARAMS.position.stop_speed_mps < filt.state()[0] < 0.5
     assert filt.state()[2] > -0.05
 
 
