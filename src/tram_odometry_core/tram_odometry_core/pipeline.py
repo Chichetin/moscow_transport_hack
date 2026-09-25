@@ -7,16 +7,8 @@ follow replace the parts of it; the numbers of this version are the first row of
 import math
 from typing import Any, Optional
 
-from .types import Estimate, Params, SlipState
-
-FRONT_TOPIC = '/vehicle/front_bogie_velocity'
-REAR_TOPIC = '/vehicle/rear_bogie_velocity'
-CMD_TOPIC = '/vehicle/driver_position_cmd'
-
-
-def _stamp(msg) -> float:
-    s = msg.header.stamp
-    return s.sec + s.nanosec * 1e-9
+from .preprocess import Preprocessor
+from .types import CommandSample, Estimate, GnssFix, GnssVel, Params, SlipState, WheelSample
 
 
 class Odometry:
@@ -25,11 +17,11 @@ class Odometry:
     def __init__(self, params: Params, route=None):
         self.params = params
         self.route = route
-        self._t0: Optional[float] = None      # stamp of the first input
+        self._preprocess = Preprocessor(params)
+        self._t0: Optional[float] = None      # stamp of the first input (from preprocess)
         self._t: Optional[float] = None       # newest stamp seen; the state is at this time
-        self._last = {}                       # stream topic -> newest accepted stamp
-        self._speed = {FRONT_TOPIC: None, REAR_TOPIC: None}   # last bogie speed, m/s
-        self._speed_t = {FRONT_TOPIC: -math.inf, REAR_TOPIC: -math.inf}
+        self._speed = {'front': None, 'rear': None}   # last bogie speed, m/s
+        self._speed_t = {'front': -math.inf, 'rear': -math.inf}
         self._v = 0.0                         # current speed, m/s
         self._distance = 0.0
         self._x = self._y = 0.0
@@ -41,46 +33,21 @@ class Odometry:
     def step(self, raw: Any) -> Optional[Estimate]:
         """Consume one raw input; None means the input was dropped, nothing to publish."""
         try:
-            topic, msg = raw
-            t = _stamp(msg)
-            if not math.isfinite(t):
-                return None
-            if self._t0 is None:
-                self._t0 = t
-            if topic == FRONT_TOPIC or topic == REAR_TOPIC:
-                return self._on_wheel(topic, t, msg.velocity)
-            if topic == CMD_TOPIC:
-                return self._on_stream(topic, t)
-            if topic == self.params.gnss.topic_fix:
-                self._on_fix(t, msg)
-            elif topic == self.params.gnss.topic_vel:
-                self._on_vel(t, msg)
+            sample = self._preprocess.accept(raw)
+            self._t0 = self._preprocess.t0
+            if isinstance(sample, WheelSample):
+                self._speed[sample.bogie] = sample.speed
+                self._speed_t[sample.bogie] = sample.t
+                return self._advance(sample.t)
+            if isinstance(sample, CommandSample):
+                return self._advance(sample.t)
+            if isinstance(sample, GnssFix):
+                self._on_fix(sample)
+            elif isinstance(sample, GnssVel):
+                self._on_vel(sample)
             return None
         except (TypeError, ValueError, AttributeError):
             return None
-
-    def _fresh(self, topic: str, t: float) -> bool:
-        """Accept a stream sample only if its stamp is newer than the stream's last one."""
-        if t <= self._last.get(topic, -math.inf):
-            return False
-        self._last[topic] = t
-        return True
-
-    def _on_wheel(self, topic: str, t: float, kmh) -> Optional[Estimate]:
-        p = self.params
-        if not (isinstance(kmh, (int, float)) and math.isfinite(kmh)) or kmh < 0.0:
-            return None
-        if not self._fresh(topic, t):
-            return None
-        scale = p.vehicle.wheel_scale_front if topic == FRONT_TOPIC else p.vehicle.wheel_scale_rear
-        self._speed[topic] = kmh * p.input.wheel_speed_scale * scale   # the only km/h -> m/s
-        self._speed_t[topic] = t
-        return self._advance(t)
-
-    def _on_stream(self, topic: str, t: float) -> Optional[Estimate]:
-        if not self._fresh(topic, t):
-            return None
-        return self._advance(t)
 
     def _advance(self, t: float) -> Estimate:
         now = t if self._t is None else max(self._t, t)
@@ -106,22 +73,16 @@ class Odometry:
             pos_cov=(pos_var, pos_var, 0.0),
             slip=SlipState(1.0, 1.0, False, False, None), gnss_used=self._gnss_used)
 
-    def _in_window(self, t: float) -> bool:
-        return t - self._t0 <= self.params.gnss.init_window_s
-
-    def _on_fix(self, t: float, msg) -> None:
+    def _on_fix(self, sample: GnssFix) -> None:
         # the origin of frame `map` is the first valid fix, so the start is (0, 0)
-        if self._in_window(t) and msg.status.status >= 0:
+        if sample.status >= 0:
             self._fix_ok = True
 
-    def _on_vel(self, t: float, msg) -> None:
-        if not (self._fix_ok and self._in_window(t)):
+    def _on_vel(self, sample: GnssVel) -> None:
+        if not self._fix_ok:
             return
-        ve, vn = msg.twist.linear.x, msg.twist.linear.y
-        if not (math.isfinite(ve) and math.isfinite(vn)):
-            return
-        speed = math.hypot(ve, vn)
+        speed = math.hypot(sample.ve, sample.vn)
         if speed > self._vel_best:      # heading is only defined while moving
             self._vel_best = speed
-            self._yaw = math.atan2(vn, ve)
+            self._yaw = math.atan2(sample.vn, sample.ve)
             self._gnss_used = True
