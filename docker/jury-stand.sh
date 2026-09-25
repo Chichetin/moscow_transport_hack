@@ -14,6 +14,7 @@ OUT="${TRAM_OUT_DIR:-$ROOT/out}"; case "$OUT" in /*) ;; *) OUT="$ROOT/$OUT" ;; e
 OUT="$OUT/stand/$BAG"; mkdir -p "$OUT"
 [ -d "$DATA/$BAG" ] || { echo "Нет bag: $DATA/$BAG" >&2; exit 1; }
 
+rm -rf "$OUT/record" "$OUT/stand.json"   # запись прошлого прогона не должна попасть в замер
 docker build -q -f "$ROOT/docker/Dockerfile" --target jury -t tram-odom:jury "$ROOT" >/dev/null
 # src копируется внутрь (read-only монтирование + свой build/), чтобы не пачкать worktree.
 docker run --rm --cpus=2 --memory=512m --memory-swap=512m --network=none \
