@@ -1,10 +1,9 @@
-# Контракты — черновик v0
+# Контракты — v1
 
 Единственная точка стыковки модулей. Всё, что здесь описано, меняется **только отдельным
 PR** с перечнем потребителей в описании; merge — после апрува каждого потребителя (владельца
-issue соседней `area:`). Владельца у контракта нет. Статус v0: предложение каркаса, первая
-задача плана (`contracts: зафиксировать v1`) превращает его в код (`types.py`) и снимает
-пометку «черновик».
+issue соседней `area:`). Владельца у контракта нет. Статус v1: типы и загрузка параметров
+реализованы в `tram_odometry_core/types.py`, сигнатура `step` — в `pipeline.py`.
 
 Состав контракта:
 
@@ -118,9 +117,12 @@ class Estimate:
 | `position` | `PathTracker(params, route).init(fixes, vel) -> bool`, `.advance(distance) -> (x, y, yaw, pos_cov)` | до успешного `init` — начало координат и курс 0, `gnss_used=False` |
 | `pipeline` | `Odometry(params, route=None).step(raw) -> Estimate \| None` | единственная точка, которую зовут нода и `tools/eval`; `None` — вход отброшен, публиковать нечего |
 
-`params` — `Params` из `types.py`: плоский dataclass, собирается из того же `params.yaml`
-(нода — через ROS-параметры, eval — чтением yaml). Загрузка yaml → `Params` — одна функция
-`load_params(path)` в `types.py`.
+`params` — `Params` из `types.py`: неизменяемый dataclass, по одному вложенному dataclass на
+секцию `params.yaml` (`params.gnss.init_window_s`, `params.drive.notch_max`), имена полей =
+ключи yaml. Списки читаются как `tuple[float, ...]`. Загрузка yaml → `Params` — одна функция
+`load_params(path)` в `types.py`; пропущенный или лишний ключ — `KeyError`, неверный тип —
+`TypeError` (нода не должна стартовать на кривом конфиге молча). Нода передаёт те же значения
+через ROS-параметры, eval читает yaml той же функцией.
 
 ## 3. `params.yaml`
 
