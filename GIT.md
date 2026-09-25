@@ -8,10 +8,16 @@
 ## Сервер
 
 `origin` — `https://github.com/Chichetin/moscow_transport_hack.git`, приватный. Защиты
-ветки на бесплатном тарифе нет, поэтому запрет прямого push в `main` мягкий (D-014): в
-`.claude/settings.json` он в `ask`, агент спрашивает человека. Без явного слова человека
-в `main` попадает только PR. Force-push, rebase, amend, `reset --hard`, `clean`, `add -A`
-закрыты в `permissions.deny`.
+ветки на бесплатном тарифе нет. Прямой push в `main` агент делает сам, без человека
+(D-017): `git push origin HEAD:main` из своего worktree в `permissions.allow`. Путь по
+умолчанию — PR, потому что на нём проверки (`reviewer`, таблица holdout). Прямой push —
+для правок, где PR ничего не добавляет: документы, `HANDOFF.md`, срочная починка
+сломанного `main`. Условия те же, что у merge («Финиш»): перед push
+`git fetch --prune && git merge origin/main`, проверки зелёные; код, тесты, `params.yaml`,
+`.claude/` — только с вердиктом `reviewer` `merge` на этом commit; контракт — только через
+PR с апрувом потребителей. Push без force: не прошёл (`main` ушёл вперёд) — снова merge и
+проверки. Force-push, rebase, amend, `reset --hard`, `clean`, `add -A` закрыты в
+`permissions.deny`.
 
 ## Автономность агента
 
