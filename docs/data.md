@@ -28,7 +28,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python tools/survey/plot_routes.py            # -> docs/data/routes.png
 
 # с ROS (контейнер, сеть не нужна)
-bash docker/dev.sh bash -c 'colcon build --packages-select tram_vehicle_msgs && . install/setup.bash && ros2 bag info /data/30618_0e41eac3'
+bash docker/dev.sh bash -c 'colcon build --packages-select tram_vehicle_msgs_vendor && . install/setup.bash && ros2 bag info /data/30618_0e41eac3'
 ```
 
 `ros2 bag info` на `30618_0e41eac3` (22 мин, 103 489 сообщений):

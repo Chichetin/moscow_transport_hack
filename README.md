@@ -31,13 +31,14 @@ source install/setup.bash
 underlay — и берёт его. Только если его нет, он собирает вложенную копию пакета организаторов
 (`.msg` без изменений, в `package.xml` добавлен `<maintainer>`, без него Humble пакет не
 собирает). Копия вложена в другой пакет, поэтому `colcon` не видит два пакета с одним
-именем ни в какой раскладке (D-043).
+именем ни в какой раскладке (D-043). В `--packages-select` пакет сообщений называется
+`tram_vehicle_msgs_vendor`; `--packages-up-to tram_odometry` включает его сам.
 
-Та же сборка проверяется у нас в семи раскладках workspace, которые может выбрать жюри
-(клон целиком в `src/`, только `src/*`, свой `tram_vehicle_msgs` рядом или поверх, underlay
-и т. д.), из `git archive`, без сети, 2 CPU, 512 МБ: `bash tools/submission/jury_layouts.sh`.
-После сборки в каждой раскладке проверяется, что после `source install/setup.bash`
-импортируются сообщения и нода.
+Та же сборка проверяется у нас в десяти раскладках workspace, которые может выбрать жюри
+(клон целиком в `src/`, только `src/*`, свой `tram_vehicle_msgs` рядом или поверх, underlay,
+`--packages-up-to`, `--merge-install`, `--symlink-install`), из `git archive`, без сети,
+2 CPU, 512 МБ: `bash tools/submission/jury_layouts.sh`. После сборки в каждой раскладке проверяется,
+что после `source install/setup.bash` импортируются сообщения и нода.
 
 ### 2. Запуск
 

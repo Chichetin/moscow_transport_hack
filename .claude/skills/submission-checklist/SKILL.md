@@ -36,7 +36,7 @@ git clone <origin> /tmp/sub && cd /tmp/sub        # чистый клон, не 
 bash docker/jury-stand.sh <holdout bag> 1.0       # сеть выключена, 2 CPU, 512 МБ
 ```
 
-- [ ] `colcon build` без сети — все пакеты (`build.log`), включая `tram_vehicle_msgs`
+- [ ] `colcon build` без сети — все пакеты (`build.log`), включая `tram_vehicle_msgs_vendor`
 - [ ] нода стартует по launch из README без ручных шагов и не падает до конца bag (`node.log`)
 - [ ] `/result/velocity`: `tram_vehicle_msgs/msg/VelocitySensor`, скорость в `velocity`, **м/с**
 - [ ] `/result/position`: `nav_msgs/msg/Odometry`, позиция в `pose.pose.position` (м, локальная

@@ -17,8 +17,9 @@ for d in "$JURY_MSGS" "$ORIG_MSGS"; do
 done
 sed -i '/<maintainer/d' "$ORIG_MSGS/package.xml"
 
-build() { # build <раскладка> <каталог workspace>
-  (cd "$2" && colcon build > "$LOGS/$1.build.log" 2>&1)
+build() { # build <раскладка> <каталог workspace> [аргументы colcon build]
+  local name="$1" ws="$2"; shift 2
+  (cd "$ws" && colcon build "$@" > "$LOGS/$name.build.log" 2>&1)
 }
 
 importable() { # importable <раскладка> <каталог workspace>: сообщения и нода видны после source
@@ -37,11 +38,18 @@ layout() { # layout <имя> <что имитирует>; готовит /tmp/<�
     jury_msgs_in_src)  cp -r "$JURY_MSGS" "$ws/src/" && cp -r /repo "$ws/src/repo" ;;
     over_orig_msgs)    cp -r "$ORIG_MSGS" "$ws/src/" && cp -r /repo/src/* "$ws/src/" ;;
     jury_msgs_over)    cp -r /repo/src/* "$ws/src/" && cp -r "$JURY_MSGS" "$ws/src/" ;;
+    up_to|merge_install|symlink_install) cp -r /repo/src/* "$ws/src/" ;;
     underlay)          mkdir -p "/tmp/$name/under/src" && cp -r "$JURY_MSGS" "/tmp/$name/under/src/" &&
                        build "$name.underlay" "/tmp/$name/under" &&
                        source "/tmp/$name/under/install/setup.bash" && cp -r /repo/src/* "$ws/src/" ;;
   esac
-  if ! build "$name" "$ws"; then
+  local args=()
+  case "$name" in
+    up_to)           args=(--packages-up-to tram_odometry) ;;
+    merge_install)   args=(--merge-install) ;;
+    symlink_install) args=(--symlink-install) ;;
+  esac
+  if ! build "$name" "$ws" "${args[@]}"; then
     status=fail; note="$(grep -m1 -E 'Duplicate package|failed|Error' "$LOGS/$name.build.log" | cut -c1-200)"
   elif ! importable "$name" "$ws"; then
     status=fail; note="не импортируется: $(tail -1 "$LOGS/$name.import.log" | cut -c1-180)"
@@ -56,6 +64,9 @@ layout repo_root        "colcon build прямо в корне клона"
 layout jury_msgs_in_src "клон в <ws>/src/, где уже лежит tram_vehicle_msgs жюри (README данных, §6.1)"
 layout over_orig_msgs   "cp -r src/* поверх оригинала организаторов в <ws>/src/"
 layout jury_msgs_over   "cp -r src/*, затем tram_vehicle_msgs жюри поверх в <ws>/src/ (README данных, §6.1)"
+layout up_to            "README, но colcon build --packages-up-to tram_odometry"
+layout merge_install    "README, но colcon build --merge-install"
+layout symlink_install  "README, но colcon build --symlink-install"
 layout underlay         "tram_vehicle_msgs жюри собран отдельно (underlay), наш src поверх"
 
 # Запуск: только в раскладке README (install-дерево то же во всех), каждый bag отдельно.

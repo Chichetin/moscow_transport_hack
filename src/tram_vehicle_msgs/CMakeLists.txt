@@ -14,13 +14,16 @@ else()
   file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/vendor/package.xml" "${CMAKE_CURRENT_SOURCE_DIR}/vendor/CMakeLists.txt"
        "${CMAKE_CURRENT_SOURCE_DIR}/msg" DESTINATION "${_src}")
   # colcon sources only this package's hooks, not the nested one's: PYTHONPATH for the
-  # generated Python module is registered here, with the same install dir for both builds
+  # generated Python module is registered here, with the same install dir for both builds.
+  # Private ament_cmake_python macros: checked on Humble only.
   find_package(ament_cmake_python REQUIRED)
   _ament_cmake_python_get_python_install_dir()
   _ament_cmake_python_register_environment_hook()
   include(ExternalProject)
   ExternalProject_Add(tram_vehicle_msgs_vendored
     SOURCE_DIR "${_src}"
+    # re-run install on every build: a wiped install/ with a kept build/ must not end up without msgs
+    BUILD_ALWAYS ON
     BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/tram_vehicle_msgs-build"
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX} -DBUILD_TESTING=OFF
                -DPYTHON_INSTALL_DIR=${PYTHON_INSTALL_DIR}
