@@ -64,7 +64,7 @@ class DeadReckoning:
 def test_gnss_after_window_is_not_fed_but_used_as_reference():
     odo = DeadReckoning()
     msgs = drive()
-    est, crash, mismatch = run_pipeline(msgs, odo, gnss_window_s=5.0)
+    est, crash, mismatch = run_pipeline(msgs, odo, bag.gnss_window_end(msgs, 5.0))
     gnss_seen = [t for topic, t in odo.seen if topic in bag.GNSS]
     assert crash is None and mismatch == 0
     assert gnss_seen and max(gnss_seen) <= 105.0
@@ -79,7 +79,7 @@ def test_gnss_after_window_is_not_fed_but_used_as_reference():
 
 def test_zero_window_feeds_no_gnss():
     odo = DeadReckoning()
-    run_pipeline(drive(), odo, gnss_window_s=0.0)
+    run_pipeline(drive(), odo, bag.gnss_window_end(drive(), 0.0))
     assert not [t for topic, t in odo.seen if topic in bag.GNSS and t > 100.0]
 
 
@@ -87,7 +87,7 @@ def test_messages_fed_in_recording_order_with_stamps_going_back():
     msgs = drive(5.0)
     msgs.insert(10, (FRONT, wheel(99.0, 36.0)))                  # late message, stamp from the past
     odo = DeadReckoning()
-    run_pipeline(msgs, odo, gnss_window_s=5.0)
+    run_pipeline(msgs, odo, bag.gnss_window_end(msgs, 5.0))
     assert [t for _, t in odo.seen][:12] == [bag.stamp(m) for _, m in msgs[:12]]
 
 
@@ -98,7 +98,7 @@ def test_crash_is_reported_not_raised():
 
 
 def test_estimate_stamp_other_than_input_is_counted(capsys):
-    _, _, mismatch = run_pipeline(drive(1.0), DeadReckoning(stamp_offset=0.02), gnss_window_s=5.0)
+    _, _, mismatch = run_pipeline(drive(1.0), DeadReckoning(stamp_offset=0.02), bag.gnss_window_end(drive(1.0), 5.0))
     assert mismatch == 60
     evaluate_bag('fake', 5.0, make_odometry=lambda: DeadReckoning(stamp_offset=0.02), msgs=drive(1.0))
     assert 't != input stamp' in capsys.readouterr().err
@@ -127,3 +127,39 @@ def test_real_short_bag_is_read_in_recording_order():
     assert {FRONT, REAR, CMD} <= topics
     m = evaluate_bag(path, 5.0, make_odometry=DeadReckoning, msgs=msgs)
     assert m['crashed'] is False and m['duration_s'] > 10
+
+
+class Glitchy(DeadReckoning):
+    """Returns NaN position on every 50th step and inf speed on every 70th."""
+
+    def step(self, raw):
+        est = super().step(raw)
+        n = len(self.seen)
+        if n % 50 == 0:
+            est.x = float('nan')
+        if n % 70 == 0:
+            est.speed = float('inf')
+        return est
+
+
+def test_non_finite_estimates_are_counted_not_scored(capsys):
+    m = evaluate_bag('fake', 5.0, make_odometry=Glitchy, msgs=drive())
+    assert m['crashed'] is False
+    assert all(m[k] is not None and m[k] == m[k] for k in ('speed_rmse', 'along_rmse', 'drift_pct'))
+    assert 'non-finite' in capsys.readouterr().err
+
+
+def test_metrics_failure_marks_one_bag_crashed(monkeypatch, capsys):
+    def broken(ref, est):
+        raise ValueError('metrics bug')
+    monkeypatch.setattr(bag, 'bag_metrics', broken)
+    m = evaluate_bag('fake', 5.0, make_odometry=DeadReckoning, msgs=drive(1.0))
+    assert m['crashed'] is True
+    assert 'metrics bug' in capsys.readouterr().err
+
+
+def test_bag_without_gnss_has_no_metrics_and_does_not_crash():
+    msgs = [x for x in drive(10.0) if x[0] not in bag.GNSS]
+    m = evaluate_bag('fake', 5.0, make_odometry=DeadReckoning, msgs=msgs)
+    assert m['crashed'] is False and m['n_matched'] == 0
+    assert m['speed_rmse'] is None and m['along_rmse'] is None and m['drift_pct'] is None

@@ -137,11 +137,15 @@ def reference_inputs(msgs):
     return fix_t, fix, vel_t, vel
 
 
-def run_pipeline(msgs, odometry, gnss_window_s: float):
+def gnss_window_end(msgs, gnss_window_s: float) -> float:
+    """Last header.stamp at which GNSS may reach the model: first message + window (D-005)."""
+    return stamp(msgs[0][1]) + gnss_window_s if msgs else 0.0
+
+
+def run_pipeline(msgs, odometry, window_end: float):
     """Feed messages; returns Estimates, crash text or None, count of Estimate.t != input stamp."""
     t, speed, pos, slip = [], [], [], []
     crash, stamp_mismatch = None, 0
-    window_end = stamp(msgs[0][1]) + gnss_window_s if msgs else 0.0
     for topic, msg in msgs:
         s = stamp(msg)
         if topic in GNSS and s > window_end:
@@ -163,21 +167,33 @@ def run_pipeline(msgs, odometry, gnss_window_s: float):
     return est, crash, stamp_mismatch
 
 
+def finite_only(est: Estimates) -> tuple[Estimates, int]:
+    """Estimates without NaN/inf in time, speed or position, and how many were dropped."""
+    ok = np.isfinite(est.t) & np.isfinite(est.speed) & np.isfinite(est.pos).all(axis=1)
+    return Estimates(est.t[ok], est.speed[ok], est.pos[ok], est.slip[ok]), int((~ok).sum())
+
+
 def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None) -> dict:
     """Metrics dict of one bag (docs/contracts.md §4). make_odometry defaults to
     default_odometry; it and `msgs` are for tests."""
     make_odometry = make_odometry or default_odometry
     msgs = read_bag(path) if msgs is None else msgs
+    name = Path(path).name
     stamps = [stamp(m) for _, m in msgs]
-    window_end = stamps[0] + gnss_window_s if stamps else 0.0
-    ref = build_reference(*reference_inputs(msgs), window_end)
-    est, crash, mismatch = run_pipeline(msgs, make_odometry(), gnss_window_s)
+    window_end = gnss_window_end(msgs, gnss_window_s)
+    est, crash, mismatch = run_pipeline(msgs, make_odometry(), window_end)
+    est, nonfinite = finite_only(est)
     m = {'duration_s': float(max(stamps) - min(stamps)) if stamps else 0.0}
-    m.update(bag_metrics(ref, est))
+    try:
+        m.update(bag_metrics(build_reference(*reference_inputs(msgs), window_end), est))
+    except Exception:   # one bad bag must not take down the whole split in the process pool
+        crash = crash or 'metrics failed\n' + traceback.format_exc(limit=3)
     m['crashed'] = crash is not None
     if crash:
-        print(f'{Path(path).name}: pipeline crashed\n{crash}', file=sys.stderr)
+        print(f'{name}: crashed\n{crash}', file=sys.stderr)
     if mismatch:
-        print(f'{Path(path).name}: {mismatch} estimates with t != input stamp (contract §1, D-015)',
-              file=sys.stderr)
-    return {k: (round(v, 4) if isinstance(v, float) and math.isfinite(v) else v) for k, v in m.items()}
+        print(f'{name}: {mismatch} estimates with t != input stamp (contract §1, D-015)', file=sys.stderr)
+    if nonfinite:
+        print(f'{name}: {nonfinite} non-finite estimates (NaN/inf) left out of the metrics', file=sys.stderr)
+    return {k: (None if isinstance(v, float) and not math.isfinite(v) else
+                round(v, 4) if isinstance(v, float) else v) for k, v in m.items()}

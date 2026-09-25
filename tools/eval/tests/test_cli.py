@@ -45,3 +45,12 @@ def test_unknown_split_and_missing_bag_are_errors(capsys):
         cli.main(['--split', 'nope'])
     with pytest.raises(SystemExit):
         cli.main(['--bag', '30618_does_not_exist'])
+
+
+def test_d012_missing_main_metric_is_not_silently_ok():
+    base = {'commit': 'a', 'split': 's', 'bags': {'b': {}},
+            'summary': {'median': {k: 1.0 for k in METRIC_KEYS}, 'worst_bag': {}}}
+    new = {'commit': 'b', 'split': 's', 'bags': {'b': {}},
+           'summary': {'median': dict(base['summary']['median'], speed_rmse=None), 'worst_bag': {}}}
+    line = [x for x in cli.summary_table(new, base) if x.startswith('D-012')][0]
+    assert 'speed_rmse' in line and 'не хуже' not in line

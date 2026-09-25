@@ -49,8 +49,9 @@ def summary_table(result: dict, base: dict | None) -> list[str]:
         delta = fmt((new - old) / abs(old) * 100) if old not in (None, 0) and new is not None else '—'
         name = f'**{k}**' if k in MAIN_METRICS else k
         lines.append(f'| {name} | {fmt(old)} | {fmt(new)} | {delta} |')
-    worse = [k for k in MAIN_METRICS if bmed.get(k) is not None and med[k] is not None
-             and med[k] > bmed[k] * (1 + D012_TOL)]
+    # a main metric the base has and the branch lost (None) is worse, not "no change"
+    worse = [k for k in MAIN_METRICS if bmed.get(k) is not None
+             and (med[k] is None or med[k] > bmed[k] * (1 + D012_TOL))]
     lines += ['', f"D-012: {'хуже больше чем на 2 %: ' + ', '.join(worse) if worse else 'главные метрики не хуже'}"]
     if set(base['bags']) != set(result['bags']):
         lines.append('Внимание: наборы bag в сравнении разные — медианы несравнимы.')
