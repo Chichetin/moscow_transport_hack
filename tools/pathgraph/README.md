@@ -6,6 +6,7 @@ Holdout в построении не используется, только в �
 
 ```bash
 .venv/bin/python tools/pathgraph/build_route.py      # train -> src/tram_odometry/maps/route.csv, ~4 с
+.venv/bin/python tools/pathgraph/build_stops.py      # train -> src/tram_odometry/maps/stops.csv, ~13 с (D-031)
 .venv/bin/python tools/pathgraph/check_route.py --plot docs/verification/<дата>-route-map.png
 .venv/bin/python -m pytest tools/pathgraph           # синтетика, без bag
 ```

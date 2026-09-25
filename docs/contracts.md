@@ -121,9 +121,10 @@ class Branch:                 # одна направленная ветка map
 class Route:
     origin: tuple[float, float, float]    # lat °, lon °, alt м — начало ENU карты
     branches: tuple[Branch, ...]          # в порядке файла: индекс = `branch`
+    stops: tuple[tuple[int, float], ...] = ()   # (branch, s) места остановок, `maps/stops.csv` (§5), D-031
 ```
 
-`load_route(path) -> Route` в `types.py` — единственное место, где читается `route.csv`
+`load_route(path) -> Route` в `types.py` — единственное место, где читается `route.csv` (и `stops.csv` рядом с ним, если он есть)
 (как `load_params` для yaml). Нода берёт файл из `share/tram_odometry/maps/<position.map_file>`,
 `tools/eval` — из `src/tram_odometry/maps/` того же worktree; оба передают его в `Odometry(params, route=)`.
 
@@ -218,3 +219,17 @@ branch,s_m,x_m,y_m,z_m
 `branch` — 0 — на запад, 1 — на восток; ≥ 2 — пути конечных (петля, пути отстоя), каждая ответвляется от другой ветки или вливается в неё, стык — ближайшая точка другой ветки (`tools/pathgraph/README.md`); номера веток ≥ 2 при перестроении карты могут меняться. `s_m` строго растёт внутри
 ветки; шаг ≤ 2 м. `z_m` — ENU up (м) в той же системе, что x/y: судья сравнивает x/y/z, высота на маршруте меняется на 28 м (D-024). Начало ENU карты — фиксированная точка, не зависит от прогона; перевод в
 frame `map` прогона — сдвиг в `position`. GNSS → ENU — только WGS84 ECEF → ENU от начала из заголовка (`tools/pathgraph/build_route.lla_to_enu`): сферическая равнопрямоугольная проекция расходится с ней на 12 м к западному концу маршрута (D-022).
+
+### Места остановок `maps/stops.csv` (D-031)
+
+```
+# stop places: ..., tools/pathgraph/build_stops.py
+branch,s_m,n_bags
+0,146.4,17
+```
+
+`branch`, `s_m` — место на карте `route.csv` (тот же `s`); `n_bags` — сколько train bag там
+останавливались (справочно, ядро не читает). Файл строит `tools/pathgraph/build_stops.py` из
+train, лежит рядом с `route.csv` и ставится в `share/tram_odometry/maps/` тем же `glob('maps/*.csv')`.
+Отсутствие файла — не ошибка (мест нет, привязки нет). Ключи `position.stop_*`, `position.scale_*`,
+`position.anchor_std_m` (`params.yaml`, §3) — часть контракта.

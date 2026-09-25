@@ -134,6 +134,14 @@ class PositionParams:
     along_drift_frac: float
     cross_std_m: float
     fix_gate_m: float
+    anchor_std_m: float
+    stop_speed_mps: float
+    stop_min_s: float
+    stop_snap_max_m: float
+    stop_std_m: float
+    scale_alpha: float
+    scale_max_dev: float
+    scale_min_arc_m: float
 
 
 @dataclass(frozen=True)
@@ -213,10 +221,12 @@ class Branch:                 # one directed track of maps/route.csv (docs/contr
 class Route:
     origin: Tuple[float, float, float]    # lat deg, lon deg, alt m of the map ENU
     branches: Tuple[Branch, ...]
+    stops: Tuple[Tuple[int, float], ...] = ()    # (branch, s) places where the tram stops
 
 
 def load_route(path) -> Route:
-    """Read maps/route.csv: origin from the header comment, branches in file order."""
+    """Read maps/route.csv: origin from the header comment, branches in file order; stop
+    places from stops.csv next to it when there is one (docs/contracts.md §5)."""
     text = Path(path).read_text(encoding='utf-8')
     header = text.splitlines()[0] if text else ''
     found = [re.search(rf'origin_{k}=([-0-9.eE+]+)', header) for k in ('lat', 'lon', 'alt')]
@@ -229,7 +239,14 @@ def load_route(path) -> Route:
     for k, b in enumerate(branches):
         if len(b.s) < 2 or not np.all(np.diff(b.s) > 0):
             raise ValueError(f'{path}: branch {k} needs >= 2 points with increasing s_m (§5)')
-    return Route(origin=origin, branches=branches)
+    stops_path = Path(path).with_name('stops.csv')
+    stops = ()
+    if stops_path.exists():
+        rows = np.loadtxt(stops_path, delimiter=',', comments='#', skiprows=2, ndmin=2)
+        stops = tuple((int(b), float(s)) for b, s in rows[:, :2])
+        if any(not 0 <= b < len(branches) for b, _ in stops):
+            raise ValueError(f'{stops_path}: stop on a branch that route.csv does not have (§5)')
+    return Route(origin=origin, branches=branches, stops=stops)
 
 
 def load_params(path) -> Params:
