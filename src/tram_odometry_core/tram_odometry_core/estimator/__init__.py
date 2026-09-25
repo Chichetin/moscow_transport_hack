@@ -15,6 +15,8 @@ class SpeedFilter:
     def __init__(self, params: Params):
         self._p = params.filter
         self._stale_timeout = params.input.stale_timeout_s
+        self._max_wheel_accel = params.input.max_wheel_accel_mps2
+        self._rest_speed = params.position.stop_speed_mps
         if (self._p.q_accel < 0.0 or self._p.r_wheel <= 0.0
                 or self._p.q_bias < 0.0 or self._p.initial_bias_var < 0.0
                 or self._p.nis_gate <= 0.0):
@@ -29,6 +31,7 @@ class SpeedFilter:
         self._scale_delta = 0.0
         self._recent_wheel = {'front': None, 'rear': None}
         self._zero_wheel = {'front': None, 'rear': None}
+        self._confirmed_stop_t = None
 
     def predict(self, t: float, accel_model: float):
         self._diagnostic = None
@@ -69,6 +72,13 @@ class SpeedFilter:
         scale = 1.0 - self._scale_delta if sample.bogie == 'front' else 1.0 + self._scale_delta
         measurement = sample.speed / scale + self._model_accel * age
         measurement_var = self._p.r_wheel / (trust * scale ** 2) + self._p.q_accel * age
+        plausible_departure = (
+            self._confirmed_stop_t is not None and sample.speed > 0.0
+            and sample.speed <= self._max_wheel_accel * max(0.0, sample.t - self._confirmed_stop_t) + 0.05)
+        if plausible_departure:
+            # Velocity at the next departure is a new motion segment. The
+            # braking posterior should not slow the first plausible wheel.
+            self._cov[0, 0] = max(self._cov[0, 0], 9.0 * measurement_var)
         if not self._initialized:
             self._x[0] = max(0.0, measurement)
             self._cov = np.diag((measurement_var, self._p.initial_bias_var))
@@ -83,9 +93,9 @@ class SpeedFilter:
         innovation_var = float(observation @ projected + measurement_var)
         other = 'rear' if sample.bogie == 'front' else 'front'
         other_zero = self._zero_wheel[other]
-        if (sample.speed == 0.0 and other_zero is not None
-                and abs(sample.t - other_zero) <= 0.02
-                and innovation ** 2 > self._p.nis_gate * innovation_var):
+        paired_zero = (sample.speed == 0.0 and other_zero is not None
+                       and abs(sample.t - other_zero) <= 0.02)
+        if paired_zero and innovation ** 2 > self._p.nis_gate * innovation_var:
             # Two independent zero readings expose a real stop that a smooth
             # motion prior cannot explain. Inflate speed uncertainty so the
             # ordinary NIS gate can accept the corroborated measurement.
@@ -98,6 +108,10 @@ class SpeedFilter:
         self._diagnostic = FilterDiagnostics(sample.t, sample.bogie, nis, accepted)
         if not accepted:
             return
+        if paired_zero:
+            self._confirmed_stop_t = sample.t
+        elif sample.speed > 0.0:
+            self._confirmed_stop_t = None
         gain = projected / innovation_var
         self._x += gain * innovation
         self._x[0] = max(0.0, self._x[0])
@@ -105,7 +119,7 @@ class SpeedFilter:
         self._cov = (residual @ self._cov @ residual.T
                      + np.outer(gain, gain) * measurement_var)
         self._cov = (self._cov + self._cov.T) / 2.0
-        if (sample.speed < 0.1 and self._x[0] < 0.1
+        if (sample.speed < self._rest_speed and self._x[0] < self._rest_speed
                 and self._model_accel <= 0.0 and self._x[1] < 0.0):
             # At a confirmed stop, braking cannot keep accumulating negative
             # velocity. Reset the unobservable bias before the next departure.

@@ -169,6 +169,15 @@ def test_two_independent_zero_wheels_confirm_a_stop():
     assert filt.diagnostics().nis <= PARAMS.filter.nis_gate
 
 
+def test_first_wheel_after_confirmed_stop_starts_new_motion_segment():
+    filt = initialized()
+    filt.update(wheel(0.1, 0.0, 'front'), 0.0)
+    filt.update(wheel(0.1, 0.0, 'rear'), 1.0)
+    filt.predict(0.2, 0.0)
+    filt.update(wheel(0.2, 0.15, 'front'), 1.0)
+    assert filt.state()[0] == pytest.approx(0.15, abs=0.02)
+
+
 def test_diagnostics_only_for_new_wheel_measurement():
     filt = initialized()
     assert filt.diagnostics() is not None
@@ -191,6 +200,16 @@ def test_stop_does_not_preserve_braking_bias_into_next_start():
         filt.predict(t, 0.0)
         filt.update(wheel(t, 0.5 * (t - 10.0)), 1.0)
     assert filt.state()[0] == pytest.approx(1.0, abs=0.15)
+
+
+def test_braking_bias_released_near_rest():
+    filt = SpeedFilter(PARAMS)
+    for k in range(56):
+        t = k / 10.0
+        filt.predict(t, 0.0)
+        filt.update(wheel(t, 3.0 - 0.5 * t), 1.0)
+    assert filt.state()[0] < PARAMS.position.stop_speed_mps
+    assert filt.state()[2] > -0.05
 
 
 def test_relative_wheel_scale_learned_before_one_bogie_gap():
