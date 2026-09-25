@@ -13,6 +13,7 @@ from pathlib import Path
 
 from . import bag as bagmod
 from .metrics import MAIN_METRICS, METRIC_KEYS, summarize
+from .stress import SCENARIOS, evaluate_stress_bag
 
 D012_TOL = 0.02   # main metrics may not get worse by more than 2 % (D-012)
 
@@ -66,6 +67,18 @@ def bag_table(result: dict) -> list[str]:
     return lines
 
 
+def stress_table(bags: dict) -> list[str]:
+    cols = ('peak_speed_excess_mps', 'speed_recovery_s', 'peak_pos3d_excess_m', 'pos_recovery_s')
+    lines = ['| Сценарий | bag | пик скорости, м/с | восстановление скорости, с | пик позиции, м | восстановление позиции, с |',
+             '|---|---|---|---|---|---|']
+    for scenario in SCENARIOS:
+        for name, scenarios in sorted(bags.items()):
+            m = scenarios[scenario]
+            values = ['пропуск: короткий bag'] * 4 if m['skipped'] else [fmt(m[c]) for c in cols]
+            lines.append(f"| {scenario} | {name} | {' | '.join(values)} |")
+    return lines
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog='tram_eval', description=__doc__)
     src = ap.add_mutually_exclusive_group(required=True)
@@ -74,6 +87,7 @@ def main(argv=None) -> int:
     ap.add_argument('--gnss-window', type=float, default=None,
                     help='секунд GNSS для модели, по умолчанию gnss.init_window_s из params.yaml (D-005)')
     ap.add_argument('--compare', type=Path, help='metrics.json базы (например, прогон origin/main)')
+    ap.add_argument('--stress', action='store_true', help='детерминированные сбои входа; отдельный stress.json')
     ap.add_argument('--jobs', type=int, default=max(1, min(8, (os.cpu_count() or 2) - 1)))
     ap.add_argument('--out', type=Path, default=None, help='каталог прогона, по умолчанию out/eval/<commit>-<набор>')
     args = ap.parse_args(argv)
@@ -123,6 +137,18 @@ def main(argv=None) -> int:
     print(f"\n{len(paths)} bag, окно GNSS {window} с, {time.monotonic() - t0:.0f} с; "
           f"упали: {', '.join(crashed) if crashed else 'нет'}; "
           f"оценок NaN/inf (вне метрик): {nonfinite}; t != stamp входа: {mismatch}; -> {out / 'metrics.json'}")
+    if args.stress:
+        if args.jobs > 1 and len(paths) > 1:
+            with ProcessPoolExecutor(min(args.jobs, len(paths))) as ex:
+                diagnostics = list(ex.map(evaluate_stress_bag, paths, [window] * len(paths)))
+        else:
+            diagnostics = [evaluate_stress_bag(p, window) for p in paths]
+        stress = {'commit': commit, 'split': label, 'gnss_window_s': window,
+                  'created': datetime.now().astimezone().isoformat(timespec='seconds'),
+                  'bags': dict(zip(names, diagnostics))}
+        (out / 'stress.json').write_text(json.dumps(stress, ensure_ascii=False, indent=1), encoding='utf-8')
+        print('\n'.join(stress_table(stress['bags'])))
+        print(f"\nСтресс: -> {out / 'stress.json'}")
     return 0
 
 

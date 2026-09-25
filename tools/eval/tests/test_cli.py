@@ -72,3 +72,15 @@ def test_entry_point_with_process_pool(tmp_path):
     res = json.loads((tmp_path / 'metrics.json').read_text(encoding='utf-8'))
     assert set(res['bags']) == set(SHORT)
     assert not any(bag.NOTES in m for m in res['bags'].values())      # pool path keeps §4 format too
+
+
+def test_stress_writes_separate_diagnostics_without_changing_metrics_schema(short_bags, tmp_path, capsys):
+    out = tmp_path / 'stress'
+    assert cli.main(['--bag', short_bags[0], '--jobs', '1', '--stress', '--out', str(out)]) == 0
+    normal = json.loads((out / 'metrics.json').read_text(encoding='utf-8'))
+    stress = json.loads((out / 'stress.json').read_text(encoding='utf-8'))
+    assert set(normal) == {'commit', 'split', 'gnss_window_s', 'created', 'bags', 'summary'}
+    assert set(normal['bags'][short_bags[0]]) == set(METRIC_KEYS) | {'duration_s', 'distance_m', 'n_matched', 'crashed'}
+    assert set(stress['bags'][short_bags[0]]) == set(cli.SCENARIOS)
+    assert stress['bags'][short_bags[0]]['gap_70']['skipped'] is True
+    assert 'пик скорости, м/с' in capsys.readouterr().out
