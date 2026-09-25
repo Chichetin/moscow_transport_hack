@@ -162,8 +162,9 @@ bash docker/jury-stand.sh 30618_27e994fc            # стенд жюри: 2 CPU
 
 Кратко (полностью — `GIT.md`): задача делается **в своём worktree**
 (`claude -w <issue>-<тема>` → `.claude/worktrees/<issue>-<тема>`, ветка
-`worktree-<issue>-<тема>`), в `main` — через PR (`gh pr create`, в описании `Closes #N`).
+`worktree-<issue>-<тема>`), в `main` — через PR (`gh pr create`, в описании `Closes #N`)
+или прямым push `git push origin HEAD:main` на тех же условиях (D-017).
 Коммит и push ветки — **без запроса разрешения** после каждого проверенного шага; в коммит
 только свои пути (`git add <пути>`); force-push, rebase, amend, `reset --hard`, `add -A`
-запрещены; прямой push в `main` — только по явному слову человека (D-014). Трейлеры
+запрещены; push в `main` агент делает сам, без force и только с зелёными проверками. Трейлеры
 соавторства ИИ не добавляем.

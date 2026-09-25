@@ -40,9 +40,7 @@
       "Bash(bash docker/jury-stand.sh:*)",
       "Bash(bash .claude/hooks/*)",
       "Bash(.venv/bin/python:*)",
-      "Bash(python3 -m pytest:*)"
-    ],
-    "ask": [
+      "Bash(python3 -m pytest:*)",
       "Bash(git push origin HEAD:main)",
       "Bash(git push origin main)",
       "Bash(git push -u origin main)",
