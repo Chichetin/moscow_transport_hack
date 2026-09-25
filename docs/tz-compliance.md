@@ -25,7 +25,7 @@
 
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| S1 | RMSE/MAE скорости по всему прогону vs GNSS | eval `speed_rmse`, `speed_mae` | `docs/accuracy.md`, holdout | ⚠️ бейзлайн holdout (D-021): `speed_rmse` медиана 0,064, MAE 0,039 м/с, худший bag 0,167 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`; повтор на Windows с теми же числами — `docs/verification/2026-09-25-eval-holdout-windows.md`); `docs/accuracy.md` — #21 |
+| S1 | RMSE/MAE скорости по всему прогону vs GNSS | eval `speed_rmse`, `speed_mae` | `docs/accuracy.md`, holdout | ⚠️ бейзлайн holdout (D-021): `speed_rmse` медиана 0,064, MAE 0,039 м/с, худший bag 0,167 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`; повтор на Windows с теми же числами — `docs/verification/2026-09-25-eval-holdout-windows.md`); контракт шумов и NIS фильтра — D-032, реализация и holdout — #11; `docs/accuracy.md` — #21 |
 | S2 | Нет bias на разгоне/торможении/остановках | eval `speed_bias_*` | таблица по режимам | ⚠️ бейзлайн holdout: bias разгон −0,060, торможение +0,038, стоянка −0,006, ход −0,025 м/с (медианы, `docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
 | S3 | Нелинейная модель привода: позиция контроллера, скорость вала → момент | `core/dynamics`, `docs/model.md` | тесты; графики идентификации | ⚠️ контракт таблицы `notch × speed` и предел удельной мощности — D-029; модель и числа #9/#10 впереди |
 | S4 | Продольная динамика: масса, радиус, сопротивление, уклон, тормоза, сцепление | `core/dynamics`, `docs/model.md` | — | ⚠️ контракт предела сцепления и сопротивления — D-029; вычисление #10 впереди |
@@ -34,7 +34,7 @@
 
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
-| P1 | Дрейф в конце, % от пути | eval `drift_pct`, `core/position` (`PathTracker`, D-030; привязка к остановкам и масштаб, D-032) | holdout | ⚠️ PO2 (#56, D-031): holdout медиана drift 0,343 → 0,028 %, along RMSE 4,67 → 2,73 м (`docs/verification/2026-09-25-pr56-stops-holdout.md`); ⚠️ положение по карте — PR #14, число holdout «было → стало» в его таблице; бейзлайн holdout: медиана 153 % — прямая по курсу без карты (D-021), планка для #14 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
+| P1 | Дрейф в конце, % от пути | eval `drift_pct`, `core/position` (`PathTracker`, D-030; привязка к остановкам и масштаб, D-033) | holdout | ⚠️ PO2 (#56, D-031): holdout медиана drift 0,343 → 0,028 %, along RMSE 4,67 → 2,73 м (`docs/verification/2026-09-25-pr56-stops-holdout.md`); ⚠️ положение по карте — PR #14, число holdout «было → стало» в его таблице; бейзлайн holdout: медиана 153 % — прямая по курсу без карты (D-021), планка для #14 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
 | P2 | Along-track MEAN/MAX/RMSE | eval `along_*`, `core/position` (`PathTracker`, D-030) | holdout | ⚠️ положение по карте — PR #14, число holdout в его таблице; бейзлайн holdout: along RMSE медиана 3264 м, MEAN 2763 м, MAX 5394 м — без карты (D-021), планка для #14 (`docs/verification/2026-09-25-pr35-baseline-holdout.md`) |
 | P3 | Cross-track при привязке к pathgraph | карта `src/tram_odometry/maps/route.csv` (D-007, D-022), eval `cross_*` | holdout | ⚠️ карта есть: GNSS holdout до карты mean 0,41 м, p99 4,95 м (`docs/verification/2026-09-25-route-map.md`); высота `z_m` (D-024): mean 0,17 м, p99 2,45 м (`docs/verification/2026-09-25-route-height.md`); положение по карте — `PathTracker` (PR #14, D-030): `x/y/z` — точка ветки на дуге пробега, тесты `test_position.py` (выставка, переход ветки, ковариация); `cross_*` holdout — в таблице PR #14 |
 | P4 | Корректный `nav_msgs/Odometry` | нода, контракт §1 | тест формы, запись стенда | ⚠️ `test_position_message_follows_contract` (#5); запись стенда — после стенда |
@@ -45,7 +45,7 @@
 | # | Подпункт | Артефакт | Проверка | Статус |
 |---|---|---|---|---|
 | R1 | Проскальзывание: снижаем доверие к одометрии, опираемся на модель, нет всплесков | `core/slip`, `core/estimator` | stress: всплеск одной тележки; 6 bag 30639 | ⚠️ детектор в pipeline (D-027): покрытие 98,7 % расхождений на train, ложные флаги 0,00 %; stress (#15) и связка с EKF (#11) впереди |
-| R2 | Пропуски и выбросы входов; нет drift blow-up | `core/preprocess` | stress: дыры 1–70 с, выбросы | ⚠️ `Preprocessor` (D-031): stamp откаты/повторы, выбросы по физ. пределу ускорения, GNSS вне окна — тестами (traps 5–7, 9 `docs/data.md`); генератор `--stress` (#15) не готов |
+| R2 | Пропуски и выбросы входов; нет drift blow-up | `core/preprocess` | stress: дыры 1–70 с, выбросы | ⚠️ `Preprocessor` (D-032): stamp откаты/повторы, выбросы по физ. пределу ускорения, GNSS вне окна — тестами (traps 5–7, 9 `docs/data.md`); генератор `--stress` (#15) не готов |
 | R3 | Нода не падает на некорректных/неполных данных; восстановление | нода, pipeline | тесты NaN/пусто/немонотонно; stress `crashed=false` | ⚠️ pipeline: NaN/inf/мусор/немонотонный stamp/молчащая тележка покрыты тестами (D-021); нода: NaN/inf без публикации, исключение ядра не роняет ноду (`test_real_core_drops_nan_wheel_without_publishing`, `test_exception_in_pipeline_does_not_kill_node`, D-028); stress — впереди (R2) |
 | R4 | Флаг/диагностика проскальзывания, оценка сцепления, адаптация модели | `/result/diagnostics`, масштабы колёс в фильтре | запись стенда | ⚠️ флаги и доверие считаются (`core/slip`, D-027); сцепление и диагностика — впереди |
 

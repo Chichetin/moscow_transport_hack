@@ -58,6 +58,14 @@ class SlipState:
 
 
 @dataclass(frozen=True)
+class FilterDiagnostics:
+    t: float                  # stamp of the wheel measurement, seconds
+    bogie: Literal['front', 'rear']
+    nis: float                # squared innovation divided by innovation variance
+    accepted: bool            # whether the wheel measurement passed the NIS gate
+
+
+@dataclass(frozen=True)
 class Estimate:
     t: float                  # = t of the input that triggered the update
     speed: float              # m/s, >= 0
@@ -72,6 +80,7 @@ class Estimate:
     pos_cov: Tuple[float, float, float]   # var_x, var_y, cov_xy
     slip: SlipState
     gnss_used: bool
+    filter_diagnostics: Optional[FilterDiagnostics] = None
 
 
 # --- Params: one dataclass per params.yaml section, field names == yaml keys ---
@@ -118,6 +127,9 @@ class FilterParams:
     rate_hz: float
     q_accel: float
     r_wheel: float
+    q_bias: float
+    initial_bias_var: float
+    nis_gate: float
 
 
 @dataclass(frozen=True)
@@ -258,7 +270,17 @@ def load_params(path) -> Params:
         raise KeyError("params file must contain '/**' -> 'ros__parameters'") from None
     params = _build(Params, raw, 'params')
     _validate_drive(params.drive)
+    _validate_filter(params.filter)
     return params
+
+
+def _validate_filter(filt: FilterParams) -> None:
+    """Reject filter covariances and gates that cannot be used safely."""
+    for name in ('q_accel', 'r_wheel', 'initial_bias_var', 'nis_gate'):
+        if getattr(filt, name) <= 0.0:
+            raise ValueError(f'filter.{name} must be positive')
+    if filt.q_bias < 0.0:
+        raise ValueError('filter.q_bias must be nonnegative')
 
 
 def _validate_drive(drive: DriveParams) -> None:
