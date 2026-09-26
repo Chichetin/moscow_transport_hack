@@ -18,8 +18,15 @@ While the bogies disagree:
 - recent jumps of both in the same direction (and none opposite) are a slide or spin of the whole
   vehicle: neither is trusted, the pipeline predicts with the drive model;
 - a jump of one bogie only is left to the prediction rule above.
-State: the previous update time, the newest sample of each bogie and the stamp of its last jump
-up and down; recovery is immediate when a bogie is consistent again.
+
+Frozen bogie (#144): a sensor that repeats exactly the same non-zero reading on at least
+`slip.freeze_min_samples` new stamps in a row, while the drive model moves the speed by more than
+`slip.freeze_dv_mps` over that run, is failed like a silent one: out of the pair rules above, no
+trust, flagged. Honest readings are noisy floats (on train 18 runs of 3+ repeats above 1 km/h, the
+longest 1.8 s while coasting); exactly 0 is standstill or the dead zone (trap 8), never frozen.
+State: the previous update time, the newest sample of each bogie, the stamp of its last jump
+up and down, and its current run of repeats; recovery is immediate when a bogie is consistent
+again.
 """
 from typing import Optional
 
@@ -34,6 +41,8 @@ class SlipDetector:
         # (bogie, jump up?) -> stamp of the last jump of that bogie in that direction
         self._t_jump = {('front', True): None, ('front', False): None,
                         ('rear', True): None, ('rear', False): None}
+        # bogie -> (repeats of its newest reading on new stamps, model speed change over them)
+        self._repeat = {'front': (0, 0.0), 'rear': (0, 0.0)}
 
     def update(self, front: Optional[WheelSample], rear: Optional[WheelSample],
                accel_model: float, est: Optional[float]) -> SlipState:
@@ -58,13 +67,23 @@ class SlipDetector:
                 # the input clock was resynced back (#77, D-043): forget this bogie's past
                 prev = self._last[name] = None
                 self._t_jump[(name, True)] = self._t_jump[(name, False)] = None
+                self._repeat[name] = (0, 0.0)
             if s is None or (prev is not None and s.t <= prev.t):
                 continue                    # not a new sample of this bogie
             if prev is not None:
                 resid = (s.speed - prev.speed) / (s.t - prev.t) - accel_model
                 if abs(resid) > p.slip.noise_accel_mps2:
                     self._t_jump[(name, resid > 0.0)] = s.t
+                n, dv = self._repeat[name]
+                self._repeat[name] = ((n + 1, dv + accel_model * (s.t - prev.t))
+                                      if s.speed == prev.speed and s.speed != 0.0 else (0, 0.0))
             self._last[name] = s
+
+        frozen = [n for n in live if self._repeat[n][0] >= p.slip.freeze_min_samples
+                  and abs(self._repeat[n][1]) > p.slip.freeze_dv_mps]
+        for name in frozen:
+            del live[name]
+            slip[name] = True
 
         if len(live) == 1:
             alive = next(iter(live))

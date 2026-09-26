@@ -39,12 +39,19 @@ def _run(odo, events):
     return out
 
 
+# a real bogie reading never repeats exactly; an exact non-zero repeat under traction or brake
+# is a frozen sensor (#144), so steady speeds are dithered by this share on every other sample
+# (exactly 0 stays 0: standstill)
+DITHER = 1e-9
+
+
 def _cruise(odo, kmh, t_from, t_to, notch, step=0.1):
     """Both bogies at `kmh`, controller at `notch`, every `step` s."""
-    t = t_from
+    t, k = t_from, 0
     while t < t_to - 1e-9:
-        _run(odo, [(t, FRONT, kmh), (t, REAR, kmh), (t, CMD, notch), (t + step / 2, CMD, notch)])
-        t += step
+        v = kmh * (1.0 + DITHER * (k % 2))
+        _run(odo, [(t, FRONT, v), (t, REAR, v), (t, CMD, notch), (t + step / 2, CMD, notch)])
+        t, k = t + step, k + 1
     return t
 
 
@@ -172,7 +179,7 @@ def test_one_silent_bogie_with_controller_events_in_between(alive):
     _cruise(odo, 36.0, T0, T0 + 1.0, notch=10)
     for k in range(50):                                  # 5 s, only one bogie talks
         t = T0 + 1.0 + 0.1 * k
-        odo.step((alive, _wheel(t, 36.0)))
+        odo.step((alive, _wheel(t, 36.0 * (1.0 + DITHER * (k % 2)))))
         est = odo.step((CMD, _cmd(t + 0.05, 10)))
         if k > 6:
             assert est.speed == pytest.approx(10.0, abs=0.2)

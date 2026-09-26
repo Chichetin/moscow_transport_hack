@@ -14,7 +14,8 @@ def wheels(msgs, topic):
     return [(stamp(m), m.velocity) for t, m in msgs if t == topic]
 
 
-@pytest.mark.parametrize('scenario', SCENARIOS)
+# freeze changes nothing at a constant speed: its own test below drives a ramp
+@pytest.mark.parametrize('scenario', [s for s in SCENARIOS if s != 'freeze'])
 def test_scenario_changes_only_wheels_and_is_reproducible(scenario):
     source = drive(100.0)
     original = deepcopy(source)
@@ -50,6 +51,32 @@ def test_outlier_and_spike_have_distinct_amplitudes():
     spike, a, b = perturb(source, 'spike', 5.0)
     assert b - a == 5.0
     assert sum(v > 36.0 for t, v in wheels(spike, FRONT) if a <= t < b) >= 40
+
+
+def ramp(duration):
+    """drive() accelerating: wheel readings grow by 0.1 km/h per sample."""
+    msgs = deepcopy(drive(duration))
+    for topic in (FRONT, REAR):
+        for k, m in enumerate(m for t, m in msgs if t == topic):
+            m.velocity += 0.1 * k
+    return msgs
+
+
+def test_freeze_holds_both_bogies_at_their_last_reading_before_the_event():
+    source = ramp(100.0)
+    original = deepcopy(source)
+    changed, a, b = perturb(source, 'freeze', 5.0)
+    assert source == original and b - a == 10.0
+    assert [(t, m) for t, m in changed if t in GNSS] == [(t, m) for t, m in source if t in GNSS]
+    for topic in (FRONT, REAR):
+        held = [v for t, v in wheels(source, topic) if t < a][-1]
+        assert {v for t, v in wheels(changed, topic) if a <= t < b} == {held}
+        assert [(t, v) for t, v in wheels(changed, topic) if not a <= t < b] \
+            == [(t, v) for t, v in wheels(source, topic) if not a <= t < b]
+
+
+def test_freeze_at_a_constant_speed_is_skipped():
+    assert perturb(drive(100.0), 'freeze', 5.0) is None
 
 
 def test_noise_is_bounded_and_zero_mean_over_full_cycles():
@@ -105,7 +132,8 @@ def test_stress_evaluation_measures_peak_and_recovery_without_touching_reference
     result = evaluate_stress_bag('fake', 5.0, make_odometry=DeadReckoning, msgs=source)
     assert source == original
     assert set(result) == set(SCENARIOS)
-    assert all(not r['crashed'] for r in result.values())
+    assert all(not r['crashed'] for r in result.values() if not r['skipped'])
+    assert result['freeze']['skipped'] is True          # constant speed: nothing to freeze
     spike = result['spike']
     assert spike['peak_speed_excess_mps'] > 5.0
     assert spike['speed_recovery_s'] is not None

@@ -8,9 +8,10 @@ import numpy as np
 
 from .bag import FRONT, REAR, gnss_window_end, stamp
 
-SCENARIOS = ('outlier', 'gap_1', 'gap_10', 'gap_70', 'spike', 'noise', 'jitter', 'rollback')
+SCENARIOS = ('outlier', 'gap_1', 'gap_10', 'gap_70', 'spike', 'noise', 'jitter', 'rollback',
+             'freeze')
 DURATION_S = {'outlier': 0.2, 'gap_1': 1.0, 'gap_10': 10.0, 'gap_70': 70.0,
-              'spike': 5.0, 'noise': 10.0, 'jitter': 10.0, 'rollback': 10.0}
+              'spike': 5.0, 'noise': 10.0, 'jitter': 10.0, 'rollback': 10.0, 'freeze': 10.0}
 MAX_RECOVERY_GAP_S = 0.3
 
 
@@ -44,21 +45,27 @@ def perturb(msgs, scenario: str, gnss_window_s: float):
     result = []
     front_n = rear_n = 0
     outlier_done = False
+    held = {}           # freeze: the last reading of each bogie before the event (#144)
     changed_count = removed_count = 0
     for topic, msg in msgs:
         t = stamp(msg)
         inside = start <= t < end
+        if topic in (FRONT, REAR) and t < start:
+            held[topic] = msg.velocity
         if topic == FRONT and inside and scenario.startswith('gap_'):
             removed_count += 1
             continue
         if not inside or topic not in (FRONT, REAR):
             result.append((topic, msg))
             continue
-        if topic == REAR and scenario != 'noise':
+        if topic == REAR and scenario not in ('noise', 'freeze'):
             result.append((topic, msg))
             continue
         new = copy.deepcopy(msg)
-        if topic == FRONT:
+        if scenario == 'freeze':
+            # both sensors repeat their last reading: they still agree, only the model can tell
+            new.velocity = held.get(topic, new.velocity)
+        elif topic == FRONT:
             front_n += 1
             if scenario == 'outlier' and not outlier_done:
                 new.velocity = 180.0
