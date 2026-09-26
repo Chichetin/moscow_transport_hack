@@ -284,6 +284,11 @@ class PathTracker:
 
     def _state(self, distance: float):
         """(branch, s) at path `distance`, following the joins at the ends of branches."""
+        k, s, _ = self._walk(distance)
+        return k, s
+
+    def _walk(self, distance: float):
+        """(branch, s, metres past a dead end) at path `distance`."""
         k, s, d0 = self._anchor
         s += self._scale * (distance - d0)
         entry_s = self._anchor[1]
@@ -300,11 +305,10 @@ class PathTracker:
             if s <= end:
                 break
             if self._next[k] is None:
-                s = end
-                break
+                return k, end, s - end
             k, entry_s = self._next[k]
             s = entry_s + s - end
-        return k, max(s, 0.0)
+        return k, max(s, 0.0), 0.0
 
     def _var_along(self, distance: float) -> float:
         return self._var0 + (self.p.along_drift_frac * self._scale * (distance - self._anchor[2])) ** 2
@@ -348,16 +352,22 @@ class PathTracker:
         self._scale += self.p.scale_alpha * (ratio - self._scale)
 
     def advance(self, distance: float, speed: float = 0.0):
-        """(x, y, z, yaw, (var_x, var_y, cov_xy)) at path `distance` and speed (m/s), None
-        before alignment."""
+        """(x, y, z, yaw, (var_x, var_y, cov_xy)) of base_link at path `distance` and speed
+        (m/s), None before alignment. The map, the anchor and the stop places are the track of
+        the master antenna; base_link (the front bogie pivot at rail level, organizers' tf) is
+        `base_ahead_m` ahead of it along the track and `antenna_height_m` below (D-077)."""
         if self._anchor is None:
             return None
         self._take_side(distance, speed)
-        k, s = self._state(distance)
+        k, s, over = self._walk(distance + self.p.base_ahead_m / self._scale)
         x, y, z, yaw = self._at(k, s)
+        # the map ends where master stood in the recordings, so the rail goes on at least
+        # base_ahead_m past a dead end: base_link keeps up to that much ahead of it there
+        over = min(over, self.p.base_ahead_m)
+        x, y = x + over * math.cos(yaw), y + over * math.sin(yaw)
         var_cross = self.p.cross_std_m ** 2
         var_along = var_cross + self._var_along(distance)
         c, sn = math.cos(yaw), math.sin(yaw)
         cov = (var_along * c * c + var_cross * sn * sn, var_along * sn * sn + var_cross * c * c,
                (var_along - var_cross) * c * sn)
-        return x, y, z + self._dz_median, yaw, cov
+        return x, y, z + self._dz_median - self.p.antenna_height_m, yaw, cov
