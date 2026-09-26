@@ -203,3 +203,36 @@ def test_a_bogie_following_hard_braking_is_not_jumping():
     s = _pair(det, 0.1, 10.0 + _jump_step(-0.4, a), 10.0 + _jump_step(-3 * JUMP, a),
               accel_model=a, est=10.0)
     assert s.front_trust == 1.0 and s.rear_trust == 0.0 and s.slip_rear
+
+
+def test_repeated_or_past_stamp_of_a_bogie_records_no_jump():
+    det = SlipDetector(P)
+    _pair(det, 0.0, 10.0, 10.0)
+    _pair(det, 0.1, 10.0, 10.0)
+    far = 10.0 + _jump_step(3 * JUMP)
+    for t in (0.1, 0.05):              # same stamp again, then a small rollback (trap 6)
+        det.update(ws('front', t, far), ws('rear', 0.1, 10.0), 0.0, 10.0)
+    assert all(v is None for v in det._t_jump.values())
+
+
+def test_nan_model_acceleration_records_no_jump():
+    det = SlipDetector(P)
+    _pair(det, 0.0, 10.0, 10.0)
+    d = _jump_step(2 * JUMP)
+    _pair(det, 0.1, 10.0 + d, 10.0 - d, accel_model=float('nan'))
+    assert all(v is None for v in det._t_jump.values())
+
+
+def test_jumps_are_seen_again_after_the_clock_is_resynced_back():
+    # two front samples a day ahead stay as its newest sample; after the resync (D-043) the
+    # antiphase noise must be recognised again
+    det = SlipDetector(P)
+    day = 86400.0
+    _pair(det, 0.0, 10.0, 10.0)
+    det.update(ws('front', day, 10.0), ws('rear', 0.0, 10.0), 0.0, 10.0)
+    det.update(ws('front', day + 0.1, 10.0), ws('rear', 0.0, 10.0), 0.0, 10.0)
+    _pair(det, 1.0, 10.0, 10.0)
+    d = _jump_step(2 * JUMP)
+    # the prediction leans to the front: without the noise rule the front alone would win
+    s = _pair(det, 1.1, 10.0 + d, 10.0 - d, est=10.0 + 0.5 * d)
+    assert (s.front_trust, s.rear_trust) == (0.5, 0.5)

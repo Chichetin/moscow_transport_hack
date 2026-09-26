@@ -54,6 +54,10 @@ class SlipDetector:
         pred = None if est is None else est + accel_model * dt
         for name, s in (('front', front), ('rear', rear)):
             prev = self._last[name]
+            if s is not None and prev is not None and prev.t - s.t > p.input.max_stamp_jump_s:
+                # the input clock was resynced back (#77, D-043): forget this bogie's past
+                prev = self._last[name] = None
+                self._t_jump[(name, True)] = self._t_jump[(name, False)] = None
             if s is None or (prev is not None and s.t <= prev.t):
                 continue                    # not a new sample of this bogie
             if prev is not None:
@@ -103,5 +107,5 @@ class SlipDetector:
         """Both bogies jumped within `slip.noise_hold_s`, in the same or in opposite directions."""
         def recent(key):
             t = self._t_jump[key]
-            return t is not None and t_now - t <= self._p.slip.noise_hold_s
+            return t is not None and 0.0 <= t_now - t <= self._p.slip.noise_hold_s
         return any(recent(('front', up)) and recent(('rear', up == same)) for up in (True, False))
