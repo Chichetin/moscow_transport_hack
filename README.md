@@ -71,7 +71,11 @@ ros2 bag play <каталог bag>                            # терминал
 `header.stamp` на обоих выходах — время входного сообщения из bag (не wall clock).
 `frame_id`: у `/result/velocity` — `base_link`, у `/result/position` — `map` с
 `child_frame_id` = `base_link`. Начало frame `map` — первый
-GNSS-fix статуса 2 в окне выставки (иначе первый валидный), оси ENU, как у эталона.
+GNSS-fix master статуса 2 в окне выставки (иначе первый валидный), оси ENU, как у эталона.
+`pose.pose.position` — точка `base_link` по tf организаторов: ось передней тележки на уровне
+касания колеса и рельса, 9,873 м впереди антенны master и 3,0 м ниже антенн
+(`position.base_ahead_m`, `position.antenna_height_m`; D-077). Выход в точке самой антенны
+master — оба ключа `0` в `params.yaml`.
 
 ```bash
 ros2 topic hz /result/velocity                       # ≈ 40 Гц

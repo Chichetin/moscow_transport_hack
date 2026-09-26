@@ -1,6 +1,7 @@
 """PathTracker: GNSS alignment in the init window, motion along the route map (D-007, D-024)."""
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +14,11 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'tools' / 'pathgraph'))
 import build_route as br  # noqa: E402  (reference ENU of the map builder and of tools/eval)
 
-PARAMS = load_params(ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml')
+PARAMS_YAML = load_params(ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml')
+# the tests below follow the track of the master antenna itself: base_link offset zeroed; the
+# offset of params.yaml (D-077) has its own tests at the end of the file
+PARAMS = replace(PARAMS_YAML, position=replace(PARAMS_YAML.position, base_ahead_m=0.0,
+                                               antenna_height_m=0.0))
 ORIGIN = (55.8104, 37.4623, 168.0)
 M_LAT = 111338.0 / 0.001 / 1000.0           # m per degree of latitude at 55.81 (approx.)
 M_LON = 626.98 / 0.01                       # m per degree of longitude at 55.81 (approx.)
@@ -438,6 +443,79 @@ def test_side_switch_keeps_the_along_track_variance():
     assert tr._var_along(70.0) == pytest.approx(before)
 
 
+# base_link offset of params.yaml (D-077): the map is the master antenna track, the output is
+# the front bogie pivot at rail level, 9.873 m ahead of master and 3.0 m below the antennas
+
+
+def test_base_link_offset_is_the_organizers_tf():
+    assert PARAMS_YAML.position.base_ahead_m == pytest.approx(9.873)
+    assert PARAMS_YAML.position.antenna_height_m == pytest.approx(3.0)
+
+
+def test_output_is_base_link_ahead_of_master_and_below_the_antennas():
+    master = PathTracker(PARAMS, _route())
+    base = PathTracker(PARAMS_YAML, _route())
+    start = _lla(-1000.0, 0.0, 170.0)
+    for tr in (master, base):
+        tr.on_fix(*start, 2, distance=50.0)
+    for distance in (50.0, 1050.0):
+        xm, ym, zm, yaw_m, cov_m = master.advance(distance)
+        xb, yb, zb, yaw_b, cov_b = base.advance(distance)
+        assert xb - xm == pytest.approx(-9.873, abs=0.01)     # branch 0 runs west: ahead = -x
+        assert yb - ym == pytest.approx(0.0, abs=0.01)
+        # 3.0 m below the antenna; the map climbs 10 m per 5 km, 9.873 m ahead is 0.02 m higher
+        assert zb - zm == pytest.approx(-3.0 + 10.0 * 9.873 / 5000.0, abs=0.01)
+        assert abs(math.remainder(yaw_b - yaw_m, 2 * math.pi)) < 1e-3
+        assert cov_b == pytest.approx(cov_m, abs=1e-3)        # the uncertainty is the anchor's
+
+
+def test_base_link_ahead_follows_the_join_onto_the_next_branch():
+    tr = PathTracker(PARAMS_YAML, _route())
+    tr.on_fix(*_lla(-4995.0, 0.0), 2, distance=0.0)           # master 5 m before the end
+    x, y, _, yaw, _ = tr.advance(0.0)                          # base_link 4.873 m down branch 1
+    fx, fy, _ = _enu_bag(*_lla(-5000.0, -4.873), origin=_lla(-4995.0, 0.0))
+    assert math.hypot(x - fx, y - fy) < 1.0
+    assert abs(math.remainder(yaw + math.pi / 2, 2 * math.pi)) < 0.05   # heading south
+
+
+def test_stop_snap_stays_on_the_master_arc_with_the_base_link_offset():
+    """Stop places are where master stood: the offset must not move the snap by 9.873 m."""
+    route = _route()
+    stops = ((0, 1500.0),)
+    master = PathTracker(PARAMS, Route(origin=route.origin, branches=route.branches, stops=stops))
+    base = PathTracker(PARAMS_YAML, Route(origin=route.origin, branches=route.branches, stops=stops))
+    for tr in (master, base):
+        tr.on_fix(*_lla(-1000.0, 0.0, 170.0), 2, distance=0.0)
+        assert tr.on_stop(505.0)                              # 5 m past the stop place
+    xm, _, _, _, _ = master.advance(505.0)
+    xb, _, _, _, _ = base.advance(505.0)
+    assert xm == pytest.approx(_enu_bag(*_lla(-1500.0, 0.0), origin=_lla(-1000.0, 0.0, 170.0))[0],
+                               abs=2.0)                       # snapped towards the place
+    assert xb - xm == pytest.approx(-9.873, abs=0.01)
+
+
+def test_pipeline_publishes_base_link_with_the_offset_of_params():
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS_YAML, route=_route())
+    start = _lla(-1000.0, 0.0, 170.0)
+    odo.step(_fix_msg(0.0, start))
+    est = _wheels(odo, 0.0, 100.0, 36.0)                      # 10 m/s for 100 s: 1 km west
+    fx, fy, fz = _enu_bag(*_lla(-2009.873, 0.0, 172.0), origin=start)
+    assert math.hypot(est.x - fx, est.y - fy) < 2.0
+    assert est.z == pytest.approx(fz - 3.0, abs=0.3)
+
+
+def test_base_link_goes_on_past_a_dead_end_by_the_offset_at_most():
+    """The map ends where master stood: the rail goes on for base_ahead_m past it."""
+    tr = PathTracker(PARAMS_YAML, _route())
+    start = _lla(-5000.0, -250.0)                             # branch 1 is a dead end at -300 m
+    tr.on_fix(*start, 2, distance=0.0)
+    for distance, south in ((45.0, 304.873), (50.0, 309.873), (500.0, 309.873)):
+        x, y, _, _, _ = tr.advance(distance)
+        fx, fy, _ = _enu_bag(*_lla(-5000.0, -south), origin=start)
+        assert math.hypot(x - fx, y - fy) < 0.5
+
+
 @pytest.mark.parametrize('speed', [math.nan, math.inf, -math.inf])
 def test_non_finite_speed_never_takes_the_side_track(speed):
     tr = _depot_tracker()
@@ -479,3 +557,55 @@ def test_a_new_anchor_drops_the_undo_of_an_earlier_side_switch():
     # re-anchored at s = 0 with path 70: path 140 is 70 m along, as a fresh tracker at 70
     assert tr.advance(140.0, 7.0)[:2] == pytest.approx(fresh.advance(70.0, 7.0)[:2], abs=1e-6)
     assert tr._undo is not None and tr._anchor[0] == 3
+
+
+def test_base_link_offset_is_map_arc_whatever_the_online_wheel_scale():
+    """Two stop snaps change the online scale; base_link stays 9.873 m of map arc ahead."""
+    route = _route()
+    stops = ((0, 1500.0), (0, 2000.0))
+    master = PathTracker(PARAMS, Route(origin=route.origin, branches=route.branches, stops=stops))
+    base = PathTracker(PARAMS_YAML, Route(origin=route.origin, branches=route.branches, stops=stops))
+    for tr in (master, base):
+        tr.on_fix(*_lla(-1000.0, 0.0, 170.0), 2, distance=0.0)
+        assert tr.on_stop(505.0) and tr.on_stop(1020.0)      # the wheels read 515 m for 500 m
+        assert tr._scale != pytest.approx(1.0, abs=1e-3)
+    xm, _, _, _, _ = master.advance(1300.0)
+    xb, _, _, _, _ = base.advance(1300.0)
+    assert xb - xm == pytest.approx(-9.873, abs=0.01)
+
+
+def _depot_base_tracker():
+    tr = PathTracker(PARAMS_YAML, _depot_route())
+    tr.on_fix(*_lla(0.0, 0.0), 2, distance=0.0)
+    return tr
+
+
+def test_base_link_follows_the_side_track_once_master_takes_it():
+    tr = _depot_base_tracker()
+    # before the decision (master 5 m past the side start) base_link is on the default path
+    assert tr.advance(45.0, 7.0)[:2] == pytest.approx((54.873, 0.0), abs=0.1)
+    # master 30 m down the side track (branch 3 runs (40, 0) -> (80, -30)): base_link 39.873 m
+    x, y, _, _, _ = tr.advance(70.0, 7.0)
+    assert (x, y) == pytest.approx((40.0 + 0.8 * 39.873, -0.6 * 39.873), abs=0.1)
+
+
+def test_base_link_goes_back_with_master_when_the_side_switch_is_undone():
+    tr = _depot_base_tracker()
+    tr.advance(70.0, 7.0)                                     # onto the side track
+    side_len = tr._s[3][-1]
+    at_end = tr.advance(40.0 + side_len + 29.0, 3.0)          # master waits at the dead end
+    assert at_end[:2] == pytest.approx((80.0, -130.0 - 9.873), abs=0.1)   # base_link past it
+    back = tr.advance(40.0 + side_len + 31.0, 3.0)
+    default = _depot_base_tracker().advance(40.0 + side_len + 31.0, 3.0)
+    assert back[:2] == pytest.approx(default[:2], abs=1e-6)
+
+
+@pytest.mark.parametrize('key, value', [('base_ahead_m', -1.0), ('scale_max_dev', 1.0)])
+def test_load_params_rejects_bad_base_link_keys(tmp_path, key, value):
+    import re
+    text = (ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml').read_text(encoding='utf-8')
+    text = re.sub(rf'(\n\s+{key}:\s*)[-0-9.]+', rf'\g<1>{value}', text)
+    path = tmp_path / 'params.yaml'
+    path.write_text(text, encoding='utf-8')
+    with pytest.raises(ValueError, match=key):
+        load_params(path)
