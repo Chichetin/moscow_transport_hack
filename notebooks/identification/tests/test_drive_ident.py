@@ -135,7 +135,8 @@ def test_identify_recovers_delay_resistance_and_tables():
 @pytest.mark.parametrize('x', [1.09, 1.10, 1.11, 1.12, 1.591, 1.592])
 def test_round_up_to_cent_never_undershoots(x):
     """round(x*100) first, not round(x)*100 (ревью PR #64): the latter overshoots by a
-    cent for x in {1.09..1.12} on this platform's binary float rounding."""
+    cent for x in {1.09, 1.10, 1.11} on this platform's binary float rounding; 1.12 is
+    kept in the grid because it happens to round correctly under either order."""
     r = ident.round_up_to_cent(x)
     assert r >= x and r == round(r, 2) and r - x < 0.01
 
