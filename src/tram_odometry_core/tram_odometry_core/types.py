@@ -168,6 +168,7 @@ class PositionParams:
     side_speed_mps: float
     side_min_m: float
     side_max_m: float
+    side_overrun_m: float
     anchor_std_m: float
     stop_speed_mps: float
     stop_min_s: float
@@ -297,7 +298,17 @@ def load_params(path) -> Params:
     if not (params.input.max_stamp_jump_s > 0):
         raise ValueError('input.max_stamp_jump_s must be positive')
     _validate_filter(params.filter)
+    _validate_side(params.position)
     return params
+
+
+def _validate_side(position: PositionParams) -> None:
+    if not (position.side_speed_mps > 0):
+        raise ValueError('position.side_speed_mps must be positive')
+    if not (0 <= position.side_min_m <= position.side_max_m):
+        raise ValueError('position.side_min_m and side_max_m must satisfy 0 <= min <= max')
+    if not (position.side_overrun_m > 0):
+        raise ValueError('position.side_overrun_m must be positive')
 
 
 def _validate_filter(filt: FilterParams) -> None:

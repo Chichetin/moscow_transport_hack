@@ -8,6 +8,7 @@ Holdout в построении не используется, только в �
 .venv/bin/python tools/pathgraph/build_route.py      # train -> src/tram_odometry/maps/route.csv, ~4 с
 .venv/bin/python tools/pathgraph/build_stops.py      # train -> src/tram_odometry/maps/stops.csv, ~13 с (D-034)
 .venv/bin/python tools/pathgraph/check_route.py --plot docs/verification/<дата>-route-map.png
+.venv/bin/python tools/pathgraph/side_speeds.py      # скорость после начала боковой ветки -> position.side_* (D-074)
 .venv/bin/python -m pytest tools/pathgraph           # синтетика, без bag
 ```
 
