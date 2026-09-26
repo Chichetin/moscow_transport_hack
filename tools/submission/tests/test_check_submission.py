@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import check_submission as cs
 
 OK, FAIL, UNVERIFIED = cs.OK, cs.FAIL, cs.UNVERIFIED
@@ -56,6 +58,24 @@ def test_real_blocker_next_to_gate_umbrella_fails():
 
 def test_blocker_without_labels_field_still_fails():
     assert cs.check_blockers([{'number': 38, 'title': 'x'}])[0] == FAIL
+
+
+def test_gate_label_on_another_issue_still_fails():
+    """Review of #118: only the pinned umbrella is exempt; a real blocker about the gate
+    labelled `gate` by mistake must not turn the gate green."""
+    status, detail = cs.check_blockers([gate_issue(), gate_issue(number=120)])
+    assert status == FAIL and '#120' in detail
+
+
+def test_umbrella_number_without_gate_label_still_fails():
+    issue = {'number': cs.GATE_ISSUE, 'title': 'x', 'labels': [{'name': 'blocker'}]}
+    assert cs.check_blockers([issue])[0] == FAIL
+
+
+@pytest.mark.parametrize('labels', [None, ['gate'], 'gate'])
+def test_odd_labels_format_fails_safe(labels):
+    issue = {'number': cs.GATE_ISSUE, 'title': 'x', 'labels': labels}
+    assert cs.check_blockers([issue])[0] == FAIL
 
 
 def test_open_blockers_asks_gh_for_labels(monkeypatch):
