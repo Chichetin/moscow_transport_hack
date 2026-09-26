@@ -4,13 +4,21 @@ Baseline (D-021): mean of the two bogie speeds, path by integration, straight-li
 reckoning along the heading taken from GNSS during the init window. The modules that
 follow replace the parts of it; the numbers of this version are the first row of the table.
 """
+import dataclasses
 import math
+from collections import deque
 from typing import Any, Optional
 
+from .dynamics import model_accel
+from .estimator import SpeedFilter
 from .position import PathTracker
 from .preprocess import Preprocessor
 from .slip import SlipDetector
 from .types import CommandSample, Estimate, GnssFix, GnssVel, Params, SlipState, WheelSample
+
+# controller samples kept for the drive response delay: bounded memory (O(1) per message);
+# 32 samples at 20 Hz cover 1.6 s, five times the identified delay of 0.3 s (D-033)
+CMD_HISTORY = 32
 
 
 class Odometry:
@@ -26,14 +34,21 @@ class Odometry:
         self._t: Optional[float] = None       # newest stamp seen; the state is at this time
         self._wheel = {'front': None, 'rear': None}   # last WheelSample per bogie, m/s
         self._slip = SlipDetector(params)
+        self._filter = SpeedFilter(params)
         self._slip_state = SlipState(1.0, 1.0, False, False, None)
+        self._cmd = deque(maxlen=CMD_HISTORY)  # (stamp, notch), stamps increasing
+        self._accel_model = 0.0               # m/s^2, drive model at the state time
         self._v = 0.0                         # current speed, m/s
+        self._v_measured = 0.0                # speed at the last accepted wheel sample
+        self._t_wheel_rx: Optional[float] = None   # state time when a wheel last arrived
         self._distance = 0.0
         self._x = self._y = 0.0
         self._yaw = 0.0
         self._gnss_used = False
         self._fix_ok = False                  # valid master fix seen in the window
         self._vel_best = 0.0                  # fastest GNSS speed seen in the window
+        self._stop_since: Optional[float] = None   # stamp when the current standstill began
+        self._stop_snapped = False            # this standstill was already offered to the map
 
     def step(self, raw: Any) -> Optional[Estimate]:
         """Consume one raw input; None means the input was dropped, nothing to publish."""
@@ -42,8 +57,9 @@ class Odometry:
             self._t0 = self._preprocess.t0
             if isinstance(sample, WheelSample):
                 self._wheel[sample.bogie] = sample
-                return self._advance(sample.t)
+                return self._advance(sample.t, sample=sample, wheel_arrived=True)
             if isinstance(sample, CommandSample):
+                self._cmd.append((sample.t, sample.notch))
                 return self._advance(sample.t)
             if isinstance(sample, GnssFix):
                 self._on_fix(sample)
@@ -53,37 +69,95 @@ class Odometry:
         except (TypeError, ValueError, AttributeError):
             return None
 
-    def _advance(self, t: float) -> Estimate:
+    def _notch_at(self, t: float) -> int:
+        """Controller position the drive is acting on at `t`: the newest command stamped at
+        or before `t - response_delay_s`; neutral before the first one."""
+        deadline = t - self.params.drive.response_delay_s
+        notch = 0
+        for stamp, n in self._cmd:            # bounded: at most CMD_HISTORY entries
+            if stamp <= deadline:
+                notch = n
+            else:
+                break
+        return notch
+
+    def _advance(self, t: float, sample=None, wheel_arrived: bool = False) -> Estimate:
+        jump = self.params.input.max_stamp_jump_s
+        if self._t is not None and self._t - t > jump:
+            # the input clock was resynced back by preprocess (#77, D-043): the state time is
+            # in the future of every input now; follow the input instead of freezing there
+            self._t = t
+            self._filter.rebase_time(t)
+            self._t_wheel_rx = t if self._t_wheel_rx is not None else None
+            self._stop_since, self._stop_snapped = None, False
         now = t if self._t is None else max(self._t, t)
         front, rear = self._wheel['front'], self._wheel['rear']
-        est = self._v if self._t is not None else None
-        st = self._slip.update(front, rear, 0.0, est)    # no drive model yet: accel_model = 0
-        self._slip_state = st
-        used = [(w, s.speed) for w, s in ((st.front_trust, front), (st.rear_trust, rear))
-                if s is not None and w > 0.0]
-        if used:
-            self._v = sum(w * v for w, v in used) / sum(w for w, _ in used)
-        # no trusted bogie: keep the last speed
+        # the detector predicts from the last measured speed over its own dt (last wheel
+        # stamp -> newest wheel stamp): a speed already moved on by the model would count
+        # the acceleration twice
+        est = self._v_measured if self._t is not None else None
         dt = 0.0 if self._t is None else now - self._t
+        if dt > jump:
+            dt = 0.0     # a clock jump, not travel: no bag holds such a gap (max 2.6 s, D-043)
+            self._filter.rebase_time(now)
+        drive = self.params.drive
+        self._accel_model = (model_accel(self._notch_at(now), self._v, self.params)
+                             if drive.use_model else 0.0)
+        st = self._slip.update(front, rear, self._accel_model, est)
+        if wheel_arrived:
+            self._t_wheel_rx = now
+        if (drive.use_model and self._t_wheel_rx is not None
+                and now - self._t_wheel_rx > self.params.input.stale_timeout_s):
+            # no wheel sample has arrived for stale_timeout_s of state time: both bogies
+            # silent (the detector sees silence only relative to the other bogie) -> trust
+            # neither and predict below. Judged by arrival, not by stamp: wheel stamps may
+            # trail the controller by seconds (docs/data.md trap 5) while the wheels talk
+            st = dataclasses.replace(st, front_trust=0.0, rear_trust=0.0)
+        self._slip_state = st
+        self._filter.predict(now, self._accel_model)
+        if sample is not None:
+            trust = st.front_trust if sample.bogie == 'front' else st.rear_trust
+            self._filter.update(sample, trust)
+        self._v, _, _ = self._filter.state()
+        if sample is not None and self._filter.diagnostics() is not None:
+            if self._filter.diagnostics().accepted:
+                self._v_measured = self._v
         self._t = now
         ds = self._v * dt
         self._distance += ds
         self._x += ds * math.cos(self._yaw)
         self._y += ds * math.sin(self._yaw)
+        self._on_standstill(now)
         return self._estimate(t, now)
 
+    def _on_standstill(self, now: float) -> None:
+        """After `stop_min_s` of standing, once per standstill, let the map snap the position
+        to a stop place. Not in the GNSS window: the anchor is still being set there."""
+        p = self.params.position
+        if self._v >= p.stop_speed_mps:
+            self._stop_since, self._stop_snapped = None, False
+            return
+        if self._stop_since is None:
+            self._stop_since = now
+        if (self._tracker is not None and not self._stop_snapped
+                and now - self._stop_since >= p.stop_min_s
+                and now - self._t0 > self.params.gnss.init_window_s):
+            self._stop_snapped = True
+            self._tracker.on_stop(self._distance)
+
     def _estimate(self, t: float, now: float) -> Estimate:
-        var = self.params.filter.r_wheel
+        _, var, accel = self._filter.state()
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
         x, y, z, yaw, pos_cov = self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0)
         on_map = self._tracker.advance(self._distance) if self._tracker is not None else None
         if on_map is not None:
             x, y, z, yaw, pos_cov = on_map
         return Estimate(
-            t=t, speed=self._v, speed_var=var, accel=0.0, accel_model=0.0,
+            t=t, speed=self._v, speed_var=var, accel=accel, accel_model=self._accel_model,
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
-            slip=self._slip_state, gnss_used=self._gnss_used)
+            slip=self._slip_state, gnss_used=self._gnss_used,
+            filter_diagnostics=self._filter.diagnostics())
 
     def _on_fix(self, sample: GnssFix) -> None:
         # the origin of frame `map` is the first valid fix, so the start is (0, 0)

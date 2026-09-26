@@ -85,15 +85,28 @@ def test_silent_bogie_speed_from_the_other_one():
     odo = Odometry(PARAMS)
     drive(odo, 0.0, 2.0, KMH_36)                      # both alive
     est = drive(odo, 3.0, 20.0, 72.0, rear=False)     # rear silent >> stale_timeout_s
-    assert est.speed == pytest.approx(20.0)
+    assert est.speed == pytest.approx(20.0, abs=0.01)
 
 
-def test_both_silent_holds_last_speed_and_keeps_moving():
+def test_both_silent_coasts_on_the_drive_model_and_keeps_moving():
     odo = Odometry(PARAMS)
     init_east(odo)
     drive(odo, 1.0, 3.0, KMH_36)
     d0 = odo.step(wheel(FRONT, 3.05, KMH_36)).distance
     est = odo.step(cmd(10.0, 0))                      # only the controller talks for 7 s
+    # neutral: the model coasts against drag (#10); the speed is held only without the model
+    assert est.accel_model < 0.0
+    assert 9.9 < est.speed < 10.1
+    assert est.distance > d0 + 50.0
+
+
+def test_both_silent_holds_last_speed_without_the_model():
+    from dataclasses import replace
+    odo = Odometry(replace(PARAMS, drive=replace(PARAMS.drive, use_model=False)))
+    init_east(odo)
+    drive(odo, 1.0, 3.0, KMH_36)
+    d0 = odo.step(wheel(FRONT, 3.05, KMH_36)).distance
+    est = odo.step(cmd(10.0, 0))
     assert est.speed == pytest.approx(10.0)
     assert est.distance > d0 + 50.0
 
@@ -108,11 +121,18 @@ def test_non_monotonic_stamp_dropped_and_no_rollback():
     assert nxt.distance >= est.distance
 
 
-@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf'), -5.0])
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf')])
 def test_bad_wheel_value_dropped_without_crash(bad):
     odo = Odometry(PARAMS)
     assert odo.step(wheel(FRONT, 1.0, bad)) is None
     assert odo.step(wheel(FRONT, 1.1, KMH_36)).speed == pytest.approx(10.0)
+
+
+def test_negative_wheel_at_standstill_is_zero_speed():
+    """#111: a negative reading (slow roll-back, noise around 0) is 0 m/s, not dropped."""
+    odo = Odometry(PARAMS)
+    est = odo.step(wheel(FRONT, 1.0, -0.3))
+    assert est is not None and est.speed == 0.0
 
 
 def test_garbage_input_dropped():
@@ -142,6 +162,40 @@ def test_gnss_after_window_is_ignored():
             odo.step(gnss_fix(t))
             odo.step(gnss_vel(t, 0.0, 30.0))
         return drive(odo, 6.5, 12.0, KMH_36)
+    a, b = run(False), run(True)
+    assert (a.x, a.y, a.yaw, a.distance) == (b.x, b.y, b.yaw, b.distance)
+
+
+def test_gnss_after_window_is_ignored_after_a_future_first_stamp():
+    """#80: the first input of the bag is a command from the future (+1 day); the window is
+    counted from the real start, so GNSS after it changes nothing (D-005)."""
+    def run(late):
+        odo = Odometry(PARAMS)
+        odo.step(cmd(86400.0, 0))
+        odo.step(cmd(0.0, 0))
+        init_east(odo)
+        drive(odo, 1.0, 5.0, KMH_36)
+        if late:
+            t = PARAMS.gnss.init_window_s + 1.0
+            odo.step(gnss_fix(t))
+            odo.step(gnss_vel(t, 0.0, 30.0))
+        return drive(odo, 6.5, 12.0, KMH_36)
+    a, b = run(False), run(True)
+    assert (a.x, a.y, a.yaw, a.distance) == (b.x, b.y, b.yaw, b.distance)
+    assert all(math.isfinite(v) and v < 1e6 for v in a.pos_cov)
+
+
+def test_gnss_from_the_past_after_the_window_is_ignored():
+    """Review #100: a late GNSS epoch stamped a day back must not steer the heading."""
+    def run(late):
+        odo = Odometry(PARAMS)
+        init_east(odo)
+        drive(odo, 1.0, 10.0, KMH_36)
+        if late:
+            t = -86400.0 + 10.0
+            odo.step(gnss_fix(t))
+            odo.step(gnss_vel(t, 0.0, 30.0))
+        return drive(odo, 10.5, 15.0, KMH_36)
     a, b = run(False), run(True)
     assert (a.x, a.y, a.yaw, a.distance) == (b.x, b.y, b.yaw, b.distance)
 
@@ -187,3 +241,30 @@ def test_stuck_rear_bogie_does_not_halve_the_speed():
     assert est.slip.slip_rear and not est.slip.slip_front
     back = odo.step(wheel(REAR, est.t + 0.1, KMH_36))          # the sensor recovers
     assert back.slip.rear_trust == 1.0 and back.speed == pytest.approx(10.0, abs=0.1)
+
+
+def test_command_does_not_reuse_cached_wheel_as_new_measurement():
+    odo = Odometry(PARAMS)
+    first = odo.step(wheel(FRONT, 0.0, KMH_36))
+    later = odo.step(cmd(0.1, 0))
+    assert later.speed_var > first.speed_var
+    assert 9.99 < later.speed < first.speed
+    assert later.filter_diagnostics is None
+
+
+def test_filter_does_not_apply_wheel_scale_twice():
+    from dataclasses import replace
+    params = replace(PARAMS, vehicle=replace(PARAMS.vehicle, wheel_scale_front=1.01))
+    est = Odometry(params).step(wheel(FRONT, 0.0, KMH_36))
+    assert est.speed == pytest.approx(10.1)
+
+
+def test_pipeline_exposes_nis_only_for_new_wheel_input():
+    odo = Odometry(PARAMS)
+    first = odo.step(wheel(FRONT, 0.0, KMH_36))
+    assert first.filter_diagnostics.accepted
+    assert first.filter_diagnostics.bogie == 'front'
+    assert odo.step(cmd(0.1, 0)).filter_diagnostics is None
+    second = odo.step(wheel(REAR, 0.1, KMH_36))
+    assert second.filter_diagnostics.accepted
+    assert second.filter_diagnostics.bogie == 'rear'

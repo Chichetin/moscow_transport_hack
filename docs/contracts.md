@@ -129,9 +129,10 @@ class Branch:                 # одна направленная ветка map
 class Route:
     origin: tuple[float, float, float]    # lat °, lon °, alt м — начало ENU карты
     branches: tuple[Branch, ...]          # в порядке файла: индекс = `branch`
+    stops: tuple[tuple[int, float], ...] = ()   # (branch, s) места остановок, `maps/stops.csv` (§5), D-034
 ```
 
-`load_route(path) -> Route` в `types.py` — единственное место, где читается `route.csv`
+`load_route(path) -> Route` в `types.py` — единственное место, где читается `route.csv` (и `stops.csv` рядом с ним, если он есть)
 (как `load_params` для yaml). Нода берёт файл из `share/tram_odometry/maps/<position.map_file>`,
 `tools/eval` — из `src/tram_odometry/maps/` того же worktree; оба передают его в `Odometry(params, route=)`.
 
@@ -146,9 +147,9 @@ class Route:
 | Модуль | Публичное | Контракт поведения |
 |---|---|---|
 | `preprocess` | `Preprocessor(params).accept(raw) -> Sample \| None` | `raw` — сырой вход: пара `(topic, ROS-сообщение)` (км/ч, notch как есть; поля сообщения — как в ROS, у bag и rclpy одинаковые); возвращает нормализованный `Sample` или `None` (выброс, NaN, stamp из прошлого сверх допуска, GNSS вне окна) |
-| `dynamics` | `model_accel(notch: int, speed: float, params) -> float` | чистая функция, м/с²; без состояния |
-| `slip` | `SlipDetector(params).update(front, rear, accel_model, est) -> SlipState` | `front`/`rear` — последний `WheelSample` или `None` (молчит); `est` — сглаженная скорость фильтра, м/с, до этого обновления (`None`, пока её нет); `accel_model` — м/с². Возвращает доверие 0..1 и флаги «тележке не доверяем» (аномалия или отказ), D-027 |
-| `estimator` | `SpeedFilter(params).predict(t, accel_model)`, `.update(sample: WheelSample, trust: float)`, `.state() -> (speed, speed_var, accel)`, `.diagnostics() -> FilterDiagnostics \| None` | монотонное время внутри; запоздалое измерение допускается без отката до `input.stale_timeout_s`, более старое отбрасывается; диагностика относится только к новому измерению тележки |
+| `dynamics` | `model_accel(notch: int, speed: float, params) -> float` | чистая функция, м/с²; без состояния: интерполяция таблиц D-029 по `speed_grid_mps`, пределы сцепления и мощности, минус сопротивление Дэвиса. Задержка отклика `drive.response_delay_s` — состояние `pipeline` (буфер команд): в модель идёт позиция контроллера на момент `t − delay`. При `drive.use_model` pipeline передаёт `accel_model` детектору и прогнозирует скорость на паузе обеих тележек (`v ≥ 0`); `Estimate.accel_model` — это значение |
+| `slip` | `SlipDetector(params).update(front, rear, accel_model, est) -> SlipState` | `front`/`rear` — последний `WheelSample` или `None` (молчит); `est` — сглаженная скорость фильтра, м/с, до этого обновления (`None`, пока её нет); `accel_model` — м/с². Возвращает доверие 0..1 и флаги «тележке не доверяем» (аномалия или отказ), D-027. Состояние детектора — последний сэмпл каждой тележки и stamp её последних скачков вверх и вниз (`slip.noise_*`, D-054): при расхождении противофазные недавние скачки обеих — доверие 0,5/0,5, синфазные — 0/0 и оба флага |
+| `estimator` | `SpeedFilter(params).predict(t, accel_model)`, `.update(sample: WheelSample, trust: float)`, `.state() -> (speed, speed_var, accel)`, `.diagnostics() -> FilterDiagnostics \| None` | монотонное время состояния внутри; новое колесо допускается, если его stamp отстаёт от последнего принятого stamp **колёс** не более чем на `input.stale_timeout_s`, даже когда контроллер опережает оба колеса; более старое колесо отбрасывается. Запоздалое измерение учитывается без отката состояния, с поправкой на возраст; диагностика относится только к новому измерению тележки |
 | `position` | `PathTracker(params, route)`; `.on_fix(lat, lon, alt, status, distance)` — каждый fix master в окне `gnss.init_window_s`; `.ready -> bool`; `.advance(distance) -> (x, y, z, yaw, pos_cov) \| None` | frame `map` прогона — ENU первого fix статуса 2 (иначе первого валидного), как эталон `tools/eval`; карта переводится в него один раз через ECEF; якорь — ближайшая точка ближайшей ветки по последнему fix окна; дальше только вперёд по дуге `s = s₀ + distance − distance₀`, конец ветки продолжается на ближайшей ветке не дальше `position.join_m`; `pos_cov` — `cross_std_m` поперёк, вдоль растёт как `along_drift_frac · путь`; fix окна дальше `position.fix_gate_m` от карты (в ENU карты) — выброс, не участвует ни в начале frame, ни в якоре, ни в высоте; до первого принятого fix `advance` даёт `None`: pipeline публикует прямую D-021 (начало — первый fix, курс — по GNSS vel окна), `z = 0` |
 | `pipeline` | `Odometry(params, route=None).step(raw) -> Estimate \| None` | единственная точка, которую зовут нода и `tools/eval`; `None` — вход отброшен, публиковать нечего |
 
@@ -177,6 +178,19 @@ ROS 2 не выводит их тип и нода не стартует.
 `(м/с²)²`. `filter.nis_gate` — безразмерный включительный порог NIS; при NIS
 выше него измерение не обновляет состояние. Принятые и отвергнутые измерения
 дают отдельную запись `FilterDiagnostics`.
+
+### Скачки тележек (D-054)
+
+`slip.noise_accel_mps2` — порог скачка тележки, м/с²: модуль разности собственного ускорения
+шага (`Δv/Δt` двух соседних сэмплов одной тележки) и `accel_model` больше него. `slip.noise_hold_s`
+— с, сколько скачок считается недавним. Правила применения — §2, модуль `slip`.
+
+### Пределы входа тележек (D-056)
+
+`input.max_wheel_speed_mps` — м/с, положительный: отсчёт тележки выше него (после перевода км/ч → м/с)
+отбрасывается всегда, в том числе первый отсчёт потока. Скачок с ровно 0 быстрее
+`input.max_wheel_accel_mps2` проходит, только если вторая тележка свежая и показывает ту же скорость
+(`slip.front_rear_threshold_mps`).
 
 ### Таблицы привода (D-029)
 
@@ -244,3 +258,17 @@ branch,s_m,x_m,y_m,z_m
 `branch` — 0 — на запад, 1 — на восток; ≥ 2 — пути конечных (петля, пути отстоя), каждая ответвляется от другой ветки или вливается в неё, стык — ближайшая точка другой ветки (`tools/pathgraph/README.md`); номера веток ≥ 2 при перестроении карты могут меняться. `s_m` строго растёт внутри
 ветки; шаг ≤ 2 м. `z_m` — ENU up (м) в той же системе, что x/y: судья сравнивает x/y/z, высота на маршруте меняется на 28 м (D-024). Начало ENU карты — фиксированная точка, не зависит от прогона; перевод в
 frame `map` прогона — сдвиг в `position`. GNSS → ENU — только WGS84 ECEF → ENU от начала из заголовка (`tools/pathgraph/build_route.lla_to_enu`): сферическая равнопрямоугольная проекция расходится с ней на 12 м к западному концу маршрута (D-022).
+
+### Места остановок `maps/stops.csv` (D-034)
+
+```
+# stop places: ..., tools/pathgraph/build_stops.py
+branch,s_m,n_bags
+0,146.4,17
+```
+
+`branch`, `s_m` — место на карте `route.csv` (тот же `s`); `n_bags` — сколько train bag там
+останавливались (справочно, ядро не читает). Файл строит `tools/pathgraph/build_stops.py` из
+train, лежит рядом с `route.csv` и ставится в `share/tram_odometry/maps/` тем же `glob('maps/*.csv')`.
+Отсутствие файла — не ошибка (мест нет, привязки нет). Ключи `position.stop_*`, `position.scale_*`,
+`position.anchor_std_m` (`params.yaml`, §3) — часть контракта.

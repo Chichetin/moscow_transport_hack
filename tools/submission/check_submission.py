@@ -4,7 +4,8 @@ Usage (from the repo root or a worktree):
     .venv/bin/python tools/submission/check_submission.py
 
 Checks, each OK / FAIL / НЕ ПРОВЕРЕНО; exit code 0 only when every check is OK:
-  blockers    open GitHub issues labelled `blocker`
+  blockers    open GitHub issues labelled `blocker`, except the gate's own umbrella issue
+              (#96, also labelled `gate`; #117, D-065): it closes when this gate is green
   layouts     out/submission/layouts-<HEAD>.json from tools/submission/jury_layouts.sh --run
   tree        tracked files are committed: the layouts report proves HEAD, nothing else
   artifacts   the six submission artifacts and a launch file exist
@@ -24,6 +25,10 @@ from pathlib import Path
 import yaml
 
 OK, FAIL, UNVERIFIED = 'OK', 'FAIL', 'НЕ ПРОВЕРЕНО'
+# The umbrella blocker that tracks this gate itself (D-065): exempt only by number AND label,
+# so a real blocker labelled `gate` by mistake still fails the gate.
+GATE_ISSUE = 96
+GATE_LABEL = 'gate'
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = ('README.md', 'docs/model.md', 'docs/parameters.md', 'docs/accuracy.md',
              'docs/roadmap.md', 'src/tram_odometry/package.xml',
@@ -33,11 +38,34 @@ MARKER = re.compile(r'\b(TBD|TODO|FIXME|XXX)\b')
 ROW = re.compile(r'^\|\s*([TA]\d+)\s*\|')
 
 
+def ensure_utf8_stdout() -> None:
+    """Console codepage must not crash the gate on its own Cyrillic/emoji output (#124).
+
+    `print()` writes through `sys.stdout`, whose encoding on Windows defaults to the
+    console codepage (e.g. cp1251), not UTF-8; `check_compliance`'s FAIL detail contains
+    U+2705 and raises `UnicodeEncodeError` there without this. `errors='replace'` is a
+    defensive fallback, not the point: encoding *to* UTF-8 can represent any character,
+    so it only fires on an already-broken surrogate -- the fix is the target encoding.
+    """
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+
+def _is_gate_umbrella(issue: dict) -> bool:
+    labels = issue.get('labels') or []
+    return (issue.get('number') == GATE_ISSUE
+            and any(isinstance(lb, dict) and lb.get('name') == GATE_LABEL for lb in labels))
+
+
 def check_blockers(issues: list | None) -> tuple[str, str]:
     if issues is None:
         return UNVERIFIED, 'gh не ответил: открытые blocker не видны (gh auth status)'
-    if issues:
-        return FAIL, 'открыты: ' + '; '.join(f"#{i['number']} {i['title']}" for i in issues)
+    gate = [i for i in issues if _is_gate_umbrella(i)]
+    real = [i for i in issues if i not in gate]
+    if real:
+        return FAIL, 'открыты: ' + '; '.join(f"#{i['number']} {i['title']}" for i in real)
+    if gate:
+        return OK, 'открыта только зонтичная issue гейта: ' + ', '.join(f"#{i['number']}" for i in gate)
     return OK, 'открытых нет'
 
 
@@ -61,7 +89,7 @@ def check_layouts(out: Path, commit: str) -> tuple[str, str]:
 
 def check_tree(root: Path) -> tuple[str, str]:
     res = subprocess.run(['git', '-C', str(root), 'status', '--porcelain', '--untracked-files=no'],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, encoding='utf-8')
     if res.returncode != 0:
         return UNVERIFIED, 'git status не отработал'
     changed = res.stdout.split('\n')
@@ -120,8 +148,8 @@ def check_params(root: Path) -> tuple[str, str]:
 def open_blockers() -> list | None:
     try:
         res = subprocess.run(['gh', 'issue', 'list', '--label', 'blocker', '--state', 'open',
-                              '--limit', '100', '--json', 'number,title'],
-                             capture_output=True, text=True, timeout=30, cwd=ROOT)
+                              '--limit', '100', '--json', 'number,title,labels'],
+                             capture_output=True, text=True, encoding='utf-8', timeout=30, cwd=ROOT)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return json.loads(res.stdout) if res.returncode == 0 else None
@@ -144,10 +172,11 @@ def exit_code(rows: list[tuple[str, str, str]]) -> int:
 
 
 def main() -> int:
+    ensure_utf8_stdout()
     root = Path(subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True,
-                               text=True, check=True).stdout.strip())
+                               text=True, encoding='utf-8', check=True).stdout.strip())
     commit = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], capture_output=True,
-                            text=True, check=True).stdout.strip()
+                            text=True, encoding='utf-8', check=True).stdout.strip()
     rows = [('blockers', *check_blockers(open_blockers())),
             ('layouts', *check_layouts(out_dir(root), commit)),
             ('tree', *check_tree(root)),

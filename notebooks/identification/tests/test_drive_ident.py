@@ -1,4 +1,5 @@
 """Identification on synthetic data with known parameters (issue #9)."""
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -56,6 +57,22 @@ def test_resistance_is_recovered_and_non_negative():
     assert c == pytest.approx(C_TRUE, abs=2e-3)
     c_neg = di.fit_resistance(v, -(0.05 - 0.001 * v * v))       # best unconstrained c2 < 0
     assert min(c_neg) >= 0.0
+
+
+def test_blas_is_pinned_single_threaded():
+    # #68: np.linalg.solve in fit_curve() below once returned a node 0.038 off from the single-
+    # threaded result on CI -- roughly 11 orders of magnitude more than the ~1e-13 rounding noise
+    # expected at this system's condition number (~1e3), so multi-threaded OpenBLAS (a race, or a
+    # DYNAMIC_ARCH kernel bug -- not established which) is the suspect, not just "a different but
+    # still correct" summation order. Root conftest.py pins the thread count before numpy is
+    # imported anywhere in the session; this guards against someone removing that, and against it
+    # being too late (see _NUMPY_ALREADY_IMPORTED there).
+    import conftest
+    assert not conftest._NUMPY_ALREADY_IMPORTED, (
+        'numpy was already imported before conftest.py pinned BLAS threads -- the pin came too '
+        'late to take effect (#68)')
+    for var in ('OPENBLAS_NUM_THREADS', 'OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
+        assert os.environ.get(var) == '1', f'{var} must be pinned for reproducible curve fits'
 
 
 def test_curve_fit_and_sparse_nodes():

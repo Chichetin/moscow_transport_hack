@@ -8,6 +8,11 @@ the tram to the nearest branch: (branch, s, distance). After that the tram only 
 along its branch (trams here are single-ended): s = s_anchor + distance - distance_anchor,
 continuing onto the next branch at the end. x, y, z and yaw come from the branch at s, z is
 shifted by the run's median height offset from the map in the window.
+
+Stop places (D-034): a stop of the tram (the pipeline detects it) close to a stop place of the
+map moves s to that place, weighted by the variances, and resets the along-track variance.
+Between two snaps on one branch the ratio of map arc to wheel path updates a slow online wheel
+scale. Both use the map only, never GNSS after the window.
 """
 import math
 from typing import Optional, Tuple
@@ -47,6 +52,7 @@ class PathTracker:
         self._step = [float(b.s[1] - b.s[0]) for b in route.branches]
         self._map = [np.column_stack([b.x, b.y, b.z]) for b in route.branches]
         self._next = [self._join(k) for k in range(len(self._map))]
+        self._fork = [self._fork_join(k) for k in range(len(self._map))]
         self._xyz = self._map                 # branches in the frame of the run
         lat0, lon0, alt0 = route.origin       # the map's own ENU: the outlier gate lives here
         self._map_rot, self._map_ecef0 = _enu_rotation(lat0, lon0), _ecef(lat0, lon0, alt0)
@@ -55,6 +61,11 @@ class PathTracker:
         self._anchor: Optional[Tuple[int, float, float]] = None   # branch, s, distance
         self._dz = []                         # run height - map height, one per window fix
         self._dz_median = 0.0
+        self._stops = [np.array(sorted(s for b, s in route.stops if b == k), float)
+                       for k in range(len(self._map))]
+        self._var0 = 0.0                      # along-track variance at the anchor, m^2
+        self._scale = 1.0                     # online wheel scale: map arc per metre of wheel path
+        self._last_snap: Optional[Tuple[int, float, float]] = None   # branch, place s, distance
 
     @property
     def ready(self) -> bool:
@@ -78,6 +89,32 @@ class PathTracker:
                 continue
             if best is None or d[i] < best[2]:
                 best = (j, float(self._s[j][i]), float(d[i]))
+        return None if best is None else best[:2]
+
+    def _fork_join(self, k: int):
+        """A forward branch start that bypasses this branch's dead end, if one exists."""
+        if self._next[k] is not None:
+            return None
+        parent = self._map[k]
+        best = None
+        for j, child in enumerate(self._map):
+            if j == k or self._next[j] is None:
+                continue
+            start = child[0, :2]
+            i = int(np.argmin((parent[:, 0] - start[0]) ** 2 +
+                              (parent[:, 1] - start[1]) ** 2))
+            d = float(np.hypot(*(parent[i, :2] - start)))
+            if d > self.p.join_m or i >= len(parent) - 1:
+                continue
+            tangent = parent[i + 1, :2] - parent[i, :2]
+            child_tangent = child[1, :2] - child[0, :2]
+            cos = float(np.dot(tangent, child_tangent) /
+                        (np.linalg.norm(tangent) * np.linalg.norm(child_tangent)))
+            if cos < math.cos(JOIN_MAX_TURN_RAD):
+                continue
+            candidate = (float(self._s[k][i]), j, d)
+            if best is None or d < best[2]:
+                best = candidate
         return None if best is None else best[:2]
 
     def _set_origin(self, lat: float, lon: float, alt: float, status: int) -> None:
@@ -134,28 +171,83 @@ class PathTracker:
         p = self._rot @ (_ecef(lat, lon, alt) - self._ecef0)
         k, s = self._locate(p[:2])
         self._anchor = (k, s, distance)
+        self._var0 = self.p.anchor_std_m ** 2
+        self._last_snap = None
         self._dz.append(float(p[2]) - self._at(k, s)[2])
         self._dz_median = float(np.median(self._dz))
 
-    def advance(self, distance: float):
-        """(x, y, z, yaw, (var_x, var_y, cov_xy)) at path `distance`, None before alignment."""
-        if self._anchor is None:
-            return None
+    def _state(self, distance: float):
+        """(branch, s) at path `distance`, following the joins at the ends of branches."""
         k, s, d0 = self._anchor
-        s += distance - d0
+        s += self._scale * (distance - d0)
+        entry_s = self._anchor[1]
         # bounded number of branch changes per call: a run never crosses more branches than the
         # map has; at the limit the position stays at the end of the last branch (a dead end)
         for _ in range(len(self._xyz)):
+            fork = self._fork[k]
+            if fork is not None and entry_s <= fork[0] < s:
+                fork_s, next_k = fork
+                s = self._s[next_k][0] + s - fork_s
+                k, entry_s = next_k, float(self._s[next_k][0])
+                continue
             end = float(self._s[k][-1])
             if s <= end:
                 break
             if self._next[k] is None:
                 s = end
                 break
-            k, s = self._next[k][0], self._next[k][1] + s - end
-        x, y, z, yaw = self._at(k, max(s, 0.0))
+            k, entry_s = self._next[k]
+            s = entry_s + s - end
+        return k, max(s, 0.0)
+
+    def _var_along(self, distance: float) -> float:
+        return self._var0 + (self.p.along_drift_frac * self._scale * (distance - self._anchor[2])) ** 2
+
+    def on_stop(self, distance: float) -> bool:
+        """The tram has stood still for `stop_min_s` at path `distance`. True when s was
+        snapped to a stop place of the map."""
+        if self._anchor is None or not math.isfinite(distance):
+            return False
+        k, s = self._state(distance)
+        places = self._stops[k]
+        if not len(places):
+            return False
+        distances = np.abs(places - s)
+        nearest = int(np.argmin(distances))
+        if distances[nearest] > self.p.stop_snap_max_m:
+            return False                      # not at a stop place: a signal, keep s
+        if len(places) > 1:
+            second = float(np.partition(distances, 1)[1])
+            if second - distances[nearest] <= 2.0 * self.p.stop_std_m:
+                return False                  # map uncertainty cannot distinguish close candidates
+        place = float(places[nearest])
+        var = self._var_along(distance)
+        gain = var / (var + self.p.stop_std_m ** 2)
+        self._update_scale(k, place, distance)
+        self._anchor = (k, s + gain * (place - s), distance)
+        self._var0 = (1.0 - gain) * var
+        self._last_snap = (k, place, distance)
+        return True
+
+    def _update_scale(self, k: int, place: float, distance: float) -> None:
+        """Slow update of the wheel scale from two snaps on one branch far enough apart."""
+        if self._last_snap is None or self._last_snap[0] != k:
+            return
+        _, place0, d0 = self._last_snap
+        if place - place0 < self.p.scale_min_arc_m or distance <= d0:
+            return
+        ratio = min(max((place - place0) / (distance - d0), 1.0 - self.p.scale_max_dev),
+                    1.0 + self.p.scale_max_dev)
+        self._scale += self.p.scale_alpha * (ratio - self._scale)
+
+    def advance(self, distance: float):
+        """(x, y, z, yaw, (var_x, var_y, cov_xy)) at path `distance`, None before alignment."""
+        if self._anchor is None:
+            return None
+        k, s = self._state(distance)
+        x, y, z, yaw = self._at(k, s)
         var_cross = self.p.cross_std_m ** 2
-        var_along = var_cross + (self.p.along_drift_frac * (distance - d0)) ** 2
+        var_along = var_cross + self._var_along(distance)
         c, sn = math.cos(yaw), math.sin(yaw)
         cov = (var_along * c * c + var_cross * sn * sn, var_along * sn * sn + var_cross * c * c,
                (var_along - var_cross) * c * sn)
