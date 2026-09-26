@@ -121,7 +121,7 @@ def test_non_monotonic_stamp_dropped_and_no_rollback():
     assert nxt.distance >= est.distance
 
 
-@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf'), -5.0])
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf'), -1000.0])
 def test_bad_wheel_value_dropped_without_crash(bad):
     odo = Odometry(PARAMS)
     assert odo.step(wheel(FRONT, 1.0, bad)) is None

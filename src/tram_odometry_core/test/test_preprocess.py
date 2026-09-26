@@ -57,9 +57,18 @@ def test_wheel_scale_applied_per_bogie():
     assert rear.speed == pytest.approx(9.0)
 
 
-@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf'), -5.0, 'text', True])
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf'), 'text', True])
 def test_bad_wheel_value_dropped(bad):
     assert Preprocessor(PARAMS).accept(wheel(FRONT_TOPIC, 1.0, bad)) is None
+
+
+def test_negative_wheel_value_is_a_measurement_near_zero():
+    """Noise around a standstill: dropping the negative half would leave only the positive
+    one and bias the speed up (#105); beyond the speed limit it is a glitch either way."""
+    pre = Preprocessor(PARAMS)
+    assert pre.accept(wheel(FRONT_TOPIC, 1.0, -2.0)).speed == pytest.approx(-2.0 / 3.6)
+    too_fast = -(PARAMS.input.max_wheel_speed_mps * 3.6 + 1.0)
+    assert Preprocessor(PARAMS).accept(wheel(FRONT_TOPIC, 1.0, too_fast)) is None
 
 
 def test_non_monotonic_wheel_stamp_dropped_repeat_and_rollback():

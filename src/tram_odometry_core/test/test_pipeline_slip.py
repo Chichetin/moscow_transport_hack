@@ -72,6 +72,17 @@ def test_antiphase_noise_of_both_bogies_while_cruising_stays_near_the_truth():
     assert max(abs(s - v / 3.6) for s in out) < 0.5
 
 
+def test_antiphase_noise_of_both_bogies_at_rest_does_not_move_the_tram():
+    # stress `noise` at a standstill (#105): +-3 km/h at 1 Hz, rear in antiphase. Half of the
+    # readings are negative; dropping them keeps only the positive half (mean 0.53 m/s) and the
+    # standing tram drives off. The readings as measured average to the true 0.
+    def noise(sign):
+        return lambda k: sign * 3.0 * math.sin(2 * math.pi * k / 10)
+    out = _stand(noise(1.0), noise(-1.0))
+    assert sum(e.speed for e in out) / len(out) < 0.1
+    assert out[-1].distance < 0.5
+
+
 @pytest.mark.parametrize('n_future', [2, 3])
 def test_a_clock_glitch_of_one_bogie_does_not_freeze_the_jump_memory(n_future):
     # review of #99: the front sends samples stamped a day ahead (the last one a step up);

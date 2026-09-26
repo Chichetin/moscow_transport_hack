@@ -33,6 +33,7 @@ class SpeedFilter:
         self._diagnostic = None
         self._scale_delta = 0.0
         self._recent_wheel = {'front': None, 'rear': None}
+        self._seen = {'front': None, 'rear': None}
         self._zero_wheel = {'front': None, 'rear': None}
         self._confirmed_stop_t = None
 
@@ -42,6 +43,7 @@ class SpeedFilter:
         self._last = {'front': None, 'rear': None}
         self._latest_wheel_t = None
         self._recent_wheel = {'front': None, 'rear': None}
+        self._seen = {'front': None, 'rear': None}
         self._zero_wheel = {'front': None, 'rear': None}
         self._confirmed_stop_t = None
         self._diagnostic = None
@@ -55,7 +57,13 @@ class SpeedFilter:
         dt = 0.0 if self._t is None else t - self._t
         self._t = t
         self._model_accel = accel_model
-        self._x[0] = max(0.0, self._x[0] + (accel_model + self._x[1]) * dt)
+        accel = accel_model + self._x[1]
+        speed = self._x[0] + accel * dt
+        if accel < 0.0:
+            # braking and drag stop the tram, they do not reverse it; an estimate already
+            # below 0 (noise at a standstill) is not pushed further down
+            speed = max(speed, min(self._x[0], 0.0))
+        self._x[0] = speed
         transition = np.array(((1.0, dt), (0.0, 1.0)))
         process_noise = np.array((
             (self._p.q_accel * dt + self._p.q_bias * dt ** 3 / 3.0,
@@ -67,7 +75,7 @@ class SpeedFilter:
     def update(self, sample: WheelSample, trust: float):
         self._diagnostic = None
         if (sample.bogie not in self._last or not np.isfinite(sample.t)
-                or not np.isfinite(sample.speed) or sample.speed < 0.0
+                or not np.isfinite(sample.speed)
                 or not np.isfinite(trust) or not 0.0 <= trust <= 1.0):
             return
         # Controller stamps can lead both live wheel streams by several seconds.
@@ -80,6 +88,8 @@ class SpeedFilter:
             return
         if sample.speed == 0.0:
             self._zero_wheel[sample.bogie] = sample.t
+        other_seen = self._seen['rear' if sample.bogie == 'front' else 'front']
+        self._seen[sample.bogie] = (sample.t, sample.speed)
         if trust == 0.0:
             return
         self.predict(sample.t, self._model_accel)
@@ -90,6 +100,12 @@ class SpeedFilter:
         scale = 1.0 - self._scale_delta if sample.bogie == 'front' else 1.0 + self._scale_delta
         measurement = sample.speed / scale + self._model_accel * age
         measurement_var = self._p.r_wheel / (trust * scale ** 2) + self._p.q_accel * age
+        if (trust < 1.0 and other_seen is not None
+                and abs(sample.t - other_seen[0]) <= self._stale_timeout):
+            # the detector split the trust: the bogies disagree and the truth lies between
+            # them. Their spread is the noise of each: a gate built on r_wheel alone would
+            # accept whichever bogie comes first and reject the other (#105)
+            measurement_var += (sample.speed - other_seen[1]) ** 2 / 4.0
         plausible_departure = (
             self._confirmed_stop_t is not None and sample.speed > 0.0
             and sample.speed <= self._max_wheel_accel * max(0.0, sample.t - self._confirmed_stop_t) + 0.05)
@@ -98,7 +114,7 @@ class SpeedFilter:
             # braking posterior should not slow the first plausible wheel.
             self._cov[0, 0] = max(self._cov[0, 0], 9.0 * measurement_var)
         if not self._initialized:
-            self._x[0] = max(0.0, measurement)
+            self._x[0] = measurement
             self._cov = np.diag((measurement_var, self._p.initial_bias_var))
             self._initialized = True
             self._diagnostic = FilterDiagnostics(sample.t, sample.bogie, 0.0, True)
@@ -132,7 +148,6 @@ class SpeedFilter:
             self._confirmed_stop_t = None
         gain = projected / innovation_var
         self._x += gain * innovation
-        self._x[0] = max(0.0, self._x[0])
         residual = np.eye(2) - np.outer(gain, observation)
         self._cov = (residual @ self._cov @ residual.T
                      + np.outer(gain, gain) * measurement_var)
@@ -159,7 +174,7 @@ class SpeedFilter:
         self._scale_delta += 0.02 * (target - self._scale_delta)
 
     def state(self):
-        return (float(self._x[0]), float(self._cov[0, 0]),
+        return (max(0.0, float(self._x[0])), float(self._cov[0, 0]),
                 float(self._model_accel + self._x[1]))
 
     def diagnostics(self):

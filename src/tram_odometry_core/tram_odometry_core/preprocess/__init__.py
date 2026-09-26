@@ -30,7 +30,9 @@ class Preprocessor:
     converted km/h -> m/s here and nowhere else (D-003), then gated by
     `input.max_wheel_accel_mps2`: a jump implying a higher `|dv/dt|` than physically possible
     is a sensor glitch, not real driving, and is dropped rather than fed to the estimator; a
-    speed above `input.max_wheel_speed_mps` is dropped always, the first sample too (#73). A
+    speed beyond +-`input.max_wheel_speed_mps` is dropped always, the first sample too (#73). A
+    small negative reading is kept: it is noise around a standstill (the bogies report no sign,
+    trap 11), and dropping it would keep only the positive half of the noise (#105). A
     drop to exactly 0 is let through, and so is a jump from exactly 0 when the other bogie
     (fresh) reads the same speed: a bogie stuck at 0 (trap 8) reports the real speed the
     instant it gets unstuck, and `slip.SlipDetector` depends on seeing both to tell a stuck
@@ -138,7 +140,7 @@ class Preprocessor:
 
     def _wheel(self, topic: str, t: float, msg) -> Optional[WheelSample]:
         kmh = msg.velocity
-        if not _finite_number(kmh) or kmh < 0.0:
+        if not _finite_number(kmh):
             return None
         if not self._fresh(topic, t):
             return None
@@ -146,7 +148,7 @@ class Preprocessor:
         scale = (self.p.vehicle.wheel_scale_front if bogie == 'front'
                  else self.p.vehicle.wheel_scale_rear)
         speed = kmh * self.p.input.wheel_speed_scale * scale     # the only km/h -> m/s site
-        if speed > self.p.input.max_wheel_speed_mps:
+        if abs(speed) > self.p.input.max_wheel_speed_mps:
             return None                        # beyond any tram speed: glitch (also the first)
         prev = self._wheel_prev.get(bogie)
         if prev is not None and speed != 0.0:

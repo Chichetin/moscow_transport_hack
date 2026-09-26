@@ -145,6 +145,31 @@ def test_wheels_lagging_behind_the_controller_are_still_used():
             assert (est.slip.front_trust, est.slip.rear_trust) == (1.0, 1.0), use_model
 
 
+@pytest.mark.parametrize('use_model', [True, False])
+def test_output_on_a_late_wheel_is_the_state_at_its_own_stamp(use_model):
+    """Contract §1: header.stamp is the input's stamp, so the speed and the path published
+    on a wheel stamped 1 s behind the controller are those at the wheel's stamp, not at the
+    controller's time (#105, trap 5): 0.5 m/s^2 would otherwise show as 0.5 m/s and 5 m."""
+    params = replace(PARAMS, drive=replace(PARAMS.drive, use_model=use_model))
+    odo = Odometry(params)
+    accel, lead = 0.5, 1.0
+    on_cmd, on_wheel = {}, {}
+    for k in range(200):                                  # 20 s of 0.5 m/s^2 from 5 m/s
+        t = T0 + 0.1 * k
+        v = 5.0 + accel * 0.1 * k
+        on_cmd[k] = odo.step((CMD, _cmd(t + lead, 0)))
+        odo.step((REAR, _wheel(t, v * 3.6)))
+        on_wheel[k] = odo.step((FRONT, _wheel(t, v * 3.6)))
+    for k in range(150, 190):
+        v = 5.0 + accel * 0.1 * k
+        assert on_wheel[k].t == pytest.approx(T0 + 0.1 * k)
+        assert on_wheel[k].speed == pytest.approx(v, abs=0.1)
+        # the controller event stamped `lead` after this wheel: the path between the two
+        # outputs is the one covered in that second
+        ahead = on_cmd[k].distance - on_wheel[k].distance
+        assert ahead == pytest.approx(v * lead + accel * lead ** 2 / 2, abs=0.3)
+
+
 @pytest.mark.parametrize('alive', [FRONT, REAR])
 def test_one_silent_bogie_with_controller_events_in_between(alive):
     """30639: one bogie is silent for up to 73 s while the other talks; controller events

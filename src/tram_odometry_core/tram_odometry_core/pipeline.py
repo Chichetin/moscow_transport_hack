@@ -146,15 +146,23 @@ class Odometry:
             self._tracker.on_stop(self._distance)
 
     def _estimate(self, t: float, now: float) -> Estimate:
+        """The state moved back from `now` to the input's stamp `t` (contract §1: the output
+        is stamped `t`). A late input (a wheel trailing the controller, docs/data.md trap 5)
+        sees the speed and the path at its own stamp; a standing state stays standing."""
         _, var, accel = self._filter.state()
-        pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
-        x, y, z, yaw, pos_cov = self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0)
-        on_map = self._tracker.advance(self._distance) if self._tracker is not None else None
+        lag = now - t
+        speed = max(0.0, self._v - accel * lag) if self._v > 0.0 else 0.0
+        ds = 0.5 * (self._v + speed) * lag
+        distance = self._distance - ds
+        pos_var = var * (t - self._t0) ** 2        # speed noise integrated over the run
+        x, y = self._x - ds * math.cos(self._yaw), self._y - ds * math.sin(self._yaw)
+        z, yaw, pos_cov = 0.0, self._yaw, (pos_var, pos_var, 0.0)
+        on_map = self._tracker.advance(distance) if self._tracker is not None else None
         if on_map is not None:
             x, y, z, yaw, pos_cov = on_map
         return Estimate(
-            t=t, speed=self._v, speed_var=var, accel=accel, accel_model=self._accel_model,
-            distance=self._distance, x=x, y=y, z=z, yaw=yaw,
+            t=t, speed=speed, speed_var=var, accel=accel, accel_model=self._accel_model,
+            distance=distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used,
             filter_diagnostics=self._filter.diagnostics())
