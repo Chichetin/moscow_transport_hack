@@ -177,3 +177,15 @@ def test_unknown_reference_point_is_rejected():
     t, llas = fixes_east(10)
     with pytest.raises(ValueError):
         build_reference(t, llas, [], np.zeros((0, 2)), window_end=5.0, point='rover')
+
+
+def test_fix_without_a_rover_pair_holds_the_heading_of_the_nearest_pair_at_a_stop():
+    t, llas = fixes_east(100)
+    llas[80:] = llas[79]                                       # stands for the last 2 s
+    rt, rl = _rover_of(t, llas)
+    rl[:, 0] += 3.0 / M_PER_DEG_N                              # rover 3 m north: turned heading
+    rl[:, 1] -= (12.436 - np.sqrt(12.436 ** 2 - 9.0)) / M_PER_DEG_E   # base stays 12.436 m
+    rl[-1, :] = np.nan                                         # the last master fix has no pair
+    ref = build_reference(t, llas, t, np.r_[np.tile([10.0, 0.0], (80, 1)), np.zeros((20, 2))],
+                          window_end=5.0, point='base_link', rover_t=rt, rover_llas=rl)
+    assert ref.pos[-1] == pytest.approx(ref.pos[-2], abs=0.01)   # no jump onto the track ahead

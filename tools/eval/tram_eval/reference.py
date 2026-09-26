@@ -32,6 +32,7 @@ ANTENNA_HEIGHT_M = 3.0    # both antennas at z = 3.0 m in base_link; base_link i
 ANTENNA_BASE_M = 12.436   # master -> rover in the tf (the data: median 12.44 m)
 ROVER_BASE_TOL_M = 0.5    # a pair whose base is farther than this from ANTENNA_BASE_M is not the tf (outlier)
 ROVER_MATCH_S = 0.06      # rover fix paired with the master fix of the nearest stamp within this
+HEADING_HOLD_M = 1.0      # a fix without a pair takes the heading of the nearest pair this close in arc
 END_CHORD_M = 5.0         # past the end the track goes on along its chord over the last this many metres
 REF_POINTS = ('base_link', 'master')
 
@@ -230,7 +231,16 @@ def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float, point: st
             u = np.median(d[good, :2] / np.hypot(*d[good, :2].T)[:, None], axis=0)
             heading = u / np.hypot(*u) if np.hypot(*u) > 0 else None
         ahead = track_ahead(pos, pos_s, BASE_AHEAD_M, heading)
-        ahead[good] = pos[good] + BASE_AHEAD_M * d[good] / np.hypot(*d[good, :2].T)[:, None]
+        if good.any():
+            # a fix without a pair: the direction of the nearest pair while the tram has moved
+            # less than HEADING_HOLD_M since (a missing rover fix at the end of a run)
+            idx = np.flatnonzero(good)
+            j = np.clip(np.searchsorted(idx, np.arange(len(pos))), 0, len(idx) - 1)
+            prev = idx[np.maximum(j - 1, 0)]
+            near = np.where(np.abs(pos_s[prev] - pos_s) < np.abs(pos_s[idx[j]] - pos_s), prev, idx[j])
+            use = np.abs(pos_s[near] - pos_s) <= HEADING_HOLD_M
+            u = d[near] / np.hypot(*d[near, :2].T)[:, None]
+            ahead[use] = pos[use] + BASE_AHEAD_M * u[use]
         pos = ahead
         pos[:, 2] -= ANTENNA_HEIGHT_M
         if len(vel_t) >= 2:

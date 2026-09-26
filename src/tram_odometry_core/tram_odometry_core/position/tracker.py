@@ -280,6 +280,11 @@ class PathTracker:
 
     def _state(self, distance: float):
         """(branch, s) at path `distance`, following the joins at the ends of branches."""
+        k, s, _ = self._walk(distance)
+        return k, s
+
+    def _walk(self, distance: float):
+        """(branch, s, metres past a dead end) at path `distance`."""
         k, s, d0 = self._anchor
         s += self._scale * (distance - d0)
         entry_s = self._anchor[1]
@@ -296,11 +301,10 @@ class PathTracker:
             if s <= end:
                 break
             if self._next[k] is None:
-                s = end
-                break
+                return k, end, s - end
             k, entry_s = self._next[k]
             s = entry_s + s - end
-        return k, max(s, 0.0)
+        return k, max(s, 0.0), 0.0
 
     def _var_along(self, distance: float) -> float:
         return self._var0 + (self.p.along_drift_frac * self._scale * (distance - self._anchor[2])) ** 2
@@ -350,8 +354,12 @@ class PathTracker:
         if self._anchor is None:
             return None
         self._take_side(distance, speed)
-        k, s = self._state(distance + self.p.base_ahead_m / self._scale)
+        k, s, over = self._walk(distance + self.p.base_ahead_m / self._scale)
         x, y, z, yaw = self._at(k, s)
+        # the map ends where master stood in the recordings, so the rail goes on at least
+        # base_ahead_m past a dead end: base_link keeps up to that much ahead of it there
+        over = min(over, self.p.base_ahead_m)
+        x, y = x + over * math.cos(yaw), y + over * math.sin(yaw)
         var_cross = self.p.cross_std_m ** 2
         var_along = var_cross + self._var_along(distance)
         c, sn = math.cos(yaw), math.sin(yaw)

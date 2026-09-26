@@ -503,3 +503,14 @@ def test_pipeline_publishes_base_link_with_the_offset_of_params():
     fx, fy, fz = _enu_bag(*_lla(-2009.873, 0.0, 172.0), origin=start)
     assert math.hypot(est.x - fx, est.y - fy) < 2.0
     assert est.z == pytest.approx(fz - 3.0, abs=0.3)
+
+
+def test_base_link_goes_on_past_a_dead_end_by_the_offset_at_most():
+    """The map ends where master stood: the rail goes on for base_ahead_m past it."""
+    tr = PathTracker(PARAMS_YAML, _route())
+    start = _lla(-5000.0, -250.0)                             # branch 1 is a dead end at -300 m
+    tr.on_fix(*start, 2, distance=0.0)
+    for distance, south in ((45.0, 304.873), (50.0, 309.873), (500.0, 309.873)):
+        x, y, _, _, _ = tr.advance(distance)
+        fx, fy, _ = _enu_bag(*_lla(-5000.0, -south), origin=start)
+        assert math.hypot(x - fx, y - fy) < 0.5
