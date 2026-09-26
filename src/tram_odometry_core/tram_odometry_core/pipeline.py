@@ -10,6 +10,7 @@ from collections import deque
 from typing import Any, Optional
 
 from .dynamics import model_accel
+from .estimator import SpeedFilter
 from .position import PathTracker
 from .preprocess import Preprocessor
 from .slip import SlipDetector
@@ -33,6 +34,7 @@ class Odometry:
         self._t: Optional[float] = None       # newest stamp seen; the state is at this time
         self._wheel = {'front': None, 'rear': None}   # last WheelSample per bogie, m/s
         self._slip = SlipDetector(params)
+        self._filter = SpeedFilter(params)
         self._slip_state = SlipState(1.0, 1.0, False, False, None)
         self._cmd = deque(maxlen=CMD_HISTORY)  # (stamp, notch), stamps increasing
         self._accel_model = 0.0               # m/s^2, drive model at the state time
@@ -55,7 +57,7 @@ class Odometry:
             self._t0 = self._preprocess.t0
             if isinstance(sample, WheelSample):
                 self._wheel[sample.bogie] = sample
-                return self._advance(sample.t, wheel_arrived=True)
+                return self._advance(sample.t, sample=sample, wheel_arrived=True)
             if isinstance(sample, CommandSample):
                 self._cmd.append((sample.t, sample.notch))
                 return self._advance(sample.t)
@@ -79,12 +81,13 @@ class Odometry:
                 break
         return notch
 
-    def _advance(self, t: float, wheel_arrived: bool = False) -> Estimate:
+    def _advance(self, t: float, sample=None, wheel_arrived: bool = False) -> Estimate:
         jump = self.params.input.max_stamp_jump_s
         if self._t is not None and self._t - t > jump:
             # the input clock was resynced back by preprocess (#77, D-043): the state time is
             # in the future of every input now; follow the input instead of freezing there
             self._t = t
+            self._filter._rebase_time(t)
             self._t_wheel_rx = t if self._t_wheel_rx is not None else None
             self._stop_since, self._stop_snapped = None, False
         now = t if self._t is None else max(self._t, t)
@@ -96,6 +99,7 @@ class Odometry:
         dt = 0.0 if self._t is None else now - self._t
         if dt > jump:
             dt = 0.0     # a clock jump, not travel: no bag holds such a gap (max 2.6 s, D-043)
+            self._filter._rebase_time(now)
         drive = self.params.drive
         self._accel_model = (model_accel(self._notch_at(now), self._v, self.params)
                              if drive.use_model else 0.0)
@@ -110,15 +114,14 @@ class Odometry:
             # trail the controller by seconds (docs/data.md trap 5) while the wheels talk
             st = dataclasses.replace(st, front_trust=0.0, rear_trust=0.0)
         self._slip_state = st
-        used = [(w, s.speed) for w, s in ((st.front_trust, front), (st.rear_trust, rear))
-                if s is not None and w > 0.0]
-        if used:
-            self._v = sum(w * v for w, v in used) / sum(w for w, _ in used)
-            self._v_measured = self._v
-        elif drive.use_model:
-            # no trusted bogie: predict with the drive model; wheels never report reverse
-            self._v = max(0.0, self._v + self._accel_model * dt)
-        # (without the model: keep the last speed, D-021)
+        self._filter.predict(now, self._accel_model)
+        if sample is not None:
+            trust = st.front_trust if sample.bogie == 'front' else st.rear_trust
+            self._filter.update(sample, trust)
+        self._v, _, _ = self._filter.state()
+        if sample is not None and self._filter.diagnostics() is not None:
+            if self._filter.diagnostics().accepted:
+                self._v_measured = self._v
         self._t = now
         ds = self._v * dt
         self._distance += ds
@@ -143,17 +146,18 @@ class Odometry:
             self._tracker.on_stop(self._distance)
 
     def _estimate(self, t: float, now: float) -> Estimate:
-        var = self.params.filter.r_wheel
+        _, var, accel = self._filter.state()
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
         x, y, z, yaw, pos_cov = self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0)
         on_map = self._tracker.advance(self._distance) if self._tracker is not None else None
         if on_map is not None:
             x, y, z, yaw, pos_cov = on_map
         return Estimate(
-            t=t, speed=self._v, speed_var=var, accel=0.0, accel_model=self._accel_model,
+            t=t, speed=self._v, speed_var=var, accel=accel, accel_model=self._accel_model,
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
-            slip=self._slip_state, gnss_used=self._gnss_used)
+            slip=self._slip_state, gnss_used=self._gnss_used,
+            filter_diagnostics=self._filter.diagnostics())
 
     def _on_fix(self, sample: GnssFix) -> None:
         # the origin of frame `map` is the first valid fix, so the start is (0, 0)
