@@ -8,9 +8,13 @@ import numpy as np
 
 from .bag import FRONT, REAR, gnss_window_end, stamp
 
-SCENARIOS = ('outlier', 'gap_1', 'gap_10', 'gap_70', 'spike', 'noise', 'jitter', 'rollback')
+SCENARIOS = ('outlier', 'gap_1', 'gap_10', 'gap_70', 'spike', 'noise', 'jitter', 'rollback',
+             'gap_both_30', 'scale_up', 'scale_down')
 DURATION_S = {'outlier': 0.2, 'gap_1': 1.0, 'gap_10': 10.0, 'gap_70': 70.0,
-              'spike': 5.0, 'noise': 10.0, 'jitter': 10.0, 'rollback': 10.0}
+              'spike': 5.0, 'noise': 10.0, 'jitter': 10.0, 'rollback': 10.0,
+              'gap_both_30': 30.0}
+# another tram: wheel scale differs by up to 1.5 % (CLAUDE.md); lasts until the recovery tail
+WHEEL_SCALE = {'scale_up': 1.015, 'scale_down': 0.985}
 MAX_RECOVERY_GAP_S = 0.3
 
 
@@ -28,15 +32,15 @@ def perturb(msgs, scenario: str, gnss_window_s: float):
     Only wheel messages are changed. GNSS objects and their order remain identical, so the
     reference built from the original recording stays valid. All amplitudes are fixed.
     """
-    if scenario not in DURATION_S:
+    if scenario not in DURATION_S and scenario not in WHEEL_SCALE:
         raise ValueError(f'unknown stress scenario: {scenario}')
     wheel_t = [stamp(m) for topic, m in msgs if topic in (FRONT, REAR)]
     if not wheel_t:
         return None
     first, last = min(wheel_t), max(wheel_t)
-    duration = DURATION_S[scenario]
     # after the same GNSS window run_pipeline applies, and a 3 s recovery tail before the end
     begin = max(first, gnss_window_end(msgs, gnss_window_s)) + 1.0
+    duration = DURATION_S.get(scenario, last - 3.0 - begin)
     if last - begin < duration + 3.0:
         return None
     start = max(begin, min(first + (last - first) * 0.4, last - duration - 3.0))
@@ -48,17 +52,20 @@ def perturb(msgs, scenario: str, gnss_window_s: float):
     for topic, msg in msgs:
         t = stamp(msg)
         inside = start <= t < end
-        if topic == FRONT and inside and scenario.startswith('gap_'):
+        if inside and scenario.startswith('gap_') and (
+                topic == FRONT or scenario.startswith('gap_both') and topic == REAR):
             removed_count += 1
             continue
         if not inside or topic not in (FRONT, REAR):
             result.append((topic, msg))
             continue
-        if topic == REAR and scenario != 'noise':
+        if topic == REAR and scenario != 'noise' and scenario not in WHEEL_SCALE:
             result.append((topic, msg))
             continue
         new = copy.deepcopy(msg)
-        if topic == FRONT:
+        if scenario in WHEEL_SCALE:
+            new.velocity *= WHEEL_SCALE[scenario]
+        elif topic == FRONT:
             front_n += 1
             if scenario == 'outlier' and not outlier_done:
                 new.velocity = 180.0
