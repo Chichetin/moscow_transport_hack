@@ -132,6 +132,14 @@ def test_identify_recovers_delay_resistance_and_tables():
     assert adhesion >= max(tr.max(), br.max()) and adhesion == round(adhesion, 2)
 
 
+@pytest.mark.parametrize('x', [1.09, 1.10, 1.11, 1.12, 1.591, 1.592])
+def test_round_up_to_cent_never_undershoots(x):
+    """round(x*100) first, not round(x)*100 (ревью PR #64): the latter overshoots by a
+    cent for x in {1.09..1.12} on this platform's binary float rounding."""
+    r = ident.round_up_to_cent(x)
+    assert r >= x and r == round(r, 2) and r - x < 0.01
+
+
 def test_default_fit_ignores_grade_and_absorbs_a_constant_slope():
     # the contract model_accel(notch, v) has no grade: by default the fit does not use it, so a
     # constant uphill of 1 % shows up as extra resistance g * 0.01; with --grade it is removed
