@@ -29,3 +29,22 @@ bag, пишет `out/stand/<bag>/record` (rosbag2: входы и `/result/*`) и
 замер попадёт `ros2 launch`.
 
 Тесты: `.venv/bin/python -m pytest tools/stand`.
+
+## Bag со всплеском для прогона ноды (#19)
+
+`tools/eval --stress` проверяет ядро в памяти. Для отдельной проверки настоящей ROS-ноды
+на том же возмущении скопируйте короткий bag с одним SQLite-файлом и добавьте всплеск
+передней тележки +25 км/ч на 5 с:
+
+```bash
+mkdir -p out/stress-bags
+.venv/bin/python tools/stand/make_stress_bag.py \
+  <каталог исходного bag> out/stress-bags/<bag_id>_spike
+TRAM_DATA_DIR="$PWD/out/stress-bags" \
+  bash docker/jury-stand.sh <bag_id>_spike 1.0
+```
+
+Инструмент использует `tram_eval.stress.perturb`: окно и величина возмущения совпадают
+с eval. Копия сохраняет времена записи, QoS, metadata и все сообщения, кроме сериализованных
+отсчётов передней тележки в окне события. Её читает штатный `ros2 bag play` Humble.
+Явный `TRAM_DATA_DIR` у стенда имеет приоритет над `.env`; исходные данные не меняются.

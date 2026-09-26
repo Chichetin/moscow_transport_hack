@@ -66,7 +66,7 @@ ros2 bag play <каталог bag>                            # терминал
 |---|---|---|---|
 | `/result/velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | на каждом принятом сообщении тележек и контроллера, ~40 Гц (2 × 10 Гц + 20 Гц); GNSS и отброшенный вход выхода не дают | `velocity` — продольная скорость, **м/с** (вход тележек — км/ч, перевод в ядре) |
 | `/result/position` | `nav_msgs/msg/Odometry` | та же | `pose.pose.position` — x (восток), y (север), z (вверх), м, frame `map`; `pose.pose.orientation` — курс; `twist.twist.linear.x` — скорость; ковариации заполнены, неоцениваемые компоненты 1e6 |
-| `/result/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 1–10 Гц | флаги проскальзывания и состояние входов — в работе (пакет R2, issue #17); до него топик не публикуется |
+| `/result/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 1–10 Гц | флаги проскальзывания, возраст входов и состояние обеих тележек |
 
 `header.stamp` на обоих выходах — время входного сообщения из bag (не wall clock).
 `frame_id`: у `/result/velocity` — `base_link`, у `/result/position` — `map` с
