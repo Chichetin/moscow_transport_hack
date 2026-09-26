@@ -160,6 +160,11 @@ class Odometry:
             filter_diagnostics=self._filter.diagnostics())
 
     def _on_fix(self, sample: GnssFix) -> None:
+        if sample.antenna == 'rover':
+            # heading only (trap 15): never the origin of the frame or the anchor
+            if self._tracker is not None:
+                self._tracker.on_rover(sample.lat, sample.lon, sample.alt, sample.status)
+            return
         # the origin of frame `map` is the first valid fix, so the start is (0, 0)
         if sample.status >= 0:
             self._fix_ok = True
