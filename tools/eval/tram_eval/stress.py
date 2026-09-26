@@ -142,15 +142,15 @@ def _errors(ref_t, ref_value, clean, dirty, value_name, event_start, event_end, 
         round(recovery, 4) if recovery is not None else None, len(times), int(during.sum())
 
 
-def evaluate_stress_bag(path, gnss_window_s: float, make_odometry=None, msgs=None) -> dict:
+def evaluate_stress_bag(path, gnss_window_s: float, make_odometry=None, msgs=None,
+                        ref_point: str | None = None) -> dict:
     """Per-scenario diagnostics; never writes into contractual metrics.json."""
     from . import bag
-    from .reference import build_reference
 
     make_odometry = make_odometry or bag.default_odometry
     msgs = bag.read_bag(path) if msgs is None else msgs
     window_end = bag.gnss_window_end(msgs, gnss_window_s)
-    ref = build_reference(*bag.reference_inputs(msgs), window_end)
+    ref = bag.bag_reference(msgs, window_end, ref_point or bag.REF_POINT)
     clean, clean_crash, _ = bag.run_pipeline(msgs, make_odometry(), window_end)
     clean, _ = bag.finite_only(clean)
     result = {}
