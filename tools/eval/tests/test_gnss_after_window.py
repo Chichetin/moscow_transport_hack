@@ -26,6 +26,7 @@ ROUTE = load_route(str(bag.REPO / 'src' / 'tram_odometry' / 'maps' / PARAMS.posi
 QUICK_BAG = '30639_d927f360'
 M_PER_DEG_N = 111_500.0       # approx near 55.8 N: synthetic fixes land within metres of the map
 M_PER_DEG_E = 62_700.0
+START_M = 1000.0              # m along branch 0: on the line, the track of the other direction near
 
 
 def make_odometry(route=ROUTE, window_s=None):
@@ -35,15 +36,17 @@ def make_odometry(route=ROUTE, window_s=None):
 
 
 def on_route(duration=60.0, speed=10.0, late_north_m=30.0):
-    """Tram along branch 0 of the map at `speed`; after the window the GNSS lies: fixes
-    `late_north_m` north of the track and vel pointing north, faster than ever before."""
+    """Tram along branch 0 of the map at `speed`, the rover 12.4 m ahead (trap 15); after
+    the window the GNSS lies: fixes `late_north_m` north of the track, vel pointing north,
+    faster than ever before, and the rover behind the last master fix of the window (the
+    heading reversed)."""
     b = ROUTE.branches[0]
     lat0, lon0, alt0 = ROUTE.origin
     window = PARAMS.gnss.init_window_s
     msgs = []
     for k in range(int(duration * 10)):
         t = 1000.0 + 0.1 * k
-        s = speed * 0.1 * k
+        s = START_M + speed * 0.1 * k
         x, y, z = (float(np.interp(s, b.s, c)) for c in (b.x, b.y, b.z))
         dx = float(np.interp(s + 1.0, b.s, b.x)) - x
         dy = float(np.interp(s + 1.0, b.s, b.y)) - y
@@ -51,9 +54,14 @@ def on_route(duration=60.0, speed=10.0, late_north_m=30.0):
         dn = late_north_m if late else 0.0
         fix = NS(header=header(t + 0.03), latitude=lat0 + (y + dn) / M_PER_DEG_N,
                  longitude=lon0 + x / M_PER_DEG_E, altitude=alt0 + z, status=NS(status=2))
+        # late: 12.4 m behind the last master fix the window lets through
+        ahead = START_M + speed * window - 12.4 if late else s + 12.4
+        rx, ry = (float(np.interp(ahead, b.s, c)) for c in (b.x, b.y))
+        rover = NS(header=header(t + 0.03), latitude=lat0 + ry / M_PER_DEG_N,
+                   longitude=lon0 + rx / M_PER_DEG_E, altitude=alt0 + z, status=NS(status=2))
         ve, vn = (0.0, 1.5 * speed) if late else (speed * dx / math.hypot(dx, dy), speed * dy / math.hypot(dx, dy))
         msgs += [(FRONT, wheel(t, speed * 3.6)), (REAR, wheel(t + 0.01, speed * 3.6)),
-                 (CMD, NS(header=header(t + 0.02), position=3)), (MASTER_FIX, fix), (ROVER_FIX, fix),
+                 (CMD, NS(header=header(t + 0.02), position=3)), (MASTER_FIX, fix), (ROVER_FIX, rover),
                  (MASTER_VEL, NS(header=header(t + 0.04), twist=NS(linear=NS(x=ve, y=vn, z=0.0))))]
     return msgs
 
