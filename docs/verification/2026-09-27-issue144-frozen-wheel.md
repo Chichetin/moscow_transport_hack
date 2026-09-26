@@ -1,4 +1,4 @@
-# #144 — залипшая тележка (D-078): holdout, train, stress
+# #144 — залипшая тележка (D-080): holdout, train, stress
 
 Ветка `worktree-144-frozen-wheel` @ `c6b51ad` (закоммиченный код, merge `origin/main` @ `3ad9fd6`),
 база — `origin/main` @ `3ad9fd6` (эталон eval — `base_link`, D-077 из #142). В базовый worktree
