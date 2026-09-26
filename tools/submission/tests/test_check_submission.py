@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import check_submission as cs
 
 OK, FAIL, UNVERIFIED = cs.OK, cs.FAIL, cs.UNVERIFIED
@@ -35,6 +37,59 @@ def test_no_open_blockers_is_ok():
 
 def test_blockers_unknown_when_gh_fails():
     assert cs.check_blockers(None)[0] == UNVERIFIED
+
+
+def gate_issue(number=96):
+    return {'number': number, 'title': 'blocker: check_submission.py fails on main',
+            'labels': [{'name': 'blocker'}, {'name': cs.GATE_LABEL}]}
+
+
+def test_gate_umbrella_alone_does_not_block_itself():
+    """#117: the umbrella issue closes when the gate is green; counting it would deadlock."""
+    status, detail = cs.check_blockers([gate_issue()])
+    assert status == OK and '#96' in detail
+
+
+def test_real_blocker_next_to_gate_umbrella_fails():
+    other = {'number': 41, 'title': 'ссылки формы', 'labels': [{'name': 'blocker'}]}
+    status, detail = cs.check_blockers([gate_issue(), other])
+    assert status == FAIL and '#41' in detail and '#96' not in detail
+
+
+def test_blocker_without_labels_field_still_fails():
+    assert cs.check_blockers([{'number': 38, 'title': 'x'}])[0] == FAIL
+
+
+def test_gate_label_on_another_issue_still_fails():
+    """Review of #118: only the pinned umbrella is exempt; a real blocker about the gate
+    labelled `gate` by mistake must not turn the gate green."""
+    status, detail = cs.check_blockers([gate_issue(), gate_issue(number=120)])
+    assert status == FAIL and '#120' in detail
+
+
+def test_umbrella_number_without_gate_label_still_fails():
+    issue = {'number': cs.GATE_ISSUE, 'title': 'x', 'labels': [{'name': 'blocker'}]}
+    assert cs.check_blockers([issue])[0] == FAIL
+
+
+@pytest.mark.parametrize('labels', [None, ['gate'], 'gate'])
+def test_odd_labels_format_fails_safe(labels):
+    issue = {'number': cs.GATE_ISSUE, 'title': 'x', 'labels': labels}
+    assert cs.check_blockers([issue])[0] == FAIL
+
+
+def test_open_blockers_asks_gh_for_labels(monkeypatch):
+    """Without `labels` in the gh query the gate umbrella can't be told apart (#117)."""
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen['cmd'] = cmd
+        return type('R', (), {'returncode': 0, 'stdout': json.dumps([gate_issue()])})()
+
+    monkeypatch.setattr(cs.subprocess, 'run', fake_run)
+    issues = cs.open_blockers()
+    assert 'labels' in seen['cmd'][seen['cmd'].index('--json') + 1].split(',')
+    assert cs.check_blockers(issues)[0] == OK
 
 
 # --- layouts report
