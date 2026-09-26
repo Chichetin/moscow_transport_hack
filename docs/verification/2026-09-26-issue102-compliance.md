@@ -52,11 +52,18 @@ bash docker/dev.sh bash -c 'source /opt/ros/humble/setup.bash; python3 -m pytest
 - T7: выход со всем GNSS равен выходу с GNSS, обрезанным как в `tools/eval`, бит в бит.
   Сверка кода на `0ddcee5`: `OdometryNode.on_input` вызывает `Odometry.step` один раз на
   входное сообщение и публикует сразу, без таймеров и буферов
-  (`src/tram_odometry/tram_odometry/odometry_node.py`); ядро держит только прошлое —
-  история команд `deque(maxlen=CMD_HISTORY)` читается по `stamp ≤ t − drive.response_delay_s`
-  (`pipeline._notch_at`).
+  (`src/tram_odometry/tram_odometry/odometry_node.py`). Ядро причинно по порядку прихода:
+  состояние ведётся на самый новый stamp из уже пришедших, `now = max(self._t, t)`
+  (`pipeline._advance`). Запоздавшая тележка (ловушка 5) публикуется со своим stamp, но
+  отражает состояние на `now ≥ t`. Это не данные из будущего: всё использованное пришло до
+  публикации (D-021). История команд `deque(maxlen=CMD_HISTORY)` читается по
+  `stamp ≤ now − drive.response_delay_s` (`pipeline._notch_at`). Общей причинности («оценки
+  на префиксе = начало полного прогона») отдельный тест не проверяет — её держит устройство
+  кода, тесты выше проверяют утечку GNSS.
 
 ## A1 — пакеты ROS 2 Humble с подпиской и `/result/*`
 
 Проверка A1 в матрице — T1–T8. После этого прогона T1–T8 все ✅: T1, T3, T7 — здесь;
-T2, T4, T5, T6, T8 — в своих строках (`docs/verification/2026-09-26-issue97-recording-gate.md`).
+T8 — импорт `tram_vehicle_msgs.msg` в тех же 10 раскладках на `0ddcee5`; T4–T6 —
+`docs/verification/2026-09-26-issue97-recording-gate.md`; T2 — тест
+`test_node_subscribes_to_inputs_and_gnss_from_params`.
