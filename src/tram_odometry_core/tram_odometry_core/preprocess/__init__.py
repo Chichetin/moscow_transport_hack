@@ -35,7 +35,9 @@ class Preprocessor:
     (fresh) reads the same speed: a bogie stuck at 0 (trap 8) reports the real speed the
     instant it gets unstuck, and `slip.SlipDetector` depends on seeing both to tell a stuck
     sensor from real motion. A jump from 0 that the other bogie does not confirm is a glitch
-    at standstill (#73). A long silent bogie (trap 7, up to
+    at standstill (#73). A negative reading (slow roll-back or noise around standstill) is
+    0 m/s, not dropped (#111, D-064), but not a bogie stuck at 0: the acceleration gate
+    applies to it, so in motion it is a glitch. A long silent bogie (trap 7, up to
     73 s) needs no special handling here — it simply stops producing samples; the gap is large
     enough that the acceleration implied by whatever speed it reports on return is normally
     small. GNSS fix/vel outside `gnss.init_window_s`
