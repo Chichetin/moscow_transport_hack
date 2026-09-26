@@ -3,7 +3,7 @@ import numpy as np
 
 from ..types import FilterDiagnostics, Params, WheelSample
 
-BIAS_RELEASE_MPS = 0.5  # near-stop region: do not extrapolate braking through v=0
+COV_EPS = 1e-8  # (m/s)^2: numerical margin that puts an inflated innovation strictly inside the gate
 
 
 class SpeedFilter:
@@ -16,14 +16,14 @@ class SpeedFilter:
     Both bogies ride on one car body, so a wheel sample is measured together with
     the other bogie's last accepted reading (if it is live on the wheel timeline):
     the trust-weighted mean of the pair while moving, the smaller one at rest
-    without traction (#105, D-059).
+    without traction (#105, D-060).
     """
 
     def __init__(self, params: Params):
         self._p = params.filter
         self._stale_timeout = params.input.stale_timeout_s
         self._max_wheel_accel = params.input.max_wheel_accel_mps2
-        self._rest_speed = max(params.position.stop_speed_mps, BIAS_RELEASE_MPS)
+        self._rest_speed = max(params.position.stop_speed_mps, self._p.bias_release_speed_mps)
         self._stop_speed = params.position.stop_speed_mps
         self._jump_accel = params.slip.noise_accel_mps2
         self._jump_hold = params.slip.noise_hold_s
@@ -118,11 +118,12 @@ class SpeedFilter:
         measurement_var = self._p.r_wheel / (trust * scale ** 2) + self._p.q_accel * age
         plausible_departure = (
             self._confirmed_stop_t is not None and sample.speed > 0.0
-            and sample.speed <= self._max_wheel_accel * max(0.0, sample.t - self._confirmed_stop_t) + 0.05)
+            and sample.speed <= (self._max_wheel_accel * max(0.0, sample.t - self._confirmed_stop_t)
+                                  + self._p.departure_slack_mps))
         if plausible_departure:
             # Velocity at the next departure is a new motion segment. The
             # braking posterior should not slow the first plausible wheel.
-            self._cov[0, 0] = max(self._cov[0, 0], 9.0 * measurement_var)
+            self._cov[0, 0] = max(self._cov[0, 0], self._p.departure_var_factor * measurement_var)
         if not self._initialized:
             self._x[0] = max(0.0, measurement)
             self._cov = np.diag((measurement_var, self._p.initial_bias_var))
@@ -139,13 +140,13 @@ class SpeedFilter:
         other = 'rear' if sample.bogie == 'front' else 'front'
         other_zero = self._zero_wheel[other]
         paired_zero = (sample.speed == 0.0 and other_zero is not None
-                       and abs(sample.t - other_zero) <= 0.02)
+                       and abs(sample.t - other_zero) <= self._p.pair_window_s)
         if paired_zero and innovation ** 2 > self._p.nis_gate * innovation_var:
             # Two independent zero readings expose a real stop that a smooth
             # motion prior cannot explain. Inflate speed uncertainty so the
             # ordinary NIS gate can accept the corroborated measurement.
             self._cov[0, 0] += (innovation ** 2 / self._p.nis_gate
-                                - innovation_var + 1e-8)
+                                - innovation_var + COV_EPS)
             projected = self._cov @ observation
             innovation_var = float(observation @ projected + measurement_var)
         nis = float(innovation ** 2 / innovation_var)
@@ -203,14 +204,17 @@ class SpeedFilter:
     def _observe_scale(self, sample: WheelSample, trust: float):
         self._recent_wheel[sample.bogie] = (sample.t, sample.speed, trust)
         front, rear = self._recent_wheel['front'], self._recent_wheel['rear']
-        if (front is None or rear is None or abs(front[0] - rear[0]) > 0.02
-                or min(front[2], rear[2]) < 0.8 or min(front[1], rear[1]) < 2.0
-                or abs(front[1] - rear[1]) > 0.5):
+        p = self._p
+        if (front is None or rear is None or abs(front[0] - rear[0]) > p.pair_window_s
+                or min(front[2], rear[2]) < p.scale_min_trust
+                or min(front[1], rear[1]) < p.scale_min_speed_mps
+                or abs(front[1] - rear[1]) > p.scale_max_diff_mps):
             return
         # A wheel pair identifies only the relative scale. Keep their common
         # scale fixed at the train calibration applied by Preprocessor.
-        target = np.clip((rear[1] - front[1]) / (rear[1] + front[1]), -0.03, 0.03)
-        self._scale_delta += 0.02 * (target - self._scale_delta)
+        target = np.clip((rear[1] - front[1]) / (rear[1] + front[1]),
+                         -p.scale_max_rel, p.scale_max_rel)
+        self._scale_delta += p.scale_gain * (target - self._scale_delta)
 
     def state(self):
         return (float(self._x[0]), float(self._cov[0, 0]),
