@@ -37,6 +37,41 @@ def test_blockers_unknown_when_gh_fails():
     assert cs.check_blockers(None)[0] == UNVERIFIED
 
 
+def gate_issue(number=96):
+    return {'number': number, 'title': 'blocker: check_submission.py fails on main',
+            'labels': [{'name': 'blocker'}, {'name': cs.GATE_LABEL}]}
+
+
+def test_gate_umbrella_alone_does_not_block_itself():
+    """#117: the umbrella issue closes when the gate is green; counting it would deadlock."""
+    status, detail = cs.check_blockers([gate_issue()])
+    assert status == OK and '#96' in detail
+
+
+def test_real_blocker_next_to_gate_umbrella_fails():
+    other = {'number': 41, 'title': 'ссылки формы', 'labels': [{'name': 'blocker'}]}
+    status, detail = cs.check_blockers([gate_issue(), other])
+    assert status == FAIL and '#41' in detail and '#96' not in detail
+
+
+def test_blocker_without_labels_field_still_fails():
+    assert cs.check_blockers([{'number': 38, 'title': 'x'}])[0] == FAIL
+
+
+def test_open_blockers_asks_gh_for_labels(monkeypatch):
+    """Without `labels` in the gh query the gate umbrella can't be told apart (#117)."""
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen['cmd'] = cmd
+        return type('R', (), {'returncode': 0, 'stdout': json.dumps([gate_issue()])})()
+
+    monkeypatch.setattr(cs.subprocess, 'run', fake_run)
+    issues = cs.open_blockers()
+    assert 'labels' in seen['cmd'][seen['cmd'].index('--json') + 1].split(',')
+    assert cs.check_blockers(issues)[0] == OK
+
+
 # --- layouts report
 
 def test_missing_report_for_head_fails(tmp_path):
