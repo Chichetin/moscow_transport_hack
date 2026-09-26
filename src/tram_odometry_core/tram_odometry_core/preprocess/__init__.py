@@ -43,7 +43,8 @@ class Preprocessor:
 
     def __init__(self, params: Params):
         self.p = params
-        self.t0: Optional[float] = None        # stamp of the first raw input ever seen
+        self.t0: Optional[float] = None        # GNSS window start: earliest trusted input stamp
+        self._t0_back: Optional[float] = None  # stamp far behind t0, unconfirmed (#80)
         self._last: dict = {}                  # topic -> last accepted stamp (trap 6 gate)
         self._wheel_prev: dict = {}             # bogie -> last accepted WheelSample
         self._clock: Optional[float] = None    # newest accepted stamp over the vehicle streams
@@ -55,8 +56,7 @@ class Preprocessor:
         t = _stamp(msg)
         if not math.isfinite(t):
             return None
-        if self.t0 is None:
-            self.t0 = t
+        self._window_start(t, topic in (FRONT_TOPIC, REAR_TOPIC, CMD_TOPIC))
         if topic == FRONT_TOPIC or topic == REAR_TOPIC:
             return self._wheel(topic, t, msg)
         if topic == CMD_TOPIC:
@@ -66,6 +66,32 @@ class Preprocessor:
         if topic == self.p.gnss.topic_vel:
             return self._vel(t, msg)
         return None
+
+    def _window_start(self, t: float, vehicle: bool) -> None:
+        """Keep `t0` at the earliest trusted input stamp (#80, D-055).
+
+        `t0` starts at the first raw input of any topic. An earlier vehicle stamp moves it back:
+        within `input.max_stamp_jump_s` at once (buffered inputs, trap 5), farther only when the
+        next vehicle input behind `t0` confirms it within the limit -- the first stamp was from
+        the future. A single stamp far in the past is a glitch; any input at or after `t0`
+        cancels it. GNSS never moves `t0` back: the fixes and velocity of one epoch share a
+        stamp and would confirm their own glitch, closing the window before the alignment.
+        The window can only close earlier than the real start + window, never later (D-005).
+        """
+        if self.t0 is None or t >= self.t0:
+            self.t0 = t if self.t0 is None else self.t0
+            self._t0_back = None
+            return
+        if not vehicle:
+            return
+        jump = self.p.input.max_stamp_jump_s
+        back = self._t0_back
+        confirmed = back is not None and abs(t - back) <= jump
+        if confirmed or self.t0 - t <= jump:
+            self.t0 = min(t, back) if confirmed else t
+            self._t0_back = None
+        else:
+            self._t0_back = t
 
     def _fresh(self, topic: str, t: float) -> bool:
         """Accept a stream sample only if its stamp is newer than the stream's last one and
@@ -137,8 +163,12 @@ class Preprocessor:
             return None
         return CommandSample(t=t, notch=notch)
 
+    def _in_window(self, t: float) -> bool:
+        """GNSS inside `gnss.init_window_s` from `t0`; a stamp far behind `t0` is a glitch."""
+        return self.t0 - self.p.input.max_stamp_jump_s <= t <= self.t0 + self.p.gnss.init_window_s
+
     def _fix(self, t: float, msg) -> Optional[GnssFix]:
-        if t - self.t0 > self.p.gnss.init_window_s:
+        if not self._in_window(t):
             return None
         lat, lon, alt = msg.latitude, msg.longitude, msg.altitude
         if not (_finite_number(lat) and _finite_number(lon) and _finite_number(alt)):
@@ -147,7 +177,7 @@ class Preprocessor:
                        status=msg.status.status)
 
     def _vel(self, t: float, msg) -> Optional[GnssVel]:
-        if t - self.t0 > self.p.gnss.init_window_s:
+        if not self._in_window(t):
             return None
         ve, vn = msg.twist.linear.x, msg.twist.linear.y
         if not (_finite_number(ve) and _finite_number(vn)):

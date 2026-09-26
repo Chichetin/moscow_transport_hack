@@ -447,3 +447,106 @@ def test_odometry_distance_keeps_growing_after_an_accepted_clock_glitch(glitches
     assert 90.0 < grown < 120.0, grown
     assert last.speed == pytest.approx(10.0, abs=1e-6)
 
+
+
+# --- #80: the GNSS window start follows the clock back from a future first stamp -------------
+
+WINDOW = PARAMS.gnss.init_window_s
+
+
+@pytest.mark.parametrize('first', [
+    cmd(1000.0 + 86400.0, 0),
+    wheel(FRONT_TOPIC, 1000.0 + 86400.0, 0.0),
+    gnss_fix(1000.0 + 86400.0, status=2),
+])
+def test_future_first_stamp_does_not_keep_the_gnss_window_open(first):
+    """The first input of the bag comes from the future (+1 day), the stream then runs from
+    the real start: GNSS after the real window is dropped (D-005), the window start is back."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    assert pp.accept(first) is None or pp.t0 == pytest.approx(start + 86400.0)
+    _feed(pp, [cmd(start + 0.05 * k, 0) for k in range(4)]
+          + [wheel(FRONT_TOPIC, start + 0.1 * k, 0.0) for k in range(4)])
+    assert pp.t0 == pytest.approx(start)
+    assert isinstance(pp.accept(gnss_fix(start + 1.0, status=2)), GnssFix)
+    assert pp.accept(gnss_fix(start + WINDOW + 5.0, status=2)) is None
+    assert pp.accept(gnss_vel(start + WINDOW + 5.0, 1.0, 0.0)) is None
+
+
+def test_a_slightly_earlier_stamp_moves_the_window_start_at_once():
+    """Data: 4 of 122 bags carry a stamp up to 51 ms older than the first message."""
+    pp = Preprocessor(PARAMS)
+    pp.accept(cmd(1000.05, 0))
+    pp.accept(wheel(FRONT_TOPIC, 1000.0, 0.0))
+    assert pp.t0 == pytest.approx(1000.0)
+
+
+def test_one_stamp_from_the_past_does_not_close_the_gnss_window():
+    """A single stamp a day behind is a glitch: the window stays open for the real start."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    _feed(pp, [cmd(start + 0.05 * k, 0) for k in range(4)])
+    pp.accept(wheel(FRONT_TOPIC, start - 86400.0, 0.0))            # glitch: -1 day
+    _feed(pp, [cmd(start + 0.2 + 0.05 * k, 0) for k in range(4)])
+    assert pp.t0 == pytest.approx(start)
+    assert isinstance(pp.accept(gnss_fix(start + 1.0, status=2)), GnssFix)
+
+
+def test_a_confirmed_earlier_clock_moves_the_window_start():
+    """Two inputs in a row far behind the window start agree: the clock really is there."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    pp.accept(cmd(start, 0))
+    pp.accept(cmd(start - 3600.0, 0))
+    assert pp.t0 == pytest.approx(start)                           # alone: not yet trusted
+    pp.accept(wheel(FRONT_TOPIC, start - 3600.0 + 0.1, 0.0))
+    assert pp.t0 == pytest.approx(start - 3600.0)
+
+
+def test_a_small_step_back_does_not_take_a_pending_glitch_along():
+    pp = Preprocessor(PARAMS)
+    pp.accept(cmd(1000.0, 0))
+    pp.accept(wheel(FRONT_TOPIC, 1000.0 - 86400.0, 0.0))           # glitch: -1 day, pending
+    pp.accept(wheel(REAR_TOPIC, 999.95, 0.0))
+    assert pp.t0 == pytest.approx(999.95)
+
+
+def test_normal_input_between_two_past_glitches_cancels_the_first():
+    """Two -1 day glitches 2 s apart with the normal stream between them: not a real clock."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    pp.accept(cmd(start, 0))
+    pp.accept(wheel(FRONT_TOPIC, start - 86400.0, 0.0))
+    _feed(pp, [cmd(start + 0.05 * k, 0) for k in range(1, 40)])
+    pp.accept(wheel(FRONT_TOPIC, start + 2.0 - 86400.0, 0.0))
+    assert pp.t0 == pytest.approx(start)
+
+
+def test_a_gnss_epoch_from_the_past_does_not_close_the_window():
+    """Review #100: fix and vel of one epoch share a stamp; they must not confirm each other."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    _feed(pp, [cmd(start, 0), wheel(FRONT_TOPIC, start, 0.0)])
+    pp.accept(gnss_fix(start - 86400.0, status=2))
+    pp.accept(gnss_vel(start - 86400.0, 1.0, 0.0))
+    assert pp.t0 == pytest.approx(start)
+    assert isinstance(pp.accept(gnss_fix(start + 1.0, status=2)), GnssFix)
+
+
+def test_gnss_never_moves_the_window_start_back():
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    pp.accept(cmd(start, 0))
+    pp.accept(gnss_fix(start - 9.0, status=2))
+    assert pp.t0 == pytest.approx(start)
+
+
+@pytest.mark.parametrize('make', [lambda t: gnss_fix(t, status=2), lambda t: gnss_vel(t, 1.0, 0.0)])
+def test_gnss_far_behind_the_window_start_is_dropped(make):
+    """A GNSS stamp a day in the past is not inside the window, whenever it arrives (D-005)."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    _feed(pp, [cmd(start, 0), wheel(FRONT_TOPIC, start, 0.0)])
+    assert pp.accept(make(start - 86400.0)) is None
+    assert pp.accept(make(start - JUMP - 0.5)) is None
+    assert pp.accept(make(start - 0.05)) is not None               # buffered, trap 5
