@@ -36,7 +36,7 @@ class SpeedFilter:
         self._zero_wheel = {'front': None, 'rear': None}
         self._confirmed_stop_t = None
 
-    def _rebase_time(self, t: float):
+    def rebase_time(self, t: float):
         """Keep the estimate but start a fresh input clock after a confirmed jump."""
         self._t = t
         self._last = {'front': None, 'rear': None}
