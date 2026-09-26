@@ -626,3 +626,16 @@ def test_odometry_standstill_outlier_with_the_other_bogie_silent():
     """The detector cannot outvote a lone bogie: the preprocess gate has to drop the jump."""
     events = [wheel(FRONT_TOPIC, 1000.0 + 0.1 * k, 180.0 if k == 25 else 0.0) for k in range(50)]
     assert _worst_speed(events) < 1.0
+
+
+def test_a_rejected_jump_from_zero_comes_back_once_within_the_gate():
+    """Review #101: a rejected sample does not move the gate's reference, so a bogie that
+    really left 0 alone is accepted again after at most max_wheel_speed_mps / max_accel."""
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(FRONT_TOPIC, 0.0, 0.0))
+    accepted = [t for t in (0.1 * k for k in range(1, 60))
+                if pre.accept(wheel(FRONT_TOPIC, t, KMH_36)) is not None]
+    assert accepted, 'the bogie never came back'
+    assert accepted[0] <= 10.0 / ACCEL_LIMIT + 0.1 + 1e-9
+    assert accepted[0] <= PARAMS.input.max_wheel_speed_mps / ACCEL_LIMIT + 0.1
+    assert accepted == [t for t in (0.1 * k for k in range(1, 60)) if t >= accepted[0] - 1e-9]
