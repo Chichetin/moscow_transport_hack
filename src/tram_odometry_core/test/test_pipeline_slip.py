@@ -1,5 +1,6 @@
 """One bogie spiking next to an honest 0 through Odometry.step (#76, stress `spike`).
 Messages are minimal stand-ins for the ROS ones."""
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,3 +55,18 @@ def test_run_starting_in_motion_with_the_rear_stuck_at_zero_follows_the_front():
         est = odo.step((REAR, _msg(t, velocity=0.0)))
     assert est.speed == pytest.approx(10.0, abs=0.1)
     assert est.slip.slip_rear and not est.slip.slip_front
+
+
+def test_antiphase_noise_of_both_bogies_while_cruising_stays_near_the_truth():
+    # stress `noise` (#82): +-3 km/h at 1 Hz on the front, in antiphase on the rear, 10 s at
+    # a steady 50 km/h; the mean of the bogies is the truth, a single bogie is off by 0.83 m/s
+    odo, out, v = Odometry(PARAMS), [], 50.0
+    for k in range(150):
+        t = T0 + 0.1 * k
+        n = 3.0 * math.sin(2 * math.pi * k / 10) if k >= 30 else 0.0
+        for topic, msg in ((CMD, _msg(t, position=0)), (FRONT, _msg(t + 0.01, velocity=v + n)),
+                           (REAR, _msg(t + 0.05, velocity=v - n))):
+            e = odo.step((topic, msg))
+            if e is not None and t >= T0 + 3.0:
+                out.append(e.speed)
+    assert max(abs(s - v / 3.6) for s in out) < 0.5
