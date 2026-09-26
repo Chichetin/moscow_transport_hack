@@ -45,13 +45,13 @@ def perturb(msgs, scenario: str, gnss_window_s: float):
     result = []
     front_n = rear_n = 0
     outlier_done = False
-    held = {}           # freeze: the last reading of each bogie before the event (#144)
+    held = {}           # freeze: bogie -> (stamp, reading) newest by stamp before the event (#144)
     changed_count = removed_count = 0
     for topic, msg in msgs:
         t = stamp(msg)
         inside = start <= t < end
-        if topic in (FRONT, REAR) and t < start:
-            held[topic] = msg.velocity
+        if topic in (FRONT, REAR) and t < start and t > held.get(topic, (-math.inf, None))[0]:
+            held[topic] = (t, msg.velocity)
         if topic == FRONT and inside and scenario.startswith('gap_'):
             removed_count += 1
             continue
@@ -64,7 +64,7 @@ def perturb(msgs, scenario: str, gnss_window_s: float):
         new = copy.deepcopy(msg)
         if scenario == 'freeze':
             # both sensors repeat their last reading: they still agree, only the model can tell
-            new.velocity = held.get(topic, new.velocity)
+            new.velocity = held.get(topic, (None, new.velocity))[1]
         elif topic == FRONT:
             front_n += 1
             if scenario == 'outlier' and not outlier_done:

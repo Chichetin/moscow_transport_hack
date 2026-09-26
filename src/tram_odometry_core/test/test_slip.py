@@ -316,14 +316,19 @@ def test_frozen_bogie_trusted_again_once_it_moves():
 
 
 def test_repeated_stamp_is_not_a_frozen_sample():
-    # the same sample offered again (the other bogie spoke) is not a new repeat
+    # the front is one repeat short of frozen with the model far past freeze_dv_mps; then its
+    # newest sample is offered again (only the rear spoke) while it is still live: a sample
+    # offered again is not a new repeat, the front stays trusted
     det = SlipDetector(P)
-    s = None
-    for k in range(steps_to_freeze(1.0) * 3):
-        t = k * DT
-        s = det.update(ws('front', 0.0, 5.0), ws('rear', t, 5.0 + 0.1 * k), 1.0, 5.0 + 0.1 * k)
-    assert not s.slip_rear and s.rear_trust == 1.0
-    assert s.front_trust == 0.0        # silent past stale_timeout_s, not frozen
+    accel = 2.0
+    for k in range(FREEZE_N):                       # FREEZE_N samples: FREEZE_N - 1 repeats
+        det.update(ws('front', k * DT, 5.0), ws('rear', k * DT, 5.0 + 1e-3 * k), accel, 5.0)
+    assert accel * DT * (FREEZE_N - 1) > FREEZE_DV
+    last = ws('front', (FREEZE_N - 1) * DT, 5.0)
+    for j in range(1, 4):                           # 0.3 s: within input.stale_timeout_s
+        k = FREEZE_N - 1 + j
+        s = det.update(last, ws('rear', k * DT, 5.0 + 1e-3 * k), accel, 5.0)
+        assert s.front_trust == 1.0 and not s.slip_front
 
 
 def test_clock_resync_forgets_the_frozen_run():

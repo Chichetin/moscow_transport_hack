@@ -15,8 +15,8 @@ MASTER_FIX = PARAMS.gnss.topic_fix
 MASTER_VEL = PARAMS.gnss.topic_vel
 KMH_36 = 36.0  # = 10 m/s
 ACCEL_LIMIT = PARAMS.input.max_wheel_accel_mps2
-# km/h: a real bogie reading never repeats exactly; an exact repeat under traction is a frozen
-# sensor (#144), so steady speeds through Odometry are dithered by this on every other sample
+# km/h: an exact repeat while the drive model changes the speed by more than slip.freeze_dv_mps
+# is a frozen sensor (#144), so steady speeds through Odometry are dithered by this
 DITHER_KMH = 1e-9
 
 
