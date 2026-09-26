@@ -288,6 +288,18 @@ def test_partner_of_the_mean_is_brought_to_the_sample_stamp():
     assert filt.state()[0] == pytest.approx(10.0 + 2.0 * 3.95, abs=0.03)
 
 
+def test_silent_partner_is_left_out_of_the_mean():
+    # the rear falls silent (30639: up to 73 s); past input.stale_timeout_s its last reading
+    # is no evidence and the front alone is measured
+    filt = initialized()
+    filt.update(wheel(0.0, 10.0, 'rear'), 1.0)
+    for k in range(1, 21):
+        t = k / 10.0
+        filt.predict(t, 0.0)
+        filt.update(wheel(t, 10.6, 'front'), 0.5)
+    assert filt.state()[0] == pytest.approx(10.6, abs=0.05)
+
+
 def test_untrusted_partner_is_left_out_of_the_mean():
     filt = initialized()
     filt.update(wheel(0.0, 10.0, 'rear'), 1.0)
