@@ -29,11 +29,13 @@ class Preprocessor:
     a repeated or past stamp is dropped, not integrated with `dt < 0`). Wheel speed is
     converted km/h -> m/s here and nowhere else (D-003), then gated by
     `input.max_wheel_accel_mps2`: a jump implying a higher `|dv/dt|` than physically possible
-    is a sensor glitch, not real driving, and is dropped rather than fed to the estimator. The
-    gate is skipped when the previous or the new sample reads exactly 0: a bogie stuck at 0
-    (trap 8) reports the real speed the instant it gets unstuck, and `slip.SlipDetector`
-    depends on seeing that exact-0 reading to tell a stuck sensor from real motion — rejecting
-    the jump would hide the fault instead of exposing it. A long silent bogie (trap 7, up to
+    is a sensor glitch, not real driving, and is dropped rather than fed to the estimator; a
+    speed above `input.max_wheel_speed_mps` is dropped always, the first sample too (#73). A
+    drop to exactly 0 is let through, and so is a jump from exactly 0 when the other bogie
+    (fresh) reads the same speed: a bogie stuck at 0 (trap 8) reports the real speed the
+    instant it gets unstuck, and `slip.SlipDetector` depends on seeing both to tell a stuck
+    sensor from real motion. A jump from 0 that the other bogie does not confirm is a glitch
+    at standstill (#73). A long silent bogie (trap 7, up to
     73 s) needs no special handling here — it simply stops producing samples; the gap is large
     enough that the acceleration implied by whatever speed it reports on return is normally
     small. GNSS fix/vel outside `gnss.init_window_s`
@@ -144,16 +146,26 @@ class Preprocessor:
         scale = (self.p.vehicle.wheel_scale_front if bogie == 'front'
                  else self.p.vehicle.wheel_scale_rear)
         speed = kmh * self.p.input.wheel_speed_scale * scale     # the only km/h -> m/s site
+        if speed > self.p.input.max_wheel_speed_mps:
+            return None                        # beyond any tram speed: glitch (also the first)
         prev = self._wheel_prev.get(bogie)
-        # a stuck-at-zero bogie (trap 8) can jump to/from its real speed instantly when it
-        # gets unstuck: that is not physical acceleration, so the gate does not apply to it.
-        if prev is not None and prev.speed != 0.0 and speed != 0.0:
+        if prev is not None and speed != 0.0:
             dt = t - prev.t
             if dt > 0 and abs(speed - prev.speed) / dt > self.p.input.max_wheel_accel_mps2:
-                return None                    # faster than physically possible: sensor glitch
+                # Faster than physically possible. The one exception is a bogie stuck at
+                # exactly 0 (trap 8) that jumps back to the real speed when it gets unstuck
+                # -- the slip detector needs that reading (D-027). It is told from a glitch
+                # at standstill (#73) by the other bogie: fresh and reading the same speed.
+                if prev.speed != 0.0 or not self._other_agrees(bogie, t, speed):
+                    return None
         sample = WheelSample(t=t, bogie=bogie, speed=speed)
         self._wheel_prev[bogie] = sample
         return sample
+
+    def _other_agrees(self, bogie: str, t: float, speed: float) -> bool:
+        other = self._wheel_prev.get('rear' if bogie == 'front' else 'front')
+        return (other is not None and abs(t - other.t) <= self.p.input.stale_timeout_s
+                and abs(speed - other.speed) <= self.p.slip.front_rear_threshold_mps)
 
     def _command(self, topic: str, t: float, msg) -> Optional[CommandSample]:
         notch = msg.position
