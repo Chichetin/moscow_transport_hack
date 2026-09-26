@@ -75,3 +75,12 @@ def test_each_output_message_is_checked():
                ('/result/position', message(17), 11)]
     ok, note = check(inputs, outputs)
     assert not ok and '/result/velocity' in note and '99.000000000' in note
+
+
+def test_gnss_stamp_does_not_authorize_result_publication():
+    inputs = [('/sensing/gnss/master/fix', message(99), 0),
+              ('/vehicle/front_bogie_velocity', message(17), 1)]
+    outputs = [('/result/velocity', message(99), 9),
+               ('/result/position', message(99), 10)]
+    ok, note = check(inputs, outputs)
+    assert not ok and '/result/velocity' in note and '99.000000000' in note

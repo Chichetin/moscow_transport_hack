@@ -100,20 +100,21 @@ for b in $BAGS; do
       fi
       note="$note; $checked"
     else st=fail; fi
-    printf '%s\t%s\t%s\n' "$b" "$st" "$note" >> "$RUN"
+    python3 /repo/tools/submission/layout_report.py "$RUN" "$b" "$st" "$note"
   )
   echo "== run $b: $(tail -1 "$RUN" | cut -f2-)"
 done
 
 python3 - "$RES" "$RUN" "/out/layouts-$COMMIT.json" <<'PY'
 import datetime, json, os, sys
+sys.path.insert(0, '/repo/tools/submission')
+from layout_report import read_runs
 rows = [l.rstrip('\n').split('\t') for l in open(sys.argv[1]) if l.strip()]
-runs = [l.rstrip('\n').split('\t') for l in open(sys.argv[2]) if l.strip()]
 report = {
     'commit': os.environ['COMMIT'], 'dirty': int(os.environ['DIRTY']),
     'created': datetime.datetime.now().astimezone().isoformat(timespec='seconds'),
     'layouts': [{'name': n, 'what': w, 'build': s, 'note': note} for n, w, s, note in rows],
-    'runs': [{'bag': b, 'status': s, 'note': note} for b, s, note in runs],
+    'runs': read_runs(sys.argv[2]),
 }
 json.dump(report, open(sys.argv[3], 'w'), ensure_ascii=False, indent=2)
 print('отчёт:', sys.argv[3])
