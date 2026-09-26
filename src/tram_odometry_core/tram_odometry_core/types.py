@@ -134,6 +134,15 @@ class FilterParams:
     q_bias: float
     initial_bias_var: float
     nis_gate: float
+    bias_release_speed_mps: float
+    pair_window_s: float
+    departure_slack_mps: float
+    departure_var_factor: float
+    scale_min_trust: float
+    scale_min_speed_mps: float
+    scale_max_diff_mps: float
+    scale_max_rel: float
+    scale_gain: float
 
 
 @dataclass(frozen=True)
@@ -152,6 +161,8 @@ class PositionParams:
     along_drift_frac: float
     cross_std_m: float
     fix_gate_m: float
+    heading_min_base_m: float
+    heading_max_base_m: float
     anchor_std_m: float
     stop_speed_mps: float
     stop_min_s: float
@@ -291,6 +302,19 @@ def _validate_filter(filt: FilterParams) -> None:
             raise ValueError(f'filter.{name} must be positive')
     if filt.q_bias < 0.0:
         raise ValueError('filter.q_bias must be nonnegative')
+    for name in ('bias_release_speed_mps', 'pair_window_s', 'scale_min_speed_mps',
+                 'scale_max_diff_mps'):
+        if getattr(filt, name) <= 0.0:
+            raise ValueError(f'filter.{name} must be positive')
+    if filt.departure_slack_mps < 0.0:
+        raise ValueError('filter.departure_slack_mps must be nonnegative')
+    if filt.departure_var_factor < 1.0:
+        raise ValueError('filter.departure_var_factor must be at least 1')
+    for name in ('scale_min_trust', 'scale_gain'):
+        if not 0.0 < getattr(filt, name) <= 1.0:
+            raise ValueError(f'filter.{name} must be in (0, 1]')
+    if not 0.0 < filt.scale_max_rel < 1.0:
+        raise ValueError('filter.scale_max_rel must be in (0, 1)')
 
 
 def _validate_drive(drive: DriveParams) -> None:

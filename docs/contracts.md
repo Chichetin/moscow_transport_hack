@@ -146,11 +146,11 @@ class Route:
 
 | Модуль | Публичное | Контракт поведения |
 |---|---|---|
-| `preprocess` | `Preprocessor(params).accept(raw) -> Sample \| None` | `raw` — сырой вход: пара `(topic, ROS-сообщение)` (км/ч, notch как есть; поля сообщения — как в ROS, у bag и rclpy одинаковые); возвращает нормализованный `Sample` или `None` (выброс, NaN, stamp из прошлого сверх допуска, GNSS вне окна) |
+| `preprocess` | `Preprocessor(params).accept(raw) -> Sample \| None` | `raw` — сырой вход: пара `(topic, ROS-сообщение)` (км/ч, notch как есть; поля сообщения — как в ROS, у bag и rclpy одинаковые); возвращает нормализованный `Sample` или `None` (выброс, NaN, stamp из прошлого сверх допуска, GNSS вне окна); fix `gnss.topic_fix` — `GnssFix(antenna='master')`, fix `/sensing/gnss/rover/fix` — `GnssFix(antenna='rover')` |
 | `dynamics` | `model_accel(notch: int, speed: float, params) -> float` | чистая функция, м/с²; без состояния: интерполяция таблиц D-029 по `speed_grid_mps`, пределы сцепления и мощности, минус сопротивление Дэвиса. Задержка отклика `drive.response_delay_s` — состояние `pipeline` (буфер команд): в модель идёт позиция контроллера на момент `t − delay`. При `drive.use_model` pipeline передаёт `accel_model` детектору и прогнозирует скорость на паузе обеих тележек (`v ≥ 0`); `Estimate.accel_model` — это значение |
 | `slip` | `SlipDetector(params).update(front, rear, accel_model, est) -> SlipState` | `front`/`rear` — последний `WheelSample` или `None` (молчит); `est` — сглаженная скорость фильтра, м/с, до этого обновления (`None`, пока её нет); `accel_model` — м/с². Возвращает доверие 0..1 и флаги «тележке не доверяем» (аномалия или отказ), D-027. Состояние детектора — последний сэмпл каждой тележки и stamp её последних скачков вверх и вниз (`slip.noise_*`, D-054): при расхождении противофазные недавние скачки обеих — доверие 0,5/0,5, синфазные — 0/0 и оба флага |
 | `estimator` | `SpeedFilter(params).predict(t, accel_model)`, `.update(sample: WheelSample, trust: float)`, `.state() -> (speed, speed_var, accel)`, `.diagnostics() -> FilterDiagnostics \| None` | монотонное время состояния внутри; новое колесо допускается, если его stamp отстаёт от последнего принятого stamp **колёс** не более чем на `input.stale_timeout_s`, даже когда контроллер опережает оба колеса; более старое колесо отбрасывается. Запоздалое измерение учитывается без отката состояния, с поправкой на возраст; диагностика относится только к новому измерению тележки |
-| `position` | `PathTracker(params, route)`; `.on_fix(lat, lon, alt, status, distance)` — каждый fix master в окне `gnss.init_window_s`; `.ready -> bool`; `.advance(distance) -> (x, y, z, yaw, pos_cov) \| None` | frame `map` прогона — ENU первого fix статуса 2 (иначе первого валидного), как эталон `tools/eval`; карта переводится в него один раз через ECEF; якорь — ближайшая точка ближайшей ветки по последнему fix окна; дальше только вперёд по дуге `s = s₀ + distance − distance₀`, конец ветки продолжается на ближайшей ветке не дальше `position.join_m`; `pos_cov` — `cross_std_m` поперёк, вдоль растёт как `along_drift_frac · путь`; fix окна дальше `position.fix_gate_m` от карты (в ENU карты) — выброс, не участвует ни в начале frame, ни в якоре, ни в высоте; до первого принятого fix `advance` даёт `None`: pipeline публикует прямую D-021 (начало — первый fix, курс — по GNSS vel окна), `z = 0` |
+| `position` | `PathTracker(params, route)`; `.on_fix(lat, lon, alt, status, distance)` — каждый fix master в окне `gnss.init_window_s`; `.on_rover(lat, lon, alt, status)` — каждый fix rover в том же окне (только курс); `.ready -> bool`; `.advance(distance) -> (x, y, z, yaw, pos_cov) \| None` | frame `map` прогона — ENU первого fix статуса 2 (иначе первого валидного), как эталон `tools/eval`; карта переводится в него один раз через ECEF; якорь — ближайшая точка ближайшей ветки по последнему fix окна; когда есть курс master → rover (база в [`position.heading_min_base_m`, `position.heading_max_base_m`], ловушка 15; rover без GBAS при GBAS-начале курса не даёт), — ближайшая точка ветки, идущей по курсу (при её наличии в `fix_gate_m`); rover-fix меняет уже поставленный якорь, только если тот идёт против курса, а ветка по курсу — другая; дальше только вперёд по дуге `s = s₀ + distance − distance₀`, конец ветки продолжается на ближайшей ветке не дальше `position.join_m`; `pos_cov` — `cross_std_m` поперёк, вдоль растёт как `along_drift_frac · путь`; fix окна дальше `position.fix_gate_m` от карты (в ENU карты) — выброс, не участвует ни в начале frame, ни в якоре, ни в высоте; до первого принятого fix `advance` даёт `None`: pipeline публикует прямую D-021 (начало — первый fix, курс — по GNSS vel окна), `z = 0` |
 | `pipeline` | `Odometry(params, route=None).step(raw) -> Estimate \| None` | единственная точка, которую зовут нода и `tools/eval`; `None` — вход отброшен, публиковать нечего |
 
 `params` — `Params` из `types.py`: неизменяемый dataclass, по одному вложенному dataclass на
@@ -178,6 +178,19 @@ ROS 2 не выводит их тип и нода не стартует.
 `(м/с²)²`. `filter.nis_gate` — безразмерный включительный порог NIS; при NIS
 выше него измерение не обновляет состояние. Принятые и отвергнутые измерения
 дают отдельную запись `FilterDiagnostics`.
+
+Пары тележек и отъезд (D-073, значения — прежние константы `SpeedFilter`):
+`filter.pair_window_s` — с, отсчёты двух тележек не дальше по stamp считаются
+одновременной парой (нули остановки, относительный масштаб).
+`filter.bias_release_speed_mps` — м/с, ниже неё (или ниже `position.stop_speed_mps`,
+что больше) смещение ускорения при торможении сбрасывается.
+`filter.departure_slack_mps` — м/с, допуск к `input.max_wheel_accel_mps2·(t − остановка)`
+для правдоподобного отъезда; `filter.departure_var_factor` — безразмерно, дисперсия
+скорости на отъезде не ниже `factor·` дисперсии измерения (не меньше 1).
+Относительный масштаб тележек обновляется только по паре, где доверие обеих не ниже
+`filter.scale_min_trust`, обе быстрее `filter.scale_min_speed_mps` (м/с) и расходятся
+не больше `filter.scale_max_diff_mps` (м/с); оценка ограничена `±filter.scale_max_rel`
+и сглаживается шагом `filter.scale_gain` (оба безразмерны).
 
 ### Скачки тележек (D-054)
 
@@ -271,4 +284,4 @@ branch,s_m,n_bags
 останавливались (справочно, ядро не читает). Файл строит `tools/pathgraph/build_stops.py` из
 train, лежит рядом с `route.csv` и ставится в `share/tram_odometry/maps/` тем же `glob('maps/*.csv')`.
 Отсутствие файла — не ошибка (мест нет, привязки нет). Ключи `position.stop_*`, `position.scale_*`,
-`position.anchor_std_m` (`params.yaml`, §3) — часть контракта.
+`position.anchor_std_m`, `position.heading_min_base_m`, `position.heading_max_base_m` (`params.yaml`, §3) — часть контракта.

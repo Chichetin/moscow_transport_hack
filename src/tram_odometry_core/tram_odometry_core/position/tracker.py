@@ -4,7 +4,10 @@ Alignment in the GNSS init window: the frame `map` of the run is ENU at the firs
 (else the first valid one), the same rule as the reference of tools/eval. The route, stored in
 ENU of its own fixed origin, is converted into that frame once (map ENU -> ECEF -> run ENU, so
 the tangent-plane rotation between the two origins is kept). Every fix of the window anchors
-the tram to the nearest branch: (branch, s, distance). After that the tram only moves forward
+the tram to the nearest branch: (branch, s, distance). The rover antenna stands ahead of
+master in the direction of travel (docs/data.md, trap 15), so once both are seen the anchor is
+the nearest point of a branch running along master -> rover: at a standstill that tells the
+track of one direction from the other and a terminal track from the dead end of a main branch. After that the tram only moves forward
 along its branch (trams here are single-ended): s = s_anchor + distance - distance_anchor,
 continuing onto the next branch at the end. x, y, z and yaw come from the branch at s, z is
 shifted by the run's median height offset from the map in the window.
@@ -66,6 +69,8 @@ class PathTracker:
         self._var0 = 0.0                      # along-track variance at the anchor, m^2
         self._scale = 1.0                     # online wheel scale: map arc per metre of wheel path
         self._last_snap: Optional[Tuple[int, float, float]] = None   # branch, place s, distance
+        self._master = None                   # (ECEF, distance) of the last accepted master fix
+        self._rover = None                    # (ECEF, status) of the last accepted rover fix
 
     @property
     def ready(self) -> bool:
@@ -127,18 +132,46 @@ class PathTracker:
         self._anchor, self._dz = None, []
 
     def _locate(self, xy: np.ndarray) -> Tuple[int, float]:
-        """Nearest branch and arc length of a point in the frame of the run."""
+        """Nearest branch and arc length of a point in the frame of the run, on a branch
+        running along the heading when there is one within the fix gate."""
+        heading = self._heading()
+        if heading is not None:
+            k, s, d = self._nearest(self._xyz, xy, heading)
+            if d <= self.p.fix_gate_m:
+                return k, s
         k, s, _ = self._nearest(self._xyz, xy)
         return k, s
 
-    def _nearest(self, branches, xy: np.ndarray) -> Tuple[int, float, float]:
+    def _heading(self) -> Optional[np.ndarray]:
+        """master -> rover in the frame of the run, None without a usable base."""
+        if self._master is None or self._rover is None:
+            return None
+        rover, status = self._rover
+        if status < STATUS_GBAS_FIX <= self._origin_status:
+            return None                       # a plain fix next to GBAS ones: noise (on_fix)
+        h = (self._rot @ (rover - self._master[0]))[:2]
+        base = math.hypot(*h)
+        ok = self.p.heading_min_base_m <= base <= self.p.heading_max_base_m
+        return h if ok else None
+
+    def _nearest(self, branches, xy: np.ndarray, heading=None) -> Tuple[int, float, float]:
         """(branch, s, distance) of the nearest point of `branches` (the map's or the run's
-        frame: s is the same in both). Window only: brute force over the map is fine there."""
+        frame: s is the same in both); with `heading`, only segments running along it.
+        Window only: brute force over the map is fine there."""
         best = (0, 0.0, math.inf)
         for k, xyz in enumerate(branches):
-            i = int(np.argmin((xyz[:, 0] - xy[0]) ** 2 + (xyz[:, 1] - xy[1]) ** 2))
+            d2 = (xyz[:, 0] - xy[0]) ** 2 + (xyz[:, 1] - xy[1]) ** 2
+            if heading is not None:
+                seg = xyz[1:, :2] - xyz[:-1, :2]
+                along = np.append(seg @ heading, seg[-1] @ heading)   # a vertex: its next segment
+                d2 = np.where(along > 0.0, d2, math.inf)
+                if not np.isfinite(d2).any():
+                    continue
+            i = int(np.argmin(d2))
             for j in (max(i - 1, 0), min(i, len(xyz) - 2)):
                 a, t = xyz[j, :2], xyz[j + 1, :2] - xyz[j, :2]
+                if heading is not None and float(np.dot(t, heading)) <= 0.0:
+                    continue
                 u = min(max(float(np.dot(xy - a, t) / np.dot(t, t)), 0.0), 1.0)
                 d = float(np.hypot(*(a + u * t - xy)))
                 if d < best[2]:
@@ -161,20 +194,49 @@ class PathTracker:
         # a fix farther than fix_gate_m from every branch is an outlier (docs/data.md, trap 10:
         # kilometres off at the start of a run, lat = lon = 0): it must not become the origin
         # of the frame, the anchor or a height sample
-        p_map = self._map_rot @ (_ecef(lat, lon, alt) - self._map_ecef0)
-        if self._nearest(self._map, p_map[:2])[2] > self.p.fix_gate_m:
+        if not self._on_map(lat, lon, alt):
             return
         if self._origin_status is None or self._origin_status < STATUS_GBAS_FIX <= status:
             self._set_origin(lat, lon, alt, status)
         elif status < STATUS_GBAS_FIX <= self._origin_status:
             return                            # plain fixes after a GBAS origin: noise
-        p = self._rot @ (_ecef(lat, lon, alt) - self._ecef0)
+        self._master = (_ecef(lat, lon, alt), distance)
+        k, s, z = self._anchor_master()
+        self._dz.append(z - self._at(k, s)[2])
+        self._dz_median = float(np.median(self._dz))
+
+    def on_rover(self, lat: float, lon: float, alt: float, status: int) -> None:
+        """A GNSS rover fix of the init window: heading only, never the origin or the anchor
+        point; an outlier fix is ignored by the gate of `on_fix`. An anchor already set that runs
+        against the heading moves to a branch along it, if there is one; otherwise it is kept
+        (a late rover fix must not undo a stop snap)."""
+        if (not all(math.isfinite(v) for v in (lat, lon, alt)) or status < STATUS_FIX
+                or not self._on_map(lat, lon, alt)):
+            return
+        self._rover = (_ecef(lat, lon, alt), status)
+        heading = self._heading()
+        if self._anchor is None or heading is None:
+            return
+        k, s, _ = self._anchor
+        yaw = self._at(k, s)[3]
+        if heading[0] * math.cos(yaw) + heading[1] * math.sin(yaw) > 0.0:
+            return
+        if self._locate((self._rot @ (self._master[0] - self._ecef0))[:2])[0] != k:
+            self._anchor_master()
+
+    def _on_map(self, lat: float, lon: float, alt: float) -> bool:
+        p_map = self._map_rot @ (_ecef(lat, lon, alt) - self._map_ecef0)
+        return self._nearest(self._map, p_map[:2])[2] <= self.p.fix_gate_m
+
+    def _anchor_master(self):
+        """Anchor at the last master fix; returns (branch, s, height of the fix in the run)."""
+        ecef, distance = self._master
+        p = self._rot @ (ecef - self._ecef0)
         k, s = self._locate(p[:2])
         self._anchor = (k, s, distance)
         self._var0 = self.p.anchor_std_m ** 2
         self._last_snap = None
-        self._dz.append(float(p[2]) - self._at(k, s)[2])
-        self._dz_median = float(np.median(self._dz))
+        return k, s, float(p[2])
 
     def _state(self, distance: float):
         """(branch, s) at path `distance`, following the joins at the ends of branches."""

@@ -49,6 +49,10 @@ class Odometry:
         self._vel_best = 0.0                  # fastest GNSS speed seen in the window
         self._stop_since: Optional[float] = None   # stamp when the current standstill began
         self._stop_snapped = False            # this standstill was already offered to the map
+        # standstill of the state (#105): when the speed reached 0 (-inf: standing since the
+        # start or a clock resync) and the deceleration it came to rest with; None moving
+        self._t_zero: Optional[float] = -math.inf
+        self._a_zero = 0.0                    # m/s^2, <= 0
 
     def step(self, raw: Any) -> Optional[Estimate]:
         """Consume one raw input; None means the input was dropped, nothing to publish."""
@@ -90,6 +94,8 @@ class Odometry:
             self._filter.rebase_time(t)
             self._t_wheel_rx = t if self._t_wheel_rx is not None else None
             self._stop_since, self._stop_snapped = None, False
+            if self._t_zero is not None:
+                self._t_zero, self._a_zero = -math.inf, 0.0
         now = t if self._t is None else max(self._t, t)
         front, rear = self._wheel['front'], self._wheel['rear']
         # the detector predicts from the last measured speed over its own dt (last wheel
@@ -114,11 +120,13 @@ class Odometry:
             # trail the controller by seconds (docs/data.md trap 5) while the wheels talk
             st = dataclasses.replace(st, front_trust=0.0, rear_trust=0.0)
         self._slip_state = st
+        v_before, t_before = self._v, self._t
         self._filter.predict(now, self._accel_model)
         if sample is not None:
             trust = st.front_trust if sample.bogie == 'front' else st.rear_trust
             self._filter.update(sample, trust)
-        self._v, _, _ = self._filter.state()
+        self._v, _, accel = self._filter.state()
+        self._track_zero(v_before, t_before, now, accel)
         if sample is not None and self._filter.diagnostics() is not None:
             if self._filter.diagnostics().accepted:
                 self._v_measured = self._v
@@ -129,6 +137,19 @@ class Odometry:
         self._y += ds * math.sin(self._yaw)
         self._on_standstill(now)
         return self._estimate(t, now)
+
+    def _track_zero(self, v_before: float, t_before: Optional[float], now: float,
+                    accel: float) -> None:
+        """Remember when the state speed reached 0 and with what deceleration: the linear
+        braking from the previous state time crosses 0 at `t_before + v_before / -accel`,
+        never later than `now`. The acceleration at rest (the drive model brakes at v = 0)
+        is not motion and must not be integrated back from a standing state."""
+        if self._v > 0.0:
+            self._t_zero = None
+        elif self._t_zero is None:
+            self._t_zero, self._a_zero = now, min(accel, 0.0)
+            if t_before is not None and v_before > 0.0 and accel < 0.0:
+                self._t_zero = min(now, t_before + v_before / -accel)
 
     def _on_standstill(self, now: float) -> None:
         """After `stop_min_s` of standing, once per standstill, let the map snap the position
@@ -147,19 +168,35 @@ class Odometry:
 
     def _estimate(self, t: float, now: float) -> Estimate:
         _, var, accel = self._filter.state()
+        # the state is at `now`; an input stamped behind it (a wheel lagging the controller,
+        # docs/data.md trap 5) is published with the speed at its own stamp (#105). The
+        # speed is moved back along the filter acceleration only while the car moves: at
+        # rest it is 0 after the moment the state reached 0 and the braking it stopped with
+        # before (under brake the acceleration at v = 0 is negative and would invent |a|*lag)
+        if self._t_zero is None:
+            speed = max(0.0, self._v - accel * (now - t))
+        elif t >= self._t_zero:
+            speed = 0.0
+        else:
+            speed = -self._a_zero * (self._t_zero - t)
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
         x, y, z, yaw, pos_cov = self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0)
         on_map = self._tracker.advance(self._distance) if self._tracker is not None else None
         if on_map is not None:
             x, y, z, yaw, pos_cov = on_map
         return Estimate(
-            t=t, speed=self._v, speed_var=var, accel=accel, accel_model=self._accel_model,
+            t=t, speed=speed, speed_var=var, accel=accel, accel_model=self._accel_model,
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used,
             filter_diagnostics=self._filter.diagnostics())
 
     def _on_fix(self, sample: GnssFix) -> None:
+        if sample.antenna == 'rover':
+            # heading only (trap 15): never the origin of the frame or the anchor
+            if self._tracker is not None:
+                self._tracker.on_rover(sample.lat, sample.lon, sample.alt, sample.status)
+            return
         # the origin of frame `map` is the first valid fix, so the start is (0, 0)
         if sample.status >= 0:
             self._fix_ok = True

@@ -9,6 +9,7 @@ from ..types import CommandSample, GnssFix, GnssVel, Params, Sample, WheelSample
 FRONT_TOPIC = '/vehicle/front_bogie_velocity'
 REAR_TOPIC = '/vehicle/rear_bogie_velocity'
 CMD_TOPIC = '/vehicle/driver_position_cmd'
+ROVER_FIX_TOPIC = '/sensing/gnss/rover/fix'   # contract §1; heading at a standstill (trap 15)
 
 
 def _stamp(msg) -> float:
@@ -40,8 +41,8 @@ class Preprocessor:
     applies to it, so in motion it is a glitch. A long silent bogie (trap 7, up to
     73 s) needs no special handling here — it simply stops producing samples; the gap is large
     enough that the acceleration implied by whatever speed it reports on return is normally
-    small. GNSS fix/vel outside `gnss.init_window_s`
-    is dropped (D-005); status filtering and course selection stay in `pipeline` (position is
+    small. GNSS fix/vel of master and the rover fix outside `gnss.init_window_s`
+    are dropped (D-005); status filtering and course selection stay in `pipeline` (position is
     not preprocess's job).
     """
 
@@ -66,7 +67,9 @@ class Preprocessor:
         if topic == CMD_TOPIC:
             return self._command(topic, t, msg)
         if topic == self.p.gnss.topic_fix:
-            return self._fix(t, msg)
+            return self._fix(t, msg, 'master')
+        if topic == ROVER_FIX_TOPIC:
+            return self._fix(t, msg, 'rover')
         if topic == self.p.gnss.topic_vel:
             return self._vel(t, msg)
         return None
@@ -187,13 +190,13 @@ class Preprocessor:
         """GNSS inside `gnss.init_window_s` from `t0`; a stamp far behind `t0` is a glitch."""
         return self.t0 - self.p.input.max_stamp_jump_s <= t <= self.t0 + self.p.gnss.init_window_s
 
-    def _fix(self, t: float, msg) -> Optional[GnssFix]:
+    def _fix(self, t: float, msg, antenna: str) -> Optional[GnssFix]:
         if not self._in_window(t):
             return None
         lat, lon, alt = msg.latitude, msg.longitude, msg.altitude
         if not (_finite_number(lat) and _finite_number(lon) and _finite_number(alt)):
             return None
-        return GnssFix(t=t, antenna='master', lat=lat, lon=lon, alt=alt,
+        return GnssFix(t=t, antenna=antenna, lat=lat, lon=lon, alt=alt,
                        status=msg.status.status)
 
     def _vel(self, t: float, msg) -> Optional[GnssVel]:
