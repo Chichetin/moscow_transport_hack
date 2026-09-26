@@ -41,3 +41,15 @@ def test_form_accel_sign_drag_and_adhesion():
     assert cf.form_accel(2, 20.0, q, c, 1.5) == pytest.approx(0.5 - 0.01)         # power branch 10/20
     assert cf.form_accel(-2, 5.0, q, c, 1.5) == pytest.approx(-1.5 - 0.01)        # adhesion cap
     assert cf.form_accel(1, 0.0, q, c, 1.5) == pytest.approx(0.5 - 0.01)          # no P/0 blow-up
+
+
+def test_ensure_utf8_stdout_survives_a_narrow_console_encoding(monkeypatch):
+    """md() prints 'м/с²'; on a console whose default codepage is not UTF-8 (Windows,
+    cp1251) that must not crash (#128, same class of bug as #124/#126)."""
+    import io
+    narrow = io.TextIOWrapper(io.BytesIO(), encoding='ascii')
+    monkeypatch.setattr(cf.sys, 'stdout', narrow)
+    cf.ensure_utf8_stdout()
+    print('м/с²')  # raises UnicodeEncodeError on the original ascii-encoded stream
+    narrow.flush()
+    assert narrow.buffer.getvalue()
