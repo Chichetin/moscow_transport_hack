@@ -62,7 +62,7 @@ def test_candidate_must_beat_the_best_by_the_margin_and_pass_d012():
     assert not tune.better(trade, best, start, margin=0.005)
 
 
-@pytest.mark.parametrize('split', ['holdout', 'quick'])
+@pytest.mark.parametrize('split', ['holdout', 'quick', 'no_gnss_holdout', 'dups'])
 def test_holdout_bags_are_refused(split):
     with pytest.raises(SystemExit):
         tune.main(['--split', split])

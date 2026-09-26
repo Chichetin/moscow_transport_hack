@@ -48,7 +48,7 @@ GRID = {
     'slip.noise_accel_mps2': (2.5, 3.0, 4.0, 5.0),
     'slip.noise_hold_s': (0.5, 1.0, 2.0),
 }
-REFUSED_SPLITS = ('holdout', 'quick')    # quick is a subset of holdout
+ALLOWED_SPLITS = ('train',)    # holdout, quick (its subset) and any other split decide or check, never tune
 REPORT_METRICS = ('speed_rmse', 'speed_mae', 'speed_bias_accel', 'speed_bias_brake',
                   'speed_bias_stop', 'speed_bias_cruise', 'along_rmse', 'drift_pct', 'cross_rmse')
 
@@ -159,7 +159,7 @@ def main(argv=None) -> int:
                     help='на сколько score должен стать меньше лучшего, чтобы значение сменилось')
     ap.add_argument('--report', type=Path, help='markdown-отчёт; иначе только stdout')
     args = ap.parse_args(argv)
-    if args.split in REFUSED_SPLITS:
+    if args.split not in ALLOWED_SPLITS:
         ap.error(f'{args.split}: подбор только на train, holdout решает merge (D-011, D-012)')
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
