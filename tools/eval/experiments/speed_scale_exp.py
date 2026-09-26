@@ -1,8 +1,7 @@
 """Experiment: publish speed multiplied by the online path scale of PathTracker (D-034)."""
 from pathlib import Path
-import dataclasses, math, sys, types
+import dataclasses, math, sys
 from concurrent.futures import ProcessPoolExecutor
-import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tram_eval import bag, stress
 from tram_eval.metrics import summarize

@@ -1,8 +1,7 @@
 """Experiments: wheel R grows with |notch| (ktoyart), smooth dry friction c0*tanh(v/eps). Train only."""
 from pathlib import Path
-import dataclasses, math, sys, types
+import dataclasses, math, sys
 from concurrent.futures import ProcessPoolExecutor
-import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tram_eval import bag, stress
 from tram_eval.metrics import summarize

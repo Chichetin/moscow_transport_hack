@@ -120,9 +120,16 @@ def diagnostics_msg(est, stamp, params, ages) -> DiagnosticArray:
                           else DiagnosticStatus.OK)
     input_status.message = ('stale input' if input_status.level != DiagnosticStatus.OK
                             else 'ok')
+    stale = params.input.stale_timeout_s
+    live = sum(age != 'unknown' and age <= stale for age in ages[:2])
+    known = [age for age in ages[:2] if age != 'unknown']
+    # model_only: no bogie within stale_timeout_s; the core then predicts on the drive model
+    # (D-036, drive.use_model) or holds the speed; model_only_s is the freshest bogie age
+    mode = {2: 'wheels', 1: 'one_bogie', 0: 'model_only'}[live]
+    model_only_s = 0.0 if live else (min(known) if known else 'unknown')
     input_status.values = _values((
         ('front_age_s', ages[0]), ('rear_age_s', ages[1]), ('cmd_age_s', ages[2]),
-        ('gnss_used', est.gnss_used)))
+        ('gnss_used', est.gnss_used), ('mode', mode), ('model_only_s', model_only_s)))
     m.status = [slip_status, input_status]
     return m
 

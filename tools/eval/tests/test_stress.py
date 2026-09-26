@@ -47,7 +47,7 @@ def test_gap_removes_front_samples_only_inside_requested_interval(duration):
 def test_gap_both_removes_both_bogies_only_inside_interval():
     source = drive(100.0)
     changed, start, end = perturb(source, 'gap_both_30', 5.0)
-    assert end - start == 30.0
+    assert end - start == pytest.approx(30.0)
     for topic in (FRONT, REAR):
         before = wheels(source, topic)
         after = wheels(changed, topic)
