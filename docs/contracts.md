@@ -54,7 +54,10 @@ PR** с перечнем потребителей в описании. В том
 
 `/result/diagnostics`: один `DiagnosticStatus` `tram_odometry: slip` (level OK/WARN/ERROR,
 `values`: `slip_front`, `slip_rear`, `adhesion_est`, `wheel_scale_front`, `wheel_scale_rear`)
-и один `tram_odometry: inputs` (`front_age_s`, `rear_age_s`, `cmd_age_s`, `gnss_used`).
+и один `tram_odometry: inputs` (`front_age_s`, `rear_age_s`, `cmd_age_s`, `gnss_used`,
+`mode` — `wheels` / `one_bogie` / `model_only` по числу тележек не старше
+`input.stale_timeout_s`, `model_only_s` — возраст самой свежей тележки, с: 0, пока хотя бы одна
+живая, `unknown`, если тележек ещё не было; D-079, #148).
 
 ## 2. Ядро `tram_odometry_core`
 

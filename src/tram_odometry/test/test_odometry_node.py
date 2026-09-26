@@ -215,7 +215,25 @@ def test_diagnostics_reports_slip_and_input_age_with_input_stamp(node, monkeypat
                     'adhesion_est': 'unknown', 'wheel_scale_front': '1.0',
                     'wheel_scale_rear': '1.0'}
     assert inputs == {'front_age_s': '0.0', 'rear_age_s': 'unknown',
-                      'cmd_age_s': 'unknown', 'gnss_used': 'false'}
+                      'cmd_age_s': 'unknown', 'gnss_used': 'false',
+                      'mode': 'one_bogie', 'model_only_s': '0.0'}
+
+
+def test_diagnostics_mode_names_wheels_one_bogie_and_model_only(node, monkeypatch):
+    sent = []
+    monkeypatch.setattr(node.pub_diagnostics, 'publish', sent.append)
+    node.on_input('/vehicle/front_bogie_velocity', _wheel())
+    rear = _wheel()
+    rear.header.stamp = _stamp(STAMP.sec, STAMP.nanosec + 100_000_000)
+    node.on_input('/vehicle/rear_bogie_velocity', rear)
+    late = node.params.input.stale_timeout_s + 2.0
+    cmd = DriverControllerCommand()
+    cmd.header.stamp = _stamp(STAMP.sec + int(late), STAMP.nanosec)
+    node.on_input('/vehicle/driver_position_cmd', cmd)
+    values = [{v.key: v.value for v in m.status[1].values} for m in sent]
+    assert [v['mode'] for v in values] == ['one_bogie', 'wheels', 'model_only']
+    assert values[1]['model_only_s'] == '0.0'
+    assert float(values[2]['model_only_s']) == pytest.approx(int(late) - 0.1)
 
 
 def test_diagnostics_rate_and_warning_for_slipping_bogie(node, monkeypatch):
@@ -270,6 +288,7 @@ def test_controller_continues_prediction_during_wheel_silence(node, monkeypatch)
     assert sent[-1][1].pose.pose.position.x > sent[1][1].pose.pose.position.x
     ages = {v.key: v.value for v in diagnostics[-1].status[1].values}
     assert ages['front_age_s'] == '73.0'
+    assert ages['mode'] == 'model_only' and ages['model_only_s'] == '73.0'
     assert ages['cmd_age_s'] == '0.0'
     assert diagnostics[-1].status[1].level == DiagnosticStatus.WARN
     node.on_input('/vehicle/driver_position_cmd', cmd)  # repeated stamp is dropped
@@ -286,6 +305,7 @@ def test_diagnostics_marks_missing_bogies_on_controller_start(node, monkeypatch)
     assert sent[0].status[1].level == DiagnosticStatus.WARN
     values = {v.key: v.value for v in sent[0].status[1].values}
     assert values['front_age_s'] == values['rear_age_s'] == 'unknown'
+    assert values['mode'] == 'model_only' and values['model_only_s'] == 'unknown'
 
 
 def test_diagnostics_inputs_ok_when_fresh_and_warn_after_stale_timeout(node, monkeypatch):
