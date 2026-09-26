@@ -126,7 +126,7 @@ def test_arc_follows_doppler_speed_not_fix_wander():
     assert ref.pos_s[-1] == pytest.approx(99.0, abs=0.01)
 
 
-# base_link by the organizers' tf (D-076): master 9.873 m behind, rover 2.563 m ahead, both 3.0 m up
+# base_link by the organizers' tf (D-077): master 9.873 m behind, rover 2.563 m ahead, both 3.0 m up
 
 def _rover_of(t, llas, dt=0.0, base_m=12.436):
     """Rover fixes base_m east of every master fix (the tram runs east), stamps shifted by dt."""

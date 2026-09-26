@@ -1,4 +1,4 @@
-# Выход `/result/position` в `base_link` по tf организаторов (#142, D-076)
+# Выход `/result/position` в `base_link` по tf организаторов (#142, D-077)
 
 - Было: `origin/main` `506900c` (выход — трек антенны master, эталон eval — master).
   Стало: ветка `worktree-142-base-link` после слияния с `origin/main` `ef47f9a` (#143) и правок

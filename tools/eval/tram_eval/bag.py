@@ -20,7 +20,7 @@ import yaml
 from .metrics import Estimates, bag_metrics
 from .reference import build_reference
 
-REF_POINT = 'base_link'   # the point the judge compares (organizers' tf, D-076); --ref-point master for the antenna
+REF_POINT = 'base_link'   # the point the judge compares (organizers' tf, D-077); --ref-point master for the antenna
 
 REPO = Path(__file__).resolve().parents[3]
 MSG_DIR = REPO / 'src' / 'tram_vehicle_msgs' / 'msg'
@@ -153,7 +153,7 @@ def rover_inputs(msgs):
 
 
 def bag_reference(msgs, window_end: float, point: str = REF_POINT):
-    """The reference of a bag at `point` ('base_link' or 'master', D-076)."""
+    """The reference of a bag at `point` ('base_link' or 'master', D-077)."""
     rover_t, rover_llas = rover_inputs(msgs) if point != 'master' else ((), ())
     return build_reference(*reference_inputs(msgs), window_end, point=point,
                            rover_t=rover_t, rover_llas=rover_llas)

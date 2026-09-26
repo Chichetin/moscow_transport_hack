@@ -3,7 +3,7 @@
 The reference uses the whole GNSS record of the bag (it is the ground truth, not a model
 input). The model sees GNSS only inside the init window — that cut is done in `bag.py`.
 
-`point='base_link'` (the default of the eval, D-076) moves the reference to base_link by the
+`point='base_link'` (the default of the eval, D-077) moves the reference to base_link by the
 organizers' tf: the master antenna is 9.873 m behind base_link (the front bogie pivot) and the
 rover 2.563 m ahead of it, both 3.0 m above it (rail level). With a rover fix of the same moment
 base_link is on the line master -> rover; without one it is where master will be 9.873 m of arc
@@ -135,7 +135,7 @@ def rover_pairs(fix_t, pos, rover_t, rover_llas, origin, min_status: int = MIN_S
 
 def track_ahead(pos: np.ndarray, pos_s: np.ndarray, ahead: float, heading=None) -> np.ndarray:
     """Points `ahead` metres of arc further along the track `pos` (N, 3) with arc `pos_s`: where
-    base_link is while master is at `pos` (D-076). Past the end the track goes on along its
+    base_link is while master is at `pos` (D-077). Past the end the track goes on along its
     chord over the last END_CHORD_M; a track shorter than that goes along `heading` (unit ENU
     xy master -> rover) or, without one, stays where it ends."""
     if not len(pos):
@@ -176,7 +176,7 @@ def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float, point: st
     """fix_llas: (N, 4) lat, lon, alt, status; vel_en: (K, 2) ENU east/north m/s.
 
     point: 'master' — the antenna; 'base_link' — the front bogie pivot at rail level by the
-    organizers' tf (module docstring, D-076); rover_llas: (R, 4) like fix_llas, for base_link.
+    organizers' tf (module docstring, D-077); rover_llas: (R, 4) like fix_llas, for base_link.
     The frame origin is the master fix either way.
 
     Origin = the rule of frame `map` of the tracker (docs/contracts.md §1, D-030): the first

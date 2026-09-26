@@ -16,7 +16,7 @@ import build_route as br  # noqa: E402  (reference ENU of the map builder and of
 
 PARAMS_YAML = load_params(ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml')
 # the tests below follow the track of the master antenna itself: base_link offset zeroed; the
-# offset of params.yaml (D-076) has its own tests at the end of the file
+# offset of params.yaml (D-077) has its own tests at the end of the file
 PARAMS = replace(PARAMS_YAML, position=replace(PARAMS_YAML.position, base_ahead_m=0.0,
                                                antenna_height_m=0.0))
 ORIGIN = (55.8104, 37.4623, 168.0)
@@ -443,7 +443,7 @@ def test_side_switch_keeps_the_along_track_variance():
     assert tr._var_along(70.0) == pytest.approx(before)
 
 
-# base_link offset of params.yaml (D-076): the map is the master antenna track, the output is
+# base_link offset of params.yaml (D-077): the map is the master antenna track, the output is
 # the front bogie pivot at rail level, 9.873 m ahead of master and 3.0 m below the antennas
 
 

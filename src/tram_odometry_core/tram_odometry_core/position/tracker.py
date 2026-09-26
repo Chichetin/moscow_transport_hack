@@ -355,7 +355,7 @@ class PathTracker:
         """(x, y, z, yaw, (var_x, var_y, cov_xy)) of base_link at path `distance` and speed
         (m/s), None before alignment. The map, the anchor and the stop places are the track of
         the master antenna; base_link (the front bogie pivot at rail level, organizers' tf) is
-        `base_ahead_m` ahead of it along the track and `antenna_height_m` below (D-076)."""
+        `base_ahead_m` ahead of it along the track and `antenna_height_m` below (D-077)."""
         if self._anchor is None:
             return None
         self._take_side(distance, speed)

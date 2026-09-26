@@ -108,7 +108,7 @@ def main(argv=None) -> int:
     ap.add_argument('--stress', action='store_true', help='детерминированные сбои входа; отдельный stress.json')
     ap.add_argument('--plot', action='store_true', help='PNG по каждому bag в <out>/plots (нужен matplotlib)')
     ap.add_argument('--ref-point', choices=('base_link', 'master'), default=bagmod.REF_POINT,
-                    help='точка эталона: base_link по tf организаторов (по умолчанию) или антенна master (D-076)')
+                    help='точка эталона: base_link по tf организаторов (по умолчанию) или антенна master (D-077)')
     ap.add_argument('--jobs', type=int, default=max(1, min(8, (os.cpu_count() or 2) - 1)))
     ap.add_argument('--out', type=Path, default=None, help='каталог прогона, по умолчанию out/eval/<commit>-<набор>')
     args = ap.parse_args(argv)
@@ -130,9 +130,9 @@ def main(argv=None) -> int:
     window = bagmod.default_gnss_window() if args.gnss_window is None else args.gnss_window
     base = json.loads(args.compare.read_text(encoding='utf-8')) if args.compare else None
     if base is not None and base.get('ref_point', 'master') != args.ref_point:
-        # metrics.json before D-076 has no ref_point: its reference is the master antenna
+        # metrics.json before D-077 has no ref_point: its reference is the master antenna
         ap.error(f"--compare: эталон базы {base.get('ref_point', 'master')!r}, а прогона "
-                 f"{args.ref_point!r} (D-076) — пересчитайте базу с --ref-point {args.ref_point} "
+                 f"{args.ref_point!r} (D-077) — пересчитайте базу с --ref-point {args.ref_point} "
                  f"или запустите этот прогон с --ref-point {base.get('ref_point', 'master')}")
     bagmod.default_odometry()   # fail fast if the pipeline cannot be built
 

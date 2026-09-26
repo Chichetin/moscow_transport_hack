@@ -313,7 +313,7 @@ def _validate_side(position: PositionParams) -> None:
 
 
 def _validate_base_link(position: PositionParams) -> None:
-    """The output point of D-076: ahead of master along the track, below the antennas; the
+    """The output point of D-077: ahead of master along the track, below the antennas; the
     online wheel scale divides the offset, so it must stay away from 0."""
     if not (position.base_ahead_m >= 0):
         raise ValueError('position.base_ahead_m must be nonnegative')

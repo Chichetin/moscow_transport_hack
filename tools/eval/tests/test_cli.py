@@ -44,7 +44,7 @@ def test_run_writes_contract_json_and_tables(short_bags, tmp_path, capsys):
 
 
 def test_compare_with_a_base_of_another_reference_point_is_an_error(short_bags, tmp_path):
-    """A metrics.json without ref_point is from before D-076: its reference is master."""
+    """A metrics.json without ref_point is from before D-077: its reference is master."""
     base = tmp_path / 'old.json'
     base.write_text(json.dumps({'commit': 'old', 'bags': {}, 'summary': {'median': {}}}), encoding='utf-8')
     args = ['--bag', short_bags[0], '--jobs', '1', '--out', str(tmp_path / 'run'), '--compare', str(base)]

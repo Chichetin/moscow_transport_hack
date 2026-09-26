@@ -74,7 +74,7 @@ ros2 bag play <каталог bag>                            # терминал
 GNSS-fix master статуса 2 в окне выставки (иначе первый валидный), оси ENU, как у эталона.
 `pose.pose.position` — точка `base_link` по tf организаторов: ось передней тележки на уровне
 касания колеса и рельса, 9,873 м впереди антенны master и 3,0 м ниже антенн
-(`position.base_ahead_m`, `position.antenna_height_m`; D-076). Выход в точке самой антенны
+(`position.base_ahead_m`, `position.antenna_height_m`; D-077). Выход в точке самой антенны
 master — оба ключа `0` в `params.yaml`.
 
 ```bash
