@@ -91,8 +91,16 @@ for b in $BAGS; do
     info="$(ros2 bag info "/tmp/rec_$b" 2>/dev/null)"
     vel="$(printf '%s\n' "$info" | grep 'Topic: /result/velocity' | grep -oE 'Count: [0-9]+' | grep -oE '[0-9]+')"
     pos="$(printf '%s\n' "$info" | grep 'Topic: /result/position' | grep -oE 'Count: [0-9]+' | grep -oE '[0-9]+')"
-    if [ "$alive" = yes ] && [ "${vel:-0}" -gt 0 ] && [ "${pos:-0}" -gt 0 ]; then st=ok; else st=fail; fi
-    printf '%s\t%s\t%s\n' "$b" "$st" "нода жива: $alive; /result/velocity: ${vel:-0}; /result/position: ${pos:-0}" >> "$RUN"
+    note="нода жива: $alive; /result/velocity: ${vel:-0}; /result/position: ${pos:-0}"
+    if [ "$alive" = yes ] && [ "${vel:-0}" -gt 0 ] && [ "${pos:-0}" -gt 0 ]; then
+      if checked="$(python3 /repo/tools/submission/check_recording.py "/bags/$b" "/tmp/rec_$b" 2>&1)"; then
+        st=ok
+      else
+        st=fail
+      fi
+      note="$note; $checked"
+    else st=fail; fi
+    printf '%s\t%s\t%s\n' "$b" "$st" "$note" >> "$RUN"
   )
   echo "== run $b: $(tail -1 "$RUN" | cut -f2-)"
 done
