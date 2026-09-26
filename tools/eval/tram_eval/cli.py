@@ -96,7 +96,15 @@ def stress_table(bags: dict) -> list[str]:
     return lines
 
 
+def ensure_utf8_stdout() -> None:
+    """Console codepage must not crash the report on its own 'Δ' / other symbols (#128,
+    same class of bug as #124/#126)."""
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+
 def main(argv=None) -> int:
+    ensure_utf8_stdout()
     ap = argparse.ArgumentParser(prog='tram_eval', description=__doc__)
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument('--split', help='набор из tools/eval/splits.yaml: quick, holdout, train')

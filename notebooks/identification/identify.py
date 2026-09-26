@@ -298,7 +298,15 @@ def md_report(res, val, check):
     return '\n'.join(lines)
 
 
+def ensure_utf8_stdout() -> None:
+    """Console codepage must not crash md_report()'s '²'/'×'/'−' (#128, same class of bug
+    as #124/#126)."""
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+
 def main(argv=None):
+    ensure_utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--split', default='train')
     ap.add_argument('--check-split', default=None, help='набор только для проверки (не для подгонки)')

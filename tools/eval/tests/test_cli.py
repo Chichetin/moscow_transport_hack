@@ -84,3 +84,16 @@ def test_stress_writes_separate_diagnostics_without_changing_metrics_schema(shor
     assert set(stress['bags'][short_bags[0]]) == set(cli.SCENARIOS)
     assert stress['bags'][short_bags[0]]['gap_70']['skipped'] is True
     assert 'пик ошибки скорости, м/с' in capsys.readouterr().out
+
+
+def test_ensure_utf8_stdout_survives_a_narrow_console_encoding(monkeypatch):
+    """summary_table() prints 'Δ, %' when --compare is used; on a console whose default
+    codepage is not UTF-8 (Windows, cp1251) that must not crash (#128, same class of bug
+    as #124/#126)."""
+    import io
+    narrow = io.TextIOWrapper(io.BytesIO(), encoding='ascii')
+    monkeypatch.setattr(cli.sys, 'stdout', narrow)
+    cli.ensure_utf8_stdout()
+    print('Δ, %')  # raises UnicodeEncodeError on the original ascii-encoded stream
+    narrow.flush()
+    assert narrow.buffer.getvalue()

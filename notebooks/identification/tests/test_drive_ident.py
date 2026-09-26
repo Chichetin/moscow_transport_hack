@@ -222,3 +222,15 @@ def test_written_params_pass_the_contract(tmp_path):
     after = target.read_text(encoding='utf-8')
     comments = [ln.split('#', 1)[1] for ln in before.splitlines() if '#' in ln]
     assert all(c in after for c in comments)                           # every comment kept
+
+
+def test_ensure_utf8_stdout_survives_a_narrow_console_encoding(monkeypatch):
+    """md_report() prints 'м/с²'/'×'/'−'; on a console whose default codepage is not
+    UTF-8 (Windows, cp1251) that must not crash (#128, same class of bug as #124/#126)."""
+    import io
+    narrow = io.TextIOWrapper(io.BytesIO(), encoding='ascii')
+    monkeypatch.setattr(ident.sys, 'stdout', narrow)
+    ident.ensure_utf8_stdout()
+    print('м/с²')  # raises UnicodeEncodeError on the original ascii-encoded stream
+    narrow.flush()
+    assert narrow.buffer.getvalue()
