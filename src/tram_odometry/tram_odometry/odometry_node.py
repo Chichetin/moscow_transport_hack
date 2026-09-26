@@ -123,7 +123,8 @@ def diagnostics_msg(est, stamp, params, ages) -> DiagnosticArray:
     stale = params.input.stale_timeout_s
     live = sum(age != 'unknown' and age <= stale for age in ages[:2])
     known = [age for age in ages[:2] if age != 'unknown']
-    # model_only: no bogie within stale_timeout_s, the speed is the drive-model prediction
+    # model_only: no bogie within stale_timeout_s; the core then predicts on the drive model
+    # (D-036, drive.use_model) or holds the speed; model_only_s is the freshest bogie age
     mode = {2: 'wheels', 1: 'one_bogie', 0: 'model_only'}[live]
     model_only_s = 0.0 if live else (min(known) if known else 'unknown')
     input_status.values = _values((
