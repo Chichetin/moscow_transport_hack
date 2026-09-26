@@ -246,3 +246,20 @@ def test_relative_wheel_scale_learned_before_one_bogie_gap():
         filt.predict(t, 0.0)
         filt.update(wheel(t, 10.1, 'front'), 1.0)
     assert filt.state()[0] == pytest.approx(10.0, abs=0.03)
+
+
+@pytest.mark.parametrize('first', ['front', 'rear'])
+def test_disagreeing_pair_of_one_stamp_is_fused_whatever_comes_first(first):
+    """Antiphase noise (#105): with split trust both bogies of a stamp are accepted and the
+    estimate lands between them. Gated on r_wheel alone the first one was taken and the
+    second, now far from the narrowed estimate, rejected."""
+    second = 'rear' if first == 'front' else 'front'
+    filt = initialized()
+    speeds = {'front': 10.8, 'rear': 9.2}
+    for k in range(1, 21):                               # 2 s of pairs at 10 Hz
+        t = 0.1 * k
+        filt.predict(t, 0.0)
+        for bogie in (first, second):
+            filt.update(wheel(t, speeds[bogie], bogie), 0.5)
+            assert k < 3 or filt.diagnostics().accepted, (k, bogie)
+    assert filt.state()[0] == pytest.approx(10.0, abs=0.15)
