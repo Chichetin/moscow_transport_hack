@@ -467,3 +467,15 @@ def test_load_params_rejects_bad_side_keys(tmp_path, key, value):
     path.write_text(text, encoding='utf-8')
     with pytest.raises(ValueError, match=key):
         load_params(path)
+
+
+def test_a_new_anchor_drops_the_undo_of_an_earlier_side_switch():
+    """A fix of the window re-anchors after a side switch: the switch is forgotten, a real
+    fast entry into the side track is taken again, and nothing restores the old anchor."""
+    tr = _depot_tracker()
+    tr.advance(70.0, 7.0)                          # side switch inside the GNSS window
+    tr.on_fix(*_lla(0.0, 0.0), 2, distance=70.0)   # the window re-anchors at the start
+    fresh = _depot_tracker()
+    # re-anchored at s = 0 with path 70: path 140 is 70 m along, as a fresh tracker at 70
+    assert tr.advance(140.0, 7.0)[:2] == pytest.approx(fresh.advance(70.0, 7.0)[:2], abs=1e-6)
+    assert tr._undo is not None and tr._anchor[0] == 3

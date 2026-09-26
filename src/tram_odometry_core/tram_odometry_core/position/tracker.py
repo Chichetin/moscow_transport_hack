@@ -172,6 +172,7 @@ class PathTracker:
         c = self._rot @ (_ecef(lat0, lon0, alt0) - self._ecef0)
         self._xyz = [xyz @ a.T + c for xyz in self._map]
         self._anchor, self._dz = None, []
+        self._undo = None                     # a side switch belongs to the anchor it replaced
 
     def _locate(self, xy: np.ndarray) -> Tuple[int, float]:
         """Nearest branch and arc length of a point in the frame of the run, on a branch
@@ -276,6 +277,7 @@ class PathTracker:
         p = self._rot @ (ecef - self._ecef0)
         k, s = self._locate(p[:2])
         self._anchor = (k, s, distance)
+        self._undo = None
         self._var0 = self.p.anchor_std_m ** 2
         self._last_snap = None
         return k, s, float(p[2])
@@ -329,6 +331,7 @@ class PathTracker:
         gain = var / (var + self.p.stop_std_m ** 2)
         self._update_scale(k, place, distance)
         self._anchor = (k, s + gain * (place - s), distance)
+        self._undo = None
         self._var0 = (1.0 - gain) * var
         self._last_snap = (k, place, distance)
         return True
