@@ -57,6 +57,7 @@ class PathTracker:
         self._next = [self._join(k) for k in range(len(self._map))]
         self._fork = [self._fork_join(k) for k in range(len(self._map))]
         self._side = [self._side_branch(k) for k in range(len(self._map))]
+        self._undo = None                     # (anchor, var0, last_snap) before a side switch
         self._xyz = self._map                 # branches in the frame of the run
         lat0, lon0, alt0 = route.origin       # the map's own ENU: the outlier gate lives here
         self._map_rot, self._map_ecef0 = _enu_rotation(lat0, lon0), _ecef(lat0, lon0, alt0)
@@ -97,70 +98,71 @@ class PathTracker:
                 best = (j, float(self._s[j][i]), float(d[i]))
         return None if best is None else best[:2]
 
+    def _branch_start_on(self, k: int, j: int):
+        """(s on branch k, distance) where branch j starts on k heading along it, or None."""
+        parent, child = self._map[k], self._map[j]
+        start = child[0, :2]
+        i = int(np.argmin((parent[:, 0] - start[0]) ** 2 + (parent[:, 1] - start[1]) ** 2))
+        d = float(np.hypot(*(parent[i, :2] - start)))
+        if d > self.p.join_m or i >= len(parent) - 1:
+            return None
+        tangent = parent[i + 1, :2] - parent[i, :2]
+        child_tangent = child[1, :2] - child[0, :2]
+        cos = float(np.dot(tangent, child_tangent) /
+                    (np.linalg.norm(tangent) * np.linalg.norm(child_tangent)))
+        return None if cos < math.cos(JOIN_MAX_TURN_RAD) else (float(self._s[k][i]), d)
+
+    def _nearest_start(self, k: int, children):
+        """(s on branch k, j) of the child branch starting nearest to branch k, or None."""
+        best = None
+        for j in children:
+            at = self._branch_start_on(k, j)
+            if at is not None and (best is None or at[1] < best[2]):
+                best = (at[0], j, at[1])
+        return None if best is None else best[:2]
+
     def _fork_join(self, k: int):
         """A forward branch start that bypasses this branch's dead end, if one exists."""
         if self._next[k] is not None:
             return None
-        parent = self._map[k]
-        best = None
-        for j, child in enumerate(self._map):
-            if j == k or self._next[j] is None:
-                continue
-            start = child[0, :2]
-            i = int(np.argmin((parent[:, 0] - start[0]) ** 2 +
-                              (parent[:, 1] - start[1]) ** 2))
-            d = float(np.hypot(*(parent[i, :2] - start)))
-            if d > self.p.join_m or i >= len(parent) - 1:
-                continue
-            tangent = parent[i + 1, :2] - parent[i, :2]
-            child_tangent = child[1, :2] - child[0, :2]
-            cos = float(np.dot(tangent, child_tangent) /
-                        (np.linalg.norm(tangent) * np.linalg.norm(child_tangent)))
-            if cos < math.cos(JOIN_MAX_TURN_RAD):
-                continue
-            candidate = (float(self._s[k][i]), j, d)
-            if best is None or d < best[2]:
-                best = candidate
-        return None if best is None else best[:2]
+        return self._nearest_start(k, [j for j in range(len(self._map))
+                                       if j != k and self._next[j] is not None])
 
     def _side_branch(self, k: int):
         """(s on branch k, j): a dead-end branch j leaving k mid-way that the default path does
         not take (the westbound track into the depot stub at the west terminal, #138)."""
-        parent = self._map[k]
-        taken = {self._fork[k][1]} if self._fork[k] is not None else set()
-        best = None
-        for j, child in enumerate(self._map):
-            if j == k or j in taken or self._next[j] is not None:
-                continue
-            start = child[0, :2]
-            i = int(np.argmin((parent[:, 0] - start[0]) ** 2 + (parent[:, 1] - start[1]) ** 2))
-            d = float(np.hypot(*(parent[i, :2] - start)))
-            if d > self.p.join_m or i >= len(parent) - 1:
-                continue
-            tangent = parent[i + 1, :2] - parent[i, :2]
-            child_tangent = child[1, :2] - child[0, :2]
-            cos = float(np.dot(tangent, child_tangent) /
-                        (np.linalg.norm(tangent) * np.linalg.norm(child_tangent)))
-            if cos < math.cos(JOIN_MAX_TURN_RAD):
-                continue
-            if best is None or d < best[2]:
-                best = (float(self._s[k][i]), j, d)
-        return None if best is None else best[:2]
+        taken = self._fork[k][1] if self._fork[k] is not None else None
+        return self._nearest_start(k, [j for j in range(len(self._map))
+                                       if j not in (k, taken) and self._next[j] is None])
 
     def _take_side(self, distance: float, speed: float) -> None:
         """Move onto the side branch when the tram is past its start and faster than any tram
-        heading for the default path there (the loop is slow, the depot track is not)."""
+        heading for the default path there (the loop is slow, the depot track is not). A tram
+        that runs past the side branch's dead end by `side_overrun_m` was on the default path
+        after all: back to it, as if the switch never happened."""
+        if self._undo is not None:
+            if self._overrun(distance) > self.p.side_overrun_m:
+                self._anchor, self._var0, self._last_snap = self._undo
+                self._undo = None
+            return
         if not (math.isfinite(speed) and speed > self.p.side_speed_mps):
             return
         k, s = self._state(distance)
         side = self._side[k]
         if side is None or not self.p.side_min_m <= s - side[0] <= self.p.side_max_m:
             return
+        self._undo = (self._anchor, self._var0, self._last_snap)
         var = self._var_along(distance)
         j = side[1]
         self._anchor = (j, float(self._s[j][0]) + s - side[0], distance)
         self._var0 = var
         self._last_snap = None
+
+    def _overrun(self, distance: float) -> float:
+        """Path beyond the dead end of the side branch at `distance` (0 before it): the state
+        clamps s there, so the overrun comes from the unclamped arc of the anchor."""
+        k, s0, d0 = self._anchor
+        return max(0.0, s0 + self._scale * (distance - d0) - float(self._s[k][-1]))
 
     def _set_origin(self, lat: float, lon: float, alt: float, status: int) -> None:
         self._origin_status = status
@@ -170,6 +172,7 @@ class PathTracker:
         c = self._rot @ (_ecef(lat0, lon0, alt0) - self._ecef0)
         self._xyz = [xyz @ a.T + c for xyz in self._map]
         self._anchor, self._dz = None, []
+        self._undo = None                     # a side switch belongs to the anchor it replaced
 
     def _locate(self, xy: np.ndarray) -> Tuple[int, float]:
         """Nearest branch and arc length of a point in the frame of the run, on a branch
@@ -274,6 +277,7 @@ class PathTracker:
         p = self._rot @ (ecef - self._ecef0)
         k, s = self._locate(p[:2])
         self._anchor = (k, s, distance)
+        self._undo = None
         self._var0 = self.p.anchor_std_m ** 2
         self._last_snap = None
         return k, s, float(p[2])
@@ -331,6 +335,7 @@ class PathTracker:
         gain = var / (var + self.p.stop_std_m ** 2)
         self._update_scale(k, place, distance)
         self._anchor = (k, s + gain * (place - s), distance)
+        self._undo = None
         self._var0 = (1.0 - gain) * var
         self._last_snap = (k, place, distance)
         return True
