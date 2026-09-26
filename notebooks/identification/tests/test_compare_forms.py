@@ -45,7 +45,7 @@ def test_form_accel_sign_drag_and_adhesion():
 
 def test_ensure_utf8_stdout_survives_a_narrow_console_encoding(monkeypatch):
     """md() prints 'м/с²'; on a console whose default codepage is not UTF-8 (Windows,
-    cp1251) that must not crash (#128, same class of bug as #124/#126)."""
+    cp1251) that must not crash (#132, same class of bug as #124/#126)."""
     import io
     narrow = io.TextIOWrapper(io.BytesIO(), encoding='ascii')
     monkeypatch.setattr(cf.sys, 'stdout', narrow)

@@ -173,7 +173,7 @@ def md(out):
 
 
 def ensure_utf8_stdout() -> None:
-    """Console codepage must not crash md()'s 'м/с²' (#128, same class of bug as
+    """Console codepage must not crash md()'s 'м/с²' (#132, same class of bug as
     #124/#126)."""
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
