@@ -1,5 +1,6 @@
 """One bogie spiking next to an honest 0 through Odometry.step (#76, stress `spike`).
 Messages are minimal stand-ins for the ROS ones."""
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,3 +55,42 @@ def test_run_starting_in_motion_with_the_rear_stuck_at_zero_follows_the_front():
         est = odo.step((REAR, _msg(t, velocity=0.0)))
     assert est.speed == pytest.approx(10.0, abs=0.1)
     assert est.slip.slip_rear and not est.slip.slip_front
+
+
+def test_antiphase_noise_of_both_bogies_while_cruising_stays_near_the_truth():
+    # stress `noise` (#82): +-3 km/h at 1 Hz on the front, in antiphase on the rear, 10 s at
+    # a steady 50 km/h; the mean of the bogies is the truth, a single bogie is off by 0.83 m/s
+    odo, out, v = Odometry(PARAMS), [], 50.0
+    for k in range(150):
+        t = T0 + 0.1 * k
+        n = 3.0 * math.sin(2 * math.pi * k / 10) if k >= 30 else 0.0
+        for topic, msg in ((CMD, _msg(t, position=0)), (FRONT, _msg(t + 0.01, velocity=v + n)),
+                           (REAR, _msg(t + 0.05, velocity=v - n))):
+            e = odo.step((topic, msg))
+            if e is not None and t >= T0 + 3.0:
+                out.append(e.speed)
+    assert max(abs(s - v / 3.6) for s in out) < 0.5
+
+
+@pytest.mark.parametrize('n_future', [2, 3])
+def test_a_clock_glitch_of_one_bogie_does_not_freeze_the_jump_memory(n_future):
+    # review of #99: the front sends samples stamped a day ahead (the last one a step up);
+    # preprocess accepts them and resyncs back (D-043). Later the rear slides alone at
+    # -4 m/s^2: the detector must still see a single-bogie slide, not antiphase noise
+    odo, errors, v = Odometry(PARAMS), [], 36.0
+    for k in range(200):
+        t = T0 + 0.1 * k
+        msgs = [(CMD, _msg(t, position=0))]
+        if k == 40:
+            msgs += [(FRONT, _msg(t + 86400.0 + 0.1 * i,
+                                  velocity=v + (1.8 if i == n_future - 1 else 0.0)))
+                     for i in range(n_future)]
+        else:
+            msgs.append((FRONT, _msg(t + 0.01, velocity=v)))
+        r = v - 1.44 * min(max(k - 99, 0), 30)
+        msgs.append((REAR, _msg(t + 0.05, velocity=max(r, 0.0))))
+        for topic, msg in msgs:
+            e = odo.step((topic, msg))
+            if e is not None and k >= 90:
+                errors.append(abs(e.speed - v / 3.6))
+    assert max(errors) < PARAMS.slip.front_rear_threshold_mps

@@ -139,6 +139,8 @@ class FilterParams:
 class SlipParams:
     front_rear_threshold_mps: float
     model_residual_threshold_mps2: float
+    noise_accel_mps2: float
+    noise_hold_s: float
 
 
 @dataclass(frozen=True)
