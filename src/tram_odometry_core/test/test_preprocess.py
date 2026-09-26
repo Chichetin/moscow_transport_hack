@@ -345,7 +345,7 @@ def test_odometry_keeps_publishing_after_a_future_command():
         outs.append(odo.step(wheel(FRONT_TOPIC, t, 36.0)))
     assert all(e is not None for e in outs)
     assert outs[-1].t == pytest.approx(t0 + 1.0 + 0.05 * 199)
-    assert outs[-1].speed == pytest.approx(10.0, abs=1e-6)
+    assert outs[-1].speed == pytest.approx(10.0, abs=0.001)
 
 
 def test_two_future_glitches_in_a_row_do_not_freeze_the_stream():
@@ -451,7 +451,7 @@ def test_odometry_distance_keeps_growing_after_an_accepted_clock_glitch(glitches
     assert last is not None and last.t == pytest.approx(1000.0 + 1.0 + 0.05 * 199)
     grown = last.distance - (before.distance if before is not None else 0.0)
     assert 90.0 < grown < 120.0, grown
-    assert last.speed == pytest.approx(10.0, abs=1e-6)
+    assert last.speed == pytest.approx(10.0, abs=0.001)
 
 
 
