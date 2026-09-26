@@ -297,14 +297,26 @@ def test_untrusted_partner_is_left_out_of_the_mean():
     assert filt.state()[0] > 10.1                      # not pulled toward the rear's 10.0
 
 
-def test_one_bogie_does_not_start_a_car_standing_without_traction():
+def test_a_jumping_bogie_does_not_start_a_car_standing_without_traction():
     filt = resting()
-    for k in range(11, 21):                            # front reads 0.8 m/s, rear stays 0
+    for k in range(11, 21):                            # front jumps to 0.8 m/s, rear stays 0
         t = k / 10.0
         filt.predict(t, -0.1)
         filt.update(wheel(t, 0.8, 'front'), 1.0)
         filt.update(wheel(t + 0.03, 0.0, 'rear'), 1.0)
     assert filt.state()[0] < 0.05
+
+
+def test_a_smooth_rise_of_one_bogie_starts_the_car_without_traction_in_the_model():
+    # a start with the notch still 0 (response delay) or read as brake, the rear stuck at 0
+    # (trap 8, 30639): the front rising at 1 m/s^2 is no jump, the car is not held at 0
+    filt = resting()
+    for k in range(11, 21):
+        t = k / 10.0
+        filt.predict(t, -0.1)
+        filt.update(wheel(t, 1.0 * (t - 1.0), 'front'), 1.0)
+        filt.update(wheel(t + 0.03, 0.0, 'rear'), 1.0)
+    assert filt.state()[0] > 0.3
 
 
 def test_both_bogies_start_the_car_even_without_traction_from_the_model():

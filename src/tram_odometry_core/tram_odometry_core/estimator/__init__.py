@@ -25,6 +25,8 @@ class SpeedFilter:
         self._max_wheel_accel = params.input.max_wheel_accel_mps2
         self._rest_speed = max(params.position.stop_speed_mps, BIAS_RELEASE_MPS)
         self._stop_speed = params.position.stop_speed_mps
+        self._jump_accel = params.slip.noise_accel_mps2
+        self._jump_hold = params.slip.noise_hold_s
         if (self._p.q_accel < 0.0 or self._p.r_wheel <= 0.0
                 or self._p.q_bias < 0.0 or self._p.initial_bias_var < 0.0
                 or self._p.nis_gate <= 0.0):
@@ -42,6 +44,8 @@ class SpeedFilter:
         self._zero_wheel = {'front': None, 'rear': None}
         self._confirmed_stop_t = None
         self._pair = {'front': None, 'rear': None}  # last accepted (t, speed m/s, trust)
+        self._raw = {'front': None, 'rear': None}   # last fresh (t, speed m/s), any trust
+        self._jump_t = {'front': None, 'rear': None}  # stamp of the bogie's last jump
 
     def rebase_time(self, t: float):
         """Keep the estimate but start a fresh input clock after a confirmed jump."""
@@ -52,6 +56,8 @@ class SpeedFilter:
         self._zero_wheel = {'front': None, 'rear': None}
         self._confirmed_stop_t = None
         self._pair = {'front': None, 'rear': None}
+        self._raw = {'front': None, 'rear': None}
+        self._jump_t = {'front': None, 'rear': None}
         self._diagnostic = None
 
     def predict(self, t: float, accel_model: float):
@@ -88,6 +94,12 @@ class SpeedFilter:
             return
         if sample.speed == 0.0:
             self._zero_wheel[sample.bogie] = sample.t
+        raw = self._raw[sample.bogie]
+        if (raw is not None and abs((sample.speed - raw[1]) / (sample.t - raw[0])
+                                    - self._model_accel) > self._jump_accel):
+            # a step the car cannot make (the detector's jump, D-054)
+            self._jump_t[sample.bogie] = sample.t
+        self._raw[sample.bogie] = (sample.t, sample.speed)
         if trust == 0.0:
             # the detector does not trust this bogie now: its last reading gets no weight
             # in the pair mean while moving
@@ -168,12 +180,15 @@ class SpeedFilter:
         if (not self._initialized or other is None
                 or abs(sample.t - other[0]) > self._stale_timeout):
             return own       # the other bogie is silent: single-bogie mode
-        if self._x[0] < self._stop_speed and self._model_accel < 0.0:
-            # The car stands and the drive model decelerates (no traction): it does not
-            # start, so no more than the slower bogie shows is motion. One bogie alone
-            # reading speed is sensor noise; at rest its negative half never arrives here
-            # (preprocess drops kmh < 0), and a filter fed single readings drives off.
-            # Both bogies moving still move the car, whatever the controller says.
+        jump = self._jump_t[sample.bogie]
+        if (self._x[0] < self._stop_speed and self._model_accel < 0.0
+                and jump is not None and sample.t - jump <= self._jump_hold):
+            # The car stands, the drive model decelerates and this bogie has just jumped:
+            # no more than the slower bogie shows is motion. At rest the negative half of
+            # noise never arrives here (preprocess drops kmh < 0), so a filter fed the
+            # jumping bogie alone drives off. A smooth rise of one bogie is a start (a
+            # bogie stuck at 0 is trap 8, the notch can lag or read brake at a start), and
+            # both bogies moving move the car whatever the controller says.
             return min(own, other[1])
         if trust == 1.0 and other[2] == 1.0:
             return own       # agreeing bogies: independent readings, fused one by one
