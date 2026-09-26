@@ -214,3 +214,57 @@ def test_accel_model_changes_which_bogie_the_detector_blames():
         results[use_model] = (est.slip.front_trust, est.slip.rear_trust)
     assert results[False] == (0.0, 1.0)                  # a = 0: front is the outlier
     assert results[True] == (1.0, 0.0)                   # brake model: rear is the outlier
+
+
+@pytest.mark.parametrize('notch', [-5, -15])
+@pytest.mark.parametrize('lag', [1.0, 3.7])
+def test_late_wheel_at_rest_under_brake_reads_standstill(notch, lag):
+    """#105 review: at rest under brake the filter acceleration is negative (the drive model
+    brakes at v = 0) while the state is held at 0. Moving a late wheel's output back along
+    that acceleration would publish |a| * lag of phantom speed; the car was standing."""
+    assert model_accel(notch, 0.0, PARAMS) < 0.0
+    odo = Odometry(PARAMS)
+    worst = 0.0
+    for k in range(200):
+        t = T0 + 0.1 * k
+        odo.step((CMD, _cmd(t + lag, notch)))
+        for topic in (FRONT, REAR):
+            est = odo.step((topic, _wheel(t, 0.0)))
+            assert est is not None
+            worst = max(worst, est.speed)    # from the first message: standing since start
+    assert worst < PARAMS.position.stop_speed_mps
+    assert worst == 0.0                      # not even the neutral drag moved back
+
+
+@pytest.mark.parametrize('lag', [1.0, 3.7])
+def test_late_wheel_braking_to_a_stop_keeps_its_own_speed(lag):
+    """Braking to a stop with the controller ahead: before the state reaches 0 the late
+    wheel still carries the speed at its own stamp, and after the car stands it reads 0."""
+    odo = Odometry(PARAMS)
+    a = model_accel(-15, 5.0, PARAMS)
+    for k in range(120):
+        t = T0 + 0.1 * k
+        v = max(0.0, 8.0 + a * 0.1 * k)
+        odo.step((CMD, _cmd(t + lag, -15)))
+        for topic in (FRONT, REAR):
+            est = odo.step((topic, _wheel(t, v * 3.6)))
+        if k > 40:
+            assert est.speed == pytest.approx(v, abs=0.6), (k, v)
+    assert est.speed < PARAMS.position.stop_speed_mps
+
+
+
+def test_late_wheel_after_the_state_braked_to_zero_on_prediction():
+    """The wheels fall silent while braking at 2 m/s, the controller runs 8 s ahead and the
+    state reaches 0 on the prediction in between. A late zero wheel stamped before that
+    moment is published on the state's braking line, moved back from where it crossed 0
+    (t + v / -a), not from the latest state time 8 s later."""
+    odo = Odometry(PARAMS)
+    t = _cruise(odo, 7.2, T0, T0 + 2.0, notch=-15)     # 2 m/s under brake
+    v0, _, accel = odo._filter.state()
+    assert accel < 0.0
+    assert odo.step((CMD, _cmd(t + 8.0, -15))).speed == 0.0
+    t_cross = t + v0 / -accel
+    est = odo.step((FRONT, _wheel(t_cross - 1.0, 0.0)))
+    assert est.speed == pytest.approx(-accel, abs=0.1)
+    assert odo.step((REAR, _wheel(t_cross + 0.1, 0.0))).speed == 0.0

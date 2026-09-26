@@ -43,11 +43,11 @@ def _noise_run(kmh, notch=0, seconds=30.0):
 
 
 def test_antiphase_noise_at_rest_does_not_move_the_tram():
-    # at rest only the positive half of each bogie passes preprocess (kmh < 0 is dropped): a
-    # filter fed the single readings sees 0.5-0.8 m/s for the whole event and drives 5.3 m.
-    # The pair rule holds the car while the other bogie last read ~0; it leaks in the periods
-    # where that bogie's zero crossing came out negative (-1e-16 km/h) and was dropped too,
-    # so its last reading is 0.49 m/s (#105). 2 m is the stress position-recovery threshold.
+    # at rest the negative half of each bogie reaches the filter only as 0 m/s (preprocess
+    # clamps kmh < 0, D-064), the positive half as a jump: a filter fed the single readings
+    # rides the positive halves (without the pair rule: half of the event above
+    # stop_speed_mps, peak 0.7 m/s, 3.4 m of travel). The pair rule takes the slower bogie of
+    # the pair, here 0 m, 0 m/s (#105). 2 m is the stress position-recovery threshold.
     out = _noise_run(0.0)
     during = [e.speed for t, e in out if 10.0 <= t < 20.0]
     assert during

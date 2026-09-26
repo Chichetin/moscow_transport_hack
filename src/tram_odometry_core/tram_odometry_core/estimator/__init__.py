@@ -95,9 +95,11 @@ class SpeedFilter:
         if sample.speed == 0.0:
             self._zero_wheel[sample.bogie] = sample.t
         raw = self._raw[sample.bogie]
-        if (raw is not None and abs((sample.speed - raw[1]) / (sample.t - raw[0])
-                                    - self._model_accel) > self._jump_accel):
-            # a step the car cannot make (the detector's jump, D-054)
+        if (raw is not None and sample.t > raw[0]
+                and abs((sample.speed - raw[1]) / (sample.t - raw[0])
+                        - self._model_accel) > self._jump_accel):
+            # a step the car cannot make (the detector's jump, D-054); an untrusted sample
+            # does not advance the stamp gate above, so the same stamp may come again
             self._jump_t[sample.bogie] = sample.t
         self._raw[sample.bogie] = (sample.t, sample.speed)
         if trust == 0.0:
@@ -186,10 +188,11 @@ class SpeedFilter:
                 and jump is not None and sample.t - jump <= self._jump_hold):
             # The car stands, the drive model decelerates and this bogie has just jumped:
             # no more than the slower bogie shows is motion. At rest the negative half of
-            # noise never arrives here (preprocess drops kmh < 0), so a filter fed the
-            # jumping bogie alone drives off. A smooth rise of one bogie is a start (a
-            # bogie stuck at 0 is trap 8, the notch can lag or read brake at a start), and
-            # both bogies moving move the car whatever the controller says.
+            # noise arrives only as 0 (preprocess clamps kmh < 0, D-064), so a filter fed the
+            # jumping bogie alone rides its positive half and drives off. A smooth rise of
+            # one bogie is a start (a bogie stuck at 0 is trap 8, the notch can lag or read
+            # brake at a start), and both bogies moving move the car whatever the controller
+            # says.
             return min(own, other[1])
         if trust == 1.0 and other[2] == 1.0:
             return own       # agreeing bogies: independent readings, fused one by one

@@ -403,3 +403,15 @@ def test_single_live_bogie_starts_the_car_when_the_other_is_silent():
         filt.predict(t, -0.1)
         filt.update(wheel(t, 0.5 * (t - 1.0), 'front'), 1.0)
     assert filt.state()[0] == pytest.approx(1.5, abs=0.2)
+
+
+def test_an_untrusted_then_trusted_sample_with_the_same_stamp_does_not_divide_by_zero():
+    # review of #105: the jump check divides by the time since the bogie's last raw reading;
+    # an untrusted sample does not advance the per-bogie stamp gate, so a trusted one with
+    # the same stamp may follow (direct SpeedFilter.update, not reachable via preprocess)
+    filt = initialized()
+    filt.predict(0.1, 0.0)
+    filt.update(wheel(0.1, 10.0), 0.0)
+    filt.update(wheel(0.1, 10.0), 1.0)
+    speed, _, _ = filt.state()
+    assert speed == pytest.approx(10.0)
