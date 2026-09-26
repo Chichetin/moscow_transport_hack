@@ -12,8 +12,8 @@
 `None` для отклонённого или служебного входа. В движении используются скорости двух
 тележек и позиция контроллера; GNSS master fix/vel допускается только в первые
 `gnss.init_window_s` секунд по `header.stamp`. Позиция контроллера проходит проверку
-и задаёт ускорение модели после задержки `drive.response_delay_s`. GNSS rover в ноде
-подписан, но ядро его не использует. Выходы ноды — `/result/velocity` в м/с и `/result/position` в метрах,
+и задаёт ускорение модели после задержки `drive.response_delay_s`. GNSS rover fix в том же окне
+даёт только курс master → rover для выбора ветки выставки (D-062). Выходы ноды — `/result/velocity` в м/с и `/result/position` в метрах,
 ENU прогона; их заполнение выполняют
 [`velocity_msg` и `position_msg`](../src/tram_odometry/tram_odometry/odometry_node.py).
 
@@ -139,9 +139,19 @@ jump_i:  |(v_i − v_i,prev)/(t_i − t_i,prev) − accel_model| > slip.noise_ac
 по первому GBAS fix (если он есть в окне), иначе по первому валидному fix. Карта
 переводится между двумя ENU через WGS84 ECEF в
 [`PathTracker._set_origin`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py).
-Принятый fix окна обновляет якорь `(ветка, s_anchor, distance_anchor)` по
-ближайшему сегменту карты в
-[`PathTracker._nearest`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py).
+Принятый fix master окна обновляет якорь `(ветка, s_anchor, distance_anchor)` в
+[`PathTracker._locate`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py).
+Rover стоит впереди master по ходу (ловушка 15), поэтому, если в окне есть оба fix,
+курс `h = rover − master` в ENU прогона выбирает ветку: якорь — ближайшая точка
+сегмента с `t·h > 0`, то есть ветки, идущей по курсу, в пределах `fix_gate_m`
+([`PathTracker._nearest`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py)
+с `heading`). Так на стоянке различаются пути двух направлений и тупик у конечной.
+Курса нет, если база `|h|` вне [`position.heading_min_base_m`,
+`position.heading_max_base_m`] или rover обычного статуса при GBAS-начале. Тогда якорь —
+просто ближайший сегмент. Rover-fix, пришедший после якоря, переносит якорь, только
+если текущая ветка идёт против курса
+([`PathTracker.on_rover`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py),
+D-062). Rover никогда не задаёт начало ENU и точку якоря.
 Выбросы за `fix_gate_m` и fix обычного статуса после GBAS не обновляют якорь.
 
 После окна [`PathTracker.advance`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py)
