@@ -57,7 +57,7 @@ def test_wheel_scale_applied_per_bogie():
     assert rear.speed == pytest.approx(9.0)
 
 
-@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf'), -5.0, 'text', True])
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf'), 'text', True])
 def test_bad_wheel_value_dropped(bad):
     assert Preprocessor(PARAMS).accept(wheel(FRONT_TOPIC, 1.0, bad)) is None
 
@@ -145,6 +145,32 @@ def test_drop_to_zero_is_not_an_outlier():
     pre.accept(wheel(FRONT_TOPIC, 0.0, KMH_36))
     sample = pre.accept(wheel(FRONT_TOPIC, 0.1, 0.0))
     assert sample is not None and sample.speed == 0.0
+
+
+@pytest.mark.parametrize('kmh', [-0.16, -0.39, -3.0, -5.0])
+def test_negative_wheel_at_standstill_reads_zero(kmh):
+    """#111: a negative reading at standstill -- real slow roll-back (-0.16..-0.39 km/h, both
+    bogies) or noise around 0 -- is 0 m/s, not dropped: dropping keeps only the positive half
+    of zero-mean noise and biases the speed up."""
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(FRONT_TOPIC, 0.0, 0.5))
+    sample = pre.accept(wheel(FRONT_TOPIC, 0.1, kmh))
+    assert isinstance(sample, WheelSample) and sample.speed == 0.0
+
+
+def test_negative_wheel_as_first_sample_reads_zero():
+    sample = Preprocessor(PARAMS).accept(wheel(REAR_TOPIC, 1.0, -0.3))
+    assert isinstance(sample, WheelSample) and sample.speed == 0.0
+
+
+def test_negative_wheel_in_motion_is_gated_not_stuck_at_zero():
+    """#111: a negative reading is clamped to 0 but is not a bogie stuck at exactly 0 (trap 8):
+    in motion the acceleration gate still drops it as a glitch."""
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(FRONT_TOPIC, 0.0, KMH_36))
+    assert pre.accept(wheel(FRONT_TOPIC, 0.1, -5.0)) is None
+    sample = pre.accept(wheel(FRONT_TOPIC, 0.2, KMH_36))
+    assert sample is not None and sample.speed == pytest.approx(10.0)
 
 
 def test_first_wheel_sample_is_only_bounded_by_the_speed_limit():
