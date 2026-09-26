@@ -16,7 +16,7 @@ class SpeedFilter:
     Both bogies ride on one car body, so a wheel sample is measured together with
     the other bogie's last accepted reading (if it is live on the wheel timeline):
     the trust-weighted mean of the pair while moving, the smaller one at rest
-    without traction (#105, D-060).
+    without traction (#105, D-061).
     """
 
     def __init__(self, params: Params):
