@@ -281,3 +281,84 @@ def test_load_route_rejects_a_bad_header_and_a_one_point_branch(tmp_path):
                  'branch,s_m,x_m,y_m,z_m\n0,0.0,0.0,0.0,0.0\n')
     with pytest.raises(ValueError, match='branch 0'):
         load_route(p)
+
+
+def _two_way_route():
+    """Two tracks 8 m apart (docs/data.md: the directions of the line): branch 0 goes west
+    on the northern track, branch 1 goes east on the southern one."""
+    west = _branch(*(np.linspace(a, b, 200) for a, b in zip(_lla(0.0, 0.0), _lla(-2000.0, 0.0))))
+    east = _branch(*(np.linspace(a, b, 200) for a, b in zip(_lla(-2000.0, -8.0), _lla(0.0, -8.0))))
+    return Route(origin=ORIGIN, branches=(west, east))
+
+
+def test_rover_ahead_picks_the_track_of_the_heading_over_the_nearest_one():
+    """Master 3 m from the westbound track and 5 m from the eastbound one; the rover stands
+    12.4 m ahead of it to the east (trap 15): the tram is on the eastbound track."""
+    tr = PathTracker(PARAMS, _two_way_route())
+    master = _lla(-1000.0, -3.0)
+    tr.on_rover(*_lla(-1000.0 + 12.4, -3.0), 2)
+    tr.on_fix(*master, 2, distance=0.0)
+    x, y, _, yaw, _ = tr.advance(100.0)
+    fx, fy, _ = _enu_bag(*_lla(-900.0, -8.0), origin=master)
+    assert math.hypot(x - fx, y - fy) < 1.0
+    assert abs(math.remainder(yaw, 2 * math.pi)) < 0.05          # heading east
+
+
+def test_rover_after_master_moves_the_anchor_to_the_track_of_the_heading():
+    tr = PathTracker(PARAMS, _two_way_route())
+    master = _lla(-1000.0, -3.0)
+    tr.on_fix(*master, 2, distance=0.0)
+    tr.on_rover(*_lla(-1000.0 + 12.4, -3.0), 2)
+    x, y, _, _, _ = tr.advance(100.0)
+    fx, fy, _ = _enu_bag(*_lla(-900.0, -8.0), origin=master)
+    assert math.hypot(x - fx, y - fy) < 1.0
+
+
+def test_late_rover_along_the_anchor_does_not_undo_a_stop_snap():
+    route = _two_way_route()
+    route = Route(origin=route.origin, branches=route.branches, stops=((1, 1003.0),))
+    tr = PathTracker(PARAMS, route)
+    master = _lla(-1000.0, -8.0)                     # on the eastbound track, s = 1000
+    tr.on_rover(*_lla(-1000.0 + 12.4, -8.0), 2)
+    tr.on_fix(*master, 2, distance=0.0)
+    assert tr.on_stop(0.0)
+    snapped = tr.advance(0.0)
+    tr.on_rover(*_lla(-1000.0 + 12.4, -8.0), 2)     # stamped in the window, arrives after
+    assert tr.advance(0.0)[:2] == pytest.approx(snapped[:2])
+
+
+def test_without_a_usable_rover_the_nearest_track_is_kept():
+    """No rover, a rover on the master (no base) and an outlier rover: the nearest track."""
+    master = _lla(-1000.0, -3.0)
+    fx, fy, _ = _enu_bag(*_lla(-1100.0, 0.0), origin=master)
+    for rover in (None, master, _lla(-1000.0 + 12.4, 2000.0)):
+        tr = PathTracker(PARAMS, _two_way_route())
+        if rover is not None:
+            tr.on_rover(*rover, 2)
+        tr.on_fix(*master, 2, distance=0.0)
+        x, y, _, _, _ = tr.advance(100.0)
+        assert math.hypot(x - fx, y - fy) < 1.0, rover
+
+
+def test_rover_fix_alone_does_not_align():
+    tr = PathTracker(PARAMS, _two_way_route())
+    tr.on_rover(*_lla(-1000.0, -8.0), 2)
+    assert not tr.ready
+
+
+def _rover_msg(t, lla, status=2):
+    topic, msg = _fix_msg(t, lla, status)
+    return '/sensing/gnss/rover/fix', msg
+
+
+def test_pipeline_takes_the_heading_from_the_rover_in_the_window_only():
+    from tram_odometry_core.pipeline import Odometry
+    master = _lla(-1000.0, -3.0)
+    for rover_t, expect_east in ((0.05, True), (PARAMS.gnss.init_window_s + 1.0, False)):
+        odo = Odometry(PARAMS, route=_two_way_route())
+        odo.step(_fix_msg(0.0, master))
+        odo.step(_rover_msg(rover_t, _lla(-1000.0 + 12.4, -3.0)))
+        est = _wheels(odo, rover_t, rover_t + 10.0, 36.0)        # 10 m/s for 10 s: 100 m
+        assert est.distance > 90.0
+        assert (est.x > 90.0 and est.y < -4.0) == expect_east, rover_t        # eastbound track
+        assert (est.x < -90.0 and est.y > 2.0) != expect_east, rover_t        # westbound track

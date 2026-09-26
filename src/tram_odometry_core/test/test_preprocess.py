@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from tram_odometry_core.preprocess import CMD_TOPIC, FRONT_TOPIC, REAR_TOPIC, Preprocessor
+from tram_odometry_core.preprocess import (CMD_TOPIC, FRONT_TOPIC, REAR_TOPIC, ROVER_FIX_TOPIC,
+                                          Preprocessor)
 from tram_odometry_core.types import CommandSample, GnssFix, GnssVel, WheelSample, load_params
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -180,6 +181,17 @@ def test_gnss_fix_after_window_dropped():
     pre.accept(wheel(FRONT_TOPIC, 0.0, KMH_36))
     t = PARAMS.gnss.init_window_s + 0.1
     assert pre.accept(gnss_fix(t)) is None
+
+
+def test_rover_fix_is_a_rover_sample_in_the_window_only():
+    """The rover gives the heading at a standstill (docs/data.md, trap 15), window only (D-005)."""
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(FRONT_TOPIC, 0.0, KMH_36))
+    topic, msg = gnss_fix(1.0, status=2)
+    sample = pre.accept((ROVER_FIX_TOPIC, msg))
+    assert isinstance(sample, GnssFix) and sample.antenna == 'rover' and sample.status == 2
+    topic, msg = gnss_fix(PARAMS.gnss.init_window_s + 0.1)
+    assert pre.accept((ROVER_FIX_TOPIC, msg)) is None
 
 
 def test_gnss_vel_after_window_dropped():
