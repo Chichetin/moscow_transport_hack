@@ -1,9 +1,12 @@
 """Min/max wheel selector (#59): the "dumb baseline" the speed filter has to beat.
 
 Under traction (drive model accelerates) a spinning bogie reads too high, so the lower
-trusted bogie is taken; under braking a sliding bogie reads too low, so the higher one; at
-cruise the mean. A bogie with zero trust or silent for longer than `input.stale_timeout_s`
-does not take part. With no live bogie the speed is extrapolated with the drive model.
+trusted bogie is taken; under braking a sliding bogie reads too low, so the higher one; the
+mean only when the drive model is exactly 0. With Davis resistance the model is practically
+never exactly 0, so on coast the higher bogie is taken too (no dead zone, D-059). Trust is
+used as a gate only: zero drops the bogie, any positive trust counts in full. A bogie silent
+for longer than `input.stale_timeout_s` does not take part. With no live bogie the speed is
+extrapolated with the drive model.
 
 Same interface as `SpeedFilter` (predict / update / state / diagnostics / rebase_time), so
 an experiment can put it in place of the filter. Not wired into `pipeline` (D-059).
