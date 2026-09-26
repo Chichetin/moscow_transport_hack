@@ -147,13 +147,16 @@ class Odometry:
 
     def _estimate(self, t: float, now: float) -> Estimate:
         _, var, accel = self._filter.state()
+        # the state is at `now`; an input stamped behind it (a wheel lagging the controller,
+        # docs/data.md trap 5) is published with the speed at its own stamp (#105)
+        speed = max(0.0, self._v - accel * (now - t))
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
         x, y, z, yaw, pos_cov = self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0)
         on_map = self._tracker.advance(self._distance) if self._tracker is not None else None
         if on_map is not None:
             x, y, z, yaw, pos_cov = on_map
         return Estimate(
-            t=t, speed=self._v, speed_var=var, accel=accel, accel_model=self._accel_model,
+            t=t, speed=speed, speed_var=var, accel=accel, accel_model=self._accel_model,
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used,
