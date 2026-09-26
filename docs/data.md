@@ -61,7 +61,7 @@ bash docker/dev.sh bash -c 'colcon build --packages-select tram_vehicle_msgs_ven
 | Топик | Частота | Смысл | Значения |
 |---|---|---|---|
 | `/vehicle/front_bogie_velocity` | 9,8–10 Гц | скорость передней тележки | **км/ч**, 0…53,7; редкие отрицательные −0,16…−0,39 — откат на стоянке (D-058, D-064) |
-| `/vehicle/rear_bogie_velocity` | 9,8–10 Гц | скорость задней тележки | **км/ч**, 0…53,9 |
+| `/vehicle/rear_bogie_velocity` | 9,8–10 Гц | скорость задней тележки | **км/ч**, 0…53,9; редкие отрицательные — тот же откат на стоянке, что у передней (D-064) |
 | `/vehicle/driver_position_cmd` | **20 Гц** | позиция контроллера | `int8` −15…+15; тяга 33 %, тормоз 29 % времени |
 | `/sensing/gnss/{master,rover}/fix` | 10 Гц | lat/lon/alt | `status` 0 (FIX) и 2 (GBAS), реже 1 |
 | `/sensing/gnss/{master,rover}/vel` | 10 Гц | скорость в **ENU** (`x` — восток, `y` — север) | м/с, до 15,9 |
