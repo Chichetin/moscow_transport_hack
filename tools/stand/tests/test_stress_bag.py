@@ -1,10 +1,26 @@
 """A live-node stress bag must preserve every recording timestamp and topic."""
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
 from tram_eval.bag import typestore
+
+
+def test_rejects_relative_target_inside_absolute_source(tmp_path, monkeypatch):
+    from make_stress_bag import make_spike_bag
+
+    source = tmp_path / 'source'
+    source.mkdir()
+    (source / 'metadata.yaml').write_text('metadata\n', encoding='utf-8')
+    (source / 'source_0.db3').touch()
+    monkeypatch.chdir(tmp_path)
+    target = Path('source') / 'nested'
+
+    with pytest.raises(ValueError, match='target must be a new directory outside source'):
+        make_spike_bag(source, target)
+    assert not target.exists()
 
 
 def test_spike_bag_changes_only_front_velocity_in_event_window(tmp_path):

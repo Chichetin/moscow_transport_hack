@@ -21,7 +21,7 @@ from tram_eval.stress import perturb  # noqa: E402
 
 def make_spike_bag(source: Path, target: Path, gnss_window_s: float = 5.0) -> tuple[int, float, float]:
     """Write a copy with the same +25 km/h front-wheel spike used by eval --stress."""
-    source, target = Path(source), Path(target)
+    source, target = Path(source).resolve(), Path(target).resolve()
     dbs = list(source.glob('*.db3'))
     if len(dbs) != 1 or not (source / 'metadata.yaml').is_file():
         raise ValueError('source must be one rosbag2 SQLite file with metadata.yaml')
