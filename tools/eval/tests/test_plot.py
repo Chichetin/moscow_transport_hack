@@ -22,7 +22,7 @@ class Ahead(DeadReckoning):
 
 def test_series_units_error_signs_controller_and_slip():
     msgs = drive(duration=60.0, speed=10.0)
-    s = plot.bag_series(msgs, 5.0, Ahead)
+    s = plot.bag_series(msgs, 5.0, Ahead, ref_point='master')    # the double tracks master
     assert s.t0 == pytest.approx(100.0)
     for side in ('front', 'rear'):
         assert len(s.wheel_t[side]) == 600
