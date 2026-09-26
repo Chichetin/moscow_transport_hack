@@ -56,6 +56,7 @@ class PathTracker:
         self._map = [np.column_stack([b.x, b.y, b.z]) for b in route.branches]
         self._next = [self._join(k) for k in range(len(self._map))]
         self._fork = [self._fork_join(k) for k in range(len(self._map))]
+        self._side = [self._side_branch(k) for k in range(len(self._map))]
         self._xyz = self._map                 # branches in the frame of the run
         lat0, lon0, alt0 = route.origin       # the map's own ENU: the outlier gate lives here
         self._map_rot, self._map_ecef0 = _enu_rotation(lat0, lon0), _ecef(lat0, lon0, alt0)
@@ -121,6 +122,45 @@ class PathTracker:
             if best is None or d < best[2]:
                 best = candidate
         return None if best is None else best[:2]
+
+    def _side_branch(self, k: int):
+        """(s on branch k, j): a dead-end branch j leaving k mid-way that the default path does
+        not take (the westbound track into the depot stub at the west terminal, #138)."""
+        parent = self._map[k]
+        taken = {self._fork[k][1]} if self._fork[k] is not None else set()
+        best = None
+        for j, child in enumerate(self._map):
+            if j == k or j in taken or self._next[j] is not None:
+                continue
+            start = child[0, :2]
+            i = int(np.argmin((parent[:, 0] - start[0]) ** 2 + (parent[:, 1] - start[1]) ** 2))
+            d = float(np.hypot(*(parent[i, :2] - start)))
+            if d > self.p.join_m or i >= len(parent) - 1:
+                continue
+            tangent = parent[i + 1, :2] - parent[i, :2]
+            child_tangent = child[1, :2] - child[0, :2]
+            cos = float(np.dot(tangent, child_tangent) /
+                        (np.linalg.norm(tangent) * np.linalg.norm(child_tangent)))
+            if cos < math.cos(JOIN_MAX_TURN_RAD):
+                continue
+            if best is None or d < best[2]:
+                best = (float(self._s[k][i]), j, d)
+        return None if best is None else best[:2]
+
+    def _take_side(self, distance: float, speed: float) -> None:
+        """Move onto the side branch when the tram is past its start and faster than any tram
+        heading for the default path there (the loop is slow, the depot track is not)."""
+        if not (math.isfinite(speed) and speed > self.p.side_speed_mps):
+            return
+        k, s = self._state(distance)
+        side = self._side[k]
+        if side is None or not self.p.side_min_m <= s - side[0] <= self.p.side_max_m:
+            return
+        var = self._var_along(distance)
+        j = side[1]
+        self._anchor = (j, float(self._s[j][0]) + s - side[0], distance)
+        self._var0 = var
+        self._last_snap = None
 
     def _set_origin(self, lat: float, lon: float, alt: float, status: int) -> None:
         self._origin_status = status
@@ -302,10 +342,12 @@ class PathTracker:
                     1.0 + self.p.scale_max_dev)
         self._scale += self.p.scale_alpha * (ratio - self._scale)
 
-    def advance(self, distance: float):
-        """(x, y, z, yaw, (var_x, var_y, cov_xy)) at path `distance`, None before alignment."""
+    def advance(self, distance: float, speed: float = 0.0):
+        """(x, y, z, yaw, (var_x, var_y, cov_xy)) at path `distance` and speed (m/s), None
+        before alignment."""
         if self._anchor is None:
             return None
+        self._take_side(distance, speed)
         k, s = self._state(distance)
         x, y, z, yaw = self._at(k, s)
         var_cross = self.p.cross_std_m ** 2

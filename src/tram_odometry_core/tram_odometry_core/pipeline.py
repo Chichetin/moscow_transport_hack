@@ -181,7 +181,7 @@ class Odometry:
             speed = -self._a_zero * (self._t_zero - t)
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
         x, y, z, yaw, pos_cov = self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0)
-        on_map = self._tracker.advance(self._distance) if self._tracker is not None else None
+        on_map = self._tracker.advance(self._distance, self._v) if self._tracker is not None else None
         if on_map is not None:
             x, y, z, yaw, pos_cov = on_map
         return Estimate(
