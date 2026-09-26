@@ -1,10 +1,12 @@
 """Identification of the drive model (issue #9): pure functions over per-bag samples.
 
-Model identified here (D-029 schema, D-032):
-    a = sign(n) * A(|n|, v) - (c0 + c1 v + c2 v^2) - g * grade,   n = notch(t - delay)
+Model identified here (D-029 schema, D-033):
+    a = sign(n) * A(|n|, v) - (c0 + c1 v + c2 v^2),   n = notch(t - delay)
     A = traction table for n > 0 (capped by adhesion and P/(m v)), brake table for n < 0.
-The grade term is removed from the training targets with GNSS altitude (offline only, train
-bags); online the model sees it through the map height or as a filter disturbance.
+By default the grade stays in the targets: the contract model_accel(notch, v) has no grade, so
+the tables absorb the mean grade. With use_grade the term - g * grade is removed from the
+targets using GNSS altitude (offline, train bags only), for a model that gets the grade online
+from the map height.
 """
 from __future__ import annotations
 
