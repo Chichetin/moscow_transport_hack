@@ -188,3 +188,31 @@ def test_extra_branch_for_side_track_but_not_for_gnss_step():
     s, poly = branches[1]
     _, d = br.project(s, poly, np.array([[400.0, 10.0], [440.0, 10.0]]))
     assert np.max(np.abs(d)) < 1.0
+
+
+def _line(x0, x1, y, n):
+    return np.column_stack([np.linspace(x0, x1, n), np.full(n, float(y))])
+
+
+def test_a_pass_against_the_only_nearby_branch_is_uncovered():
+    """A single-ended tram never drives a branch backwards: a westbound pass 3 m off an
+    eastbound branch is a track of its own (the depot entry at the west terminal, #138)."""
+    branches = [br.resample(_line(0.0, 500.0, 0.0, 501), br.STEP_M)]
+    west = _line(400.0, 200.0, 3.0, 1001)                  # 0.2 m per sample: 10 Hz at 2 m/s
+    t = np.arange(len(west)) * 0.1
+    assert len(br.uncovered_pieces(t, west, branches)) == 1
+    east = west[::-1]
+    assert br.uncovered_pieces(t, east, branches) == []
+
+
+def test_a_standing_tram_has_no_direction_and_stays_covered():
+    xy = np.column_stack([np.full(200, 100.0), np.full(200, 3.0)]) + 0.05 * np.sin(np.arange(200))[:, None]
+    assert not br._travel_direction(xy).any()
+
+
+def test_a_piece_alongside_a_branch_of_its_direction_is_a_gnss_shift_not_a_track():
+    branches = [br.resample(_line(500.0, 0.0, 0.0, 501), br.STEP_M)]   # westbound branch
+    shifted = _line(400.0, 280.0, -6.0, 1201)               # westbound, 6 m off all along
+    diverging = np.column_stack([np.linspace(400.0, 280.0, 1201), np.linspace(-6.0, -60.0, 1201)])
+    assert br._shifted_branch(shifted, branches)
+    assert not br._shifted_branch(diverging, branches)

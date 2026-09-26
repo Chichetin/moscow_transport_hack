@@ -372,3 +372,67 @@ def test_pipeline_takes_the_heading_from_the_rover_in_the_window_only():
         assert est.distance > 90.0
         assert (est.x > 90.0 and est.y < -4.0) == expect_east, rover_t        # eastbound track
         assert (est.x < -90.0 and est.y > 2.0) != expect_east, rover_t        # westbound track
+
+
+def _polyline(points):
+    """Branch through the points with a 1 m step (tests of the map graph in metres)."""
+    points = np.asarray(points, dtype=float)
+    coords = [points[0]]
+    for a, b in zip(points, points[1:]):
+        n = int(round(np.linalg.norm(b - a)))
+        coords.extend(np.linspace(a, b, n + 1)[1:])
+    coords = np.asarray(coords)
+    return Branch(s=np.arange(len(coords), dtype=float), x=coords[:, 0], y=coords[:, 1],
+                  z=np.zeros(len(coords)))
+
+
+def _depot_route():
+    """Branch 0 runs east into a dead end; the default fork at 120 m is a loop that continues
+    (branch 2); branch 3 is a dead-end side track leaving at 40 m (the depot track, #138)."""
+    return Route(origin=ORIGIN, branches=(
+        _polyline([(0, 0), (200, 0)]),
+        _polyline([(120, 0), (120, -30), (160, -30), (160, 20)]),
+        _polyline([(160, 20), (160, 120)]),
+        _polyline([(40, 0), (80, -30), (80, -130)]),
+    ))
+
+
+def _depot_tracker():
+    tr = PathTracker(PARAMS, _depot_route())
+    tr.on_fix(*_lla(0.0, 0.0), 2, distance=0.0)
+    return tr
+
+
+def test_side_track_is_found_and_the_default_fork_kept():
+    tr = _depot_tracker()
+    assert tr._fork[0] == (120.0, 1)
+    assert tr._side[0] == (40.0, 3)
+
+
+def test_slow_tram_stays_on_the_default_path_past_the_side_track():
+    tr = _depot_tracker()
+    assert tr.advance(70.0, 3.0)[:2] == pytest.approx((70.0, 0.0), abs=0.1)
+    assert tr.advance(130.0, 3.0)[:2] == pytest.approx((120.0, -10.0), abs=0.1)   # the loop
+
+
+def test_fast_tram_past_the_side_track_start_takes_it_and_stays_on_it():
+    tr = _depot_tracker()
+    x, y, _, _, _ = tr.advance(70.0, 7.0)        # 30 m past the side track start
+    assert math.hypot(x - 40.0, y) == pytest.approx(30.0, abs=0.1)
+    assert y < -10.0                             # off branch 0, on the side track
+    far = tr.advance(400.0, 2.0)                 # slow again: still there, up to its dead end
+    assert far[:2] == pytest.approx((80.0, -130.0), abs=0.1)
+
+
+def test_fast_tram_outside_the_decision_window_keeps_the_default_path():
+    tr = _depot_tracker()
+    assert tr.advance(50.0, 7.0)[:2] == pytest.approx((50.0, 0.0), abs=0.1)   # 10 m < side_min_m
+    tr = _depot_tracker()
+    assert tr.advance(100.0, 7.0)[:2] == pytest.approx((100.0, 0.0), abs=0.1)  # 60 m > side_max_m
+
+
+def test_side_switch_keeps_the_along_track_variance():
+    tr = _depot_tracker()
+    before = tr._var_along(70.0)
+    tr.advance(70.0, 7.0)
+    assert tr._var_along(70.0) == pytest.approx(before)
