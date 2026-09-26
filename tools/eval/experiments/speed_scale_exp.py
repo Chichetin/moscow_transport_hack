@@ -1,4 +1,5 @@
 """Experiment: publish speed multiplied by the online path scale of PathTracker (D-034)."""
+from pathlib import Path
 import dataclasses, math, sys, types
 from concurrent.futures import ProcessPoolExecutor
 import numpy as np

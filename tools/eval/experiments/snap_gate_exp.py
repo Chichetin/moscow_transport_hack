@@ -1,4 +1,5 @@
 """Experiment: stop-snap gate grows with along-track sigma: min(cap, max(20, k*sigma)). Train only."""
+from pathlib import Path
 import dataclasses, math, sys, types
 from concurrent.futures import ProcessPoolExecutor
 import numpy as np
