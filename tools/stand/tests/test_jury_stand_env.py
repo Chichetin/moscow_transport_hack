@@ -35,8 +35,9 @@ def test_explicit_data_dir_overrides_dotenv(tmp_path):
     docker.write_text('#!/bin/sh\n: > "$FAKE_DOCKER_MARKER"\nexit 17\n', encoding='utf-8')
     docker.chmod(0o755)
     marker = tmp_path / 'docker-reached'
-    # os.pathsep, not a literal ':' -- on Windows the native PATH is ';'-joined; a
-    # hardcoded ':' merged fake_bin into the next real entry (#122).
+    # os.pathsep, not a literal ':' -- on Windows the native PATH is ';'-joined, and a
+    # hardcoded ':' risks merging fake_bin into the next real entry (#122; reproduced on
+    # some Git Bash/MSYS builds, not all -- os.pathsep is correct either way).
     env = dict(os.environ, TRAM_DATA_DIR=_bash_path(data), FAKE_DOCKER_MARKER=str(marker),
                PATH=os.pathsep.join([str(fake_bin), os.environ['PATH']]))
 
