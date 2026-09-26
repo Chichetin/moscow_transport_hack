@@ -136,3 +136,29 @@ issue критерий приёмки («максимум `noise` заметно
 holdout), либо считать задачу issue частично решённой и заводить продолжение для
 `30618_a869780d` (и, возможно, `30618_082f1d65` / `30639_0ab96c59`, которые всё же опустились
 ниже 2 м).
+
+## Дополнение: поверх PR #110 (#105) — откуда 1,93 м
+
+Ориентир «1,93 м» из issue замерен на ветке PR #110 (фильтр скорости, ещё не в `main`), а не
+на `main`. Воспроизведено: A = голова #110 `55ba837`, B = `55ba837` + эта ветка (merge
+`d531c92`, временный detached worktree, удалён).
+
+```bash
+export TRAM_DATA_DIR=/home/user/moscow_transport_hack/dataset/data
+cd <A> && TRAM_OUT_DIR=<outA> .venv/bin/python tools/eval/run_eval.py --split holdout --stress
+cd <B> && TRAM_OUT_DIR=<outB> .venv/bin/python tools/eval/run_eval.py --split holdout --stress
+# сравнение stress.json / metrics.json по всем bag — скрипт cmp.py в scratchpad сессии
+```
+
+| `noise`, 26 bag | #110 `55ba837` | #110 + #111 `d531c92` |
+|---|---|---|
+| peak_pos3d_excess_m, максимум | 1.932 (`30618_a869780d`) | **0.764** (`30618_a869780d`) |
+| peak_pos3d_excess_m, медиана | 0.194 | 0.177 |
+| peak_speed_excess_mps, максимум | 0.819 | 0.790 |
+| peak_speed_excess_mps, медиана | 0.370 | 0.362 |
+| без восстановления позиции / скорости | 0 / 0 | 0 / 0 |
+
+Остальные 7 сценариев и `metrics.json` (speed/along/drift/cross/pos3d по всем 26 bag) —
+без единого расхождения между A и B, падений 0. Критерий #111 «максимум `noise` заметно
+ниже 2 м» выполнен в связке с #110 (0,76 м); на `main` без #110 правка снижает максимум
+4,72 → 3,50 м.
