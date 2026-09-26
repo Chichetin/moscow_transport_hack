@@ -147,7 +147,15 @@ def row(label: str, values: dict, s: dict, start: dict) -> str:
             + f" | {s['crashed']} | {score(s, start):.4f} | {'да' if d012_ok(s, start) else 'нет'} |")
 
 
+def ensure_utf8_stdout() -> None:
+    """Console codepage must not crash the report on its own '→' marks (#128, same
+    class of bug as #124/#126)."""
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+
 def main(argv=None) -> int:
+    ensure_utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--split', default='train', help='набор splits.yaml; holdout и quick запрещены (D-011)')
     ap.add_argument('--bag', action='append', help='только эти bag train (проверка скрипта)')

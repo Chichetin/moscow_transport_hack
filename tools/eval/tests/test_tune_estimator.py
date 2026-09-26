@@ -1,4 +1,6 @@
 """tune_estimator (#18): overrides in memory, the score, the D-012 guard, train only."""
+import io
+
 import pytest
 
 import tune_estimator as tune
@@ -90,3 +92,15 @@ def test_random_samples_cover_a_small_grid_without_repeats_or_the_start(monkeypa
     assert sorted(tune.key_of(c) for c in got) == sorted(
         tune.key_of({'filter.q_accel': a, 'filter.r_wheel': r})
         for a in (0.5, 1.0) for r in (0.05, 0.1) if (a, r) != (0.5, 0.05))
+
+
+def test_ensure_utf8_stdout_survives_a_narrow_console_encoding(monkeypatch):
+    """The report prints '→' (round summaries, chosen values); on a console whose default
+    codepage is not UTF-8 (Windows, cp1251) that must not crash (#128, same class of bug
+    as #124/#126)."""
+    narrow = io.TextIOWrapper(io.BytesIO(), encoding='ascii')
+    monkeypatch.setattr(tune.sys, 'stdout', narrow)
+    tune.ensure_utf8_stdout()
+    print('| 1 | → filter.q_accel=1 |')  # raises UnicodeEncodeError on the ascii stream
+    narrow.flush()
+    assert narrow.buffer.getvalue()
