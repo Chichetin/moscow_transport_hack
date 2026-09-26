@@ -172,7 +172,15 @@ def md(out):
     return '\n'.join(rows)
 
 
+def ensure_utf8_stdout() -> None:
+    """Console codepage must not crash md()'s 'м/с²' (#132, same class of bug as
+    #124/#126)."""
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+
 def main(argv=None):
+    ensure_utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument('--jobs', type=int, default=8)
     ap.add_argument('--json', type=Path)

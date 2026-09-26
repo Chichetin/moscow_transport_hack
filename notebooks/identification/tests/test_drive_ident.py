@@ -128,6 +128,17 @@ def test_identify_recovers_delay_resistance_and_tables():
     br = np.array(res['params']['brake_accel_table']).reshape(ident.NOTCH_MAX + 1, -1)
     err = np.abs(br - 0.1 * notches)[1:9, cols]                   # brake notches -1..-8 were driven
     assert np.median(err) < 0.015 and err.max() < 0.08
+    adhesion = res['params']['adhesion_accel_mps2']                # never cuts a table cell
+    assert adhesion >= max(tr.max(), br.max()) and adhesion == round(adhesion, 2)
+
+
+@pytest.mark.parametrize('x', [1.09, 1.10, 1.11, 1.12, 1.591, 1.592])
+def test_round_up_to_cent_never_undershoots(x):
+    """round(x*100) first, not round(x)*100 (ревью PR #64): the latter overshoots by a
+    cent for x in {1.09, 1.10, 1.11} on this platform's binary float rounding; 1.12 is
+    kept in the grid because it happens to round correctly under either order."""
+    r = ident.round_up_to_cent(x)
+    assert r >= x and r == round(r, 2) and r - x < 0.01
 
 
 def test_default_fit_ignores_grade_and_absorbs_a_constant_slope():

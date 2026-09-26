@@ -1,17 +1,20 @@
-"""Drive model identification on train bags (issue #9, D-032; table schema D-029).
+"""Drive model identification on train bags (issue #9, D-033; table schema D-029).
 
     .venv/bin/python notebooks/identification/identify.py                  # report + figures
-    .venv/bin/python notebooks/identification/identify.py --write-params   # + params.yaml
+    .venv/bin/python notebooks/identification/identify.py --write-params   # + params.yaml (no grade)
+    .venv/bin/python notebooks/identification/identify.py --write-params --grade   # grade removed
     .venv/bin/python notebooks/identification/identify.py --check-split holdout   # read-only check
 
-Only train bags with GNSS are used for fitting (tools/eval/splits.yaml, D-011): GNSS gives the
-wheel scale and the grade that is removed from the targets. Output: markdown report to stdout,
-out/ident/<commit>/ident.json, figures in notebooks/identification/figures/.
+Only train bags are used for fitting (tools/eval/splits.yaml, D-011). GNSS gives the wheel scale
+and, with --grade, the grade removed from the targets; both variants are fitted and compared in
+the report. Output: markdown report to stdout, out/ident/<commit>/ident.json, figures in
+notebooks/identification/figures/.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import subprocess
@@ -124,6 +127,13 @@ def fit_tables(v, y, n, grid):
     return di.fill_monotone(trac), di.fill_monotone(brake), counts
 
 
+def round_up_to_cent(x):
+    """The smallest 0.01-grid value >= x. round(x*100) first, not round(x)*100 -- binary
+    rounding of the product alone can overshoot by a cent (e.g. 1.10 -> 1.11) on about
+    4% of the grid."""
+    return math.ceil(round(x * 100, 6)) / 100
+
+
 def identify(bags, use_grade=False):
     grid = np.asarray(SPEED_GRID)
     scales = wheel_scales(bags)
@@ -145,7 +155,8 @@ def identify(bags, use_grade=False):
     p = {'notch_max': NOTCH_MAX, 'speed_grid_mps': list(SPEED_GRID),
          'traction_accel_table': [round(float(x), 3) for x in trac.ravel()],
          'brake_accel_table': [round(float(x), 3) for x in brake.ravel()],
-         'adhesion_accel_mps2': round(adhesion, 2), 'traction_power_w_per_kg': round(power, 2),
+         # rounded up so the limit does not cut the largest table cell (1.592 -> 1.60)
+         'adhesion_accel_mps2': round_up_to_cent(adhesion), 'traction_power_w_per_kg': round(power, 2),
          'c': tuple(round(x, 5) for x in c)}
     resid = y_ng - di.drive_accel(n, v, p)
     noise = {'front_minus_rear_std_mps': float(np.std(np.concatenate([b.dfr[di.usable(b, False)] for b in bags]))),
