@@ -331,13 +331,23 @@ def test_without_a_usable_rover_the_nearest_track_is_kept():
     """No rover, a rover on the master (no base) and an outlier rover: the nearest track."""
     master = _lla(-1000.0, -3.0)
     fx, fy, _ = _enu_bag(*_lla(-1100.0, 0.0), origin=master)
-    for rover in (None, master, _lla(-1000.0 + 12.4, 2000.0)):
+    for rover in (None, master, _lla(-1000.0 + 12.4, 2000.0), _lla(-1000.0 + 30.0, -3.0)):
         tr = PathTracker(PARAMS, _two_way_route())
         if rover is not None:
             tr.on_rover(*rover, 2)
         tr.on_fix(*master, 2, distance=0.0)
         x, y, _, _, _ = tr.advance(100.0)
         assert math.hypot(x - fx, y - fy) < 1.0, rover
+
+
+def test_plain_rover_fix_next_to_a_gbas_origin_gives_no_heading():
+    tr = PathTracker(PARAMS, _two_way_route())
+    master = _lla(-1000.0, -3.0)
+    tr.on_rover(*_lla(-1000.0 + 12.4, -3.0), 0)
+    tr.on_fix(*master, 2, distance=0.0)
+    x, y, _, _, _ = tr.advance(100.0)
+    fx, fy, _ = _enu_bag(*_lla(-1100.0, 0.0), origin=master)
+    assert math.hypot(x - fx, y - fy) < 1.0              # the nearest track, as without rover
 
 
 def test_rover_fix_alone_does_not_align():

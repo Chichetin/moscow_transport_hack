@@ -4,10 +4,10 @@ Alignment in the GNSS init window: the frame `map` of the run is ENU at the firs
 (else the first valid one), the same rule as the reference of tools/eval. The route, stored in
 ENU of its own fixed origin, is converted into that frame once (map ENU -> ECEF -> run ENU, so
 the tangent-plane rotation between the two origins is kept). Every fix of the window anchors
-the tram to the nearest branch: (branch, s, distance). The rover antenna stands ahead of master
-in the direction of travel (docs/data.md, trap 15), so once both are seen the anchor is the
-nearest point of a branch running along master -> rover: at a standstill that tells the track of
-one direction from the other and a terminal track from the dead end of the main branch. After that the tram only moves forward
+the tram to the nearest branch: (branch, s, distance). The rover antenna stands ahead of
+master in the direction of travel (docs/data.md, trap 15), so once both are seen the anchor is
+the nearest point of a branch running along master -> rover: at a standstill that tells the
+track of one direction from the other and a terminal track from the dead end of a main branch. After that the tram only moves forward
 along its branch (trams here are single-ended): s = s_anchor + distance - distance_anchor,
 continuing onto the next branch at the end. x, y, z and yaw come from the branch at s, z is
 shifted by the run's median height offset from the map in the window.
@@ -70,7 +70,7 @@ class PathTracker:
         self._scale = 1.0                     # online wheel scale: map arc per metre of wheel path
         self._last_snap: Optional[Tuple[int, float, float]] = None   # branch, place s, distance
         self._master = None                   # (ECEF, distance) of the last accepted master fix
-        self._rover = None                    # ECEF of the last accepted rover fix
+        self._rover = None                    # (ECEF, status) of the last accepted rover fix
 
     @property
     def ready(self) -> bool:
@@ -146,8 +146,13 @@ class PathTracker:
         """master -> rover in the frame of the run, None without a usable base."""
         if self._master is None or self._rover is None:
             return None
-        h = (self._rot @ (self._rover - self._master[0]))[:2]
-        return h if math.hypot(*h) >= self.p.heading_min_base_m else None
+        rover, status = self._rover
+        if status < STATUS_GBAS_FIX <= self._origin_status:
+            return None                       # a plain fix next to GBAS ones: noise (on_fix)
+        h = (self._rot @ (rover - self._master[0]))[:2]
+        base = math.hypot(*h)
+        ok = self.p.heading_min_base_m <= base <= self.p.heading_max_base_m
+        return h if ok else None
 
     def _nearest(self, branches, xy: np.ndarray, heading=None) -> Tuple[int, float, float]:
         """(branch, s, distance) of the nearest point of `branches` (the map's or the run's
@@ -202,18 +207,21 @@ class PathTracker:
 
     def on_rover(self, lat: float, lon: float, alt: float, status: int) -> None:
         """A GNSS rover fix of the init window: heading only, never the origin or the anchor
-        point; an outlier fix is ignored by the gate of `on_fix`. An anchor already set runs
-        along the heading or is moved to the master fix on a branch that does; one that runs
-        along it is kept (a late rover fix must not undo a stop snap)."""
+        point; an outlier fix is ignored by the gate of `on_fix`. An anchor already set that runs
+        against the heading moves to a branch along it, if there is one; otherwise it is kept
+        (a late rover fix must not undo a stop snap)."""
         if (not all(math.isfinite(v) for v in (lat, lon, alt)) or status < STATUS_FIX
                 or not self._on_map(lat, lon, alt)):
             return
-        self._rover = _ecef(lat, lon, alt)
+        self._rover = (_ecef(lat, lon, alt), status)
         heading = self._heading()
         if self._anchor is None or heading is None:
             return
-        yaw = self._at(*self._anchor[:2])[3]
-        if heading[0] * math.cos(yaw) + heading[1] * math.sin(yaw) <= 0.0:
+        k, s, _ = self._anchor
+        yaw = self._at(k, s)[3]
+        if heading[0] * math.cos(yaw) + heading[1] * math.sin(yaw) > 0.0:
+            return
+        if self._locate((self._rot @ (self._master[0] - self._ecef0))[:2])[0] != k:
             self._anchor_master()
 
     def _on_map(self, lat: float, lon: float, alt: float) -> bool:

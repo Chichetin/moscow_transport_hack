@@ -153,6 +153,7 @@ class PositionParams:
     cross_std_m: float
     fix_gate_m: float
     heading_min_base_m: float
+    heading_max_base_m: float
     anchor_std_m: float
     stop_speed_mps: float
     stop_min_s: float
