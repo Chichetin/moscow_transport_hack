@@ -248,6 +248,47 @@ def test_relative_wheel_scale_learned_before_one_bogie_gap():
     assert filt.state()[0] == pytest.approx(10.0, abs=0.03)
 
 
+@pytest.mark.parametrize('gap_windows,stops', [(0.5, True), (2.0, False)])
+def test_zero_pair_confirms_a_stop_only_within_the_pair_window(gap_windows, stops):
+    window = PARAMS.filter.pair_window_s
+    filt = initialized()
+    filt.update(wheel(0.1, 0.0, 'front'), 0.0)
+    filt.update(wheel(0.1 + gap_windows * window, 0.0, 'rear'), 1.0)
+    assert (filt.state()[0] < 0.1) is stops
+
+
+def test_relative_scale_moves_by_the_gain_per_pair():
+    filt = SpeedFilter(PARAMS)
+    filt.predict(0.0, 0.0)
+    filt.update(wheel(0.0, 10.1, 'front'), 1.0)
+    filt.update(wheel(0.0, 9.9, 'rear'), 1.0)
+    target = (9.9 - 10.1) / (9.9 + 10.1)
+    assert filt._scale_delta == pytest.approx(PARAMS.filter.scale_gain * target)
+
+
+@pytest.mark.parametrize('front,rear,rear_trust', [
+    (10.1, 9.9, PARAMS.filter.scale_min_trust - 0.1),                     # distrusted bogie
+    (PARAMS.filter.scale_min_speed_mps - 0.1, PARAMS.filter.scale_min_speed_mps, 1.0),  # slow
+    (10.0, 10.0 + PARAMS.filter.scale_max_diff_mps + 0.1, 1.0),           # slip, not scale
+])
+def test_pair_unfit_for_scale_leaves_it_unchanged(front, rear, rear_trust):
+    filt = SpeedFilter(PARAMS)
+    filt.predict(0.0, 0.0)
+    filt.update(wheel(0.0, front, 'front'), 1.0)
+    filt.update(wheel(0.0, rear, 'rear'), rear_trust)
+    assert filt._scale_delta == 0.0
+
+
+def test_relative_scale_is_limited():
+    filt = SpeedFilter(PARAMS)
+    for k in range(2000):
+        t = k * 0.1
+        filt.predict(t, 0.0)
+        filt.update(wheel(t, 2.0, 'front'), 1.0)
+        filt.update(wheel(t, 2.45, 'rear'), 1.0)
+    assert filt._scale_delta == pytest.approx(PARAMS.filter.scale_max_rel, abs=1e-6)
+
+
 # --- #105: the two bogies are measured as a pair --------------------------------------------
 
 def resting():
