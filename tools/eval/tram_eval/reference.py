@@ -2,6 +2,12 @@
 
 The reference uses the whole GNSS record of the bag (it is the ground truth, not a model
 input). The model sees GNSS only inside the init window — that cut is done in `bag.py`.
+
+`point='base_link'` (the default of the eval, D-076) moves the reference to base_link by the
+organizers' tf: the master antenna is 9.873 m behind base_link (the front bogie pivot) and the
+rover 2.563 m ahead of it, both 3.0 m above it (rail level). With a rover fix of the same moment
+base_link is on the line master -> rover; without one it is where master will be 9.873 m of arc
+later (the tram is rigid and runs forward on its track). `point='master'` keeps the antenna.
 """
 from __future__ import annotations
 
@@ -21,6 +27,13 @@ OUTLIER_WINDOW = 21       # samples (~2 s at 10 Hz) for the rolling median of th
 OUTLIER_DIST_M = 15.0     # farther than this from the rolling median -> outlier (docs/data.md, trap 10)
 MAX_SPEED_MPS = 30.0      # GNSS vel above this is a glitch (tram max ~16 m/s)
 ARC_STEP_M = 0.5          # arc is accumulated over vertices >= this apart: GNSS jitter at stops adds no path
+BASE_AHEAD_M = 9.873      # organizers' tf (27.09): master at x = -9.873 m in base_link, rover at +2.563
+ANTENNA_HEIGHT_M = 3.0    # both antennas at z = 3.0 m in base_link; base_link is at rail level
+ANTENNA_BASE_M = 12.436   # master -> rover in the tf (the data: median 12.44 m)
+ROVER_BASE_TOL_M = 0.5    # a pair whose base is farther than this from ANTENNA_BASE_M is not the tf (outlier)
+ROVER_MATCH_S = 0.06      # rover fix paired with the master fix of the nearest stamp within this
+END_CHORD_M = 5.0         # past the end the track goes on along its chord over the last this many metres
+REF_POINTS = ('base_link', 'master')
 
 
 def geodetic_to_ecef(lat_deg, lon_deg, alt_m):
@@ -95,6 +108,55 @@ def clean_fixes(fix_t: np.ndarray, fix_llas: np.ndarray) -> tuple[np.ndarray, np
     return fix_t, fix_llas
 
 
+def rover_pairs(fix_t, pos, rover_t, rover_llas, origin):
+    """For every master fix: the vector master -> rover (ENU, m) of the rover fix with the
+    nearest stamp, and whether it is a pair of the tf (stamps within ROVER_MATCH_S, base within
+    ROVER_BASE_TOL_M of ANTENNA_BASE_M)."""
+    d = np.zeros((len(fix_t), 3))
+    good = np.zeros(len(fix_t), bool)
+    rover_t, rover_llas = np.asarray(rover_t, float), np.asarray(rover_llas, float).reshape(-1, 4)
+    ok = np.isfinite(rover_t) & np.isfinite(rover_llas).all(axis=1) & (rover_llas[:, 3] >= MIN_STATUS)
+    rover_t, rover_llas = rover_t[ok], rover_llas[ok]
+    if not len(rover_t) or not len(fix_t):
+        return d, good
+    idx = sort_unique(rover_t)
+    rover_t, rover_llas = rover_t[idx], rover_llas[idx]
+    rover = geodetic_to_enu(rover_llas[:, 0], rover_llas[:, 1], rover_llas[:, 2], origin)
+    j = np.clip(np.searchsorted(rover_t, fix_t), 0, len(rover_t) - 1)
+    prev = np.maximum(j - 1, 0)
+    j = np.where(np.abs(rover_t[prev] - fix_t) < np.abs(rover_t[j] - fix_t), prev, j)
+    d = rover[j] - pos
+    base = np.hypot(*d[:, :2].T)
+    good = (np.abs(rover_t[j] - fix_t) <= ROVER_MATCH_S) & (np.abs(base - ANTENNA_BASE_M) <= ROVER_BASE_TOL_M)
+    return d, good
+
+
+def track_ahead(pos: np.ndarray, pos_s: np.ndarray, ahead: float, heading=None) -> np.ndarray:
+    """Points `ahead` metres of arc further along the track `pos` (N, 3) with arc `pos_s`: where
+    base_link is while master is at `pos` (D-076). Past the end the track goes on along its
+    chord over the last END_CHORD_M; a track shorter than that goes along `heading` (unit ENU
+    xy master -> rover) or, without one, stays where it ends."""
+    if not len(pos):
+        return pos.copy()
+    keep = np.concatenate([[True], pos_s[1:] > np.maximum.accumulate(pos_s)[:-1]])
+    s, p = pos_s[keep], pos[keep]
+    target = pos_s + ahead
+    out = np.column_stack([np.interp(target, s, p[:, c]) for c in range(3)])
+    past = target > s[-1]
+    if past.any():
+        j = max(int(np.searchsorted(s, s[-1] - END_CHORD_M, side='right')) - 1, 0)
+        chord = p[-1, :2] - p[j, :2]
+        n = float(np.hypot(*chord))
+        if s[-1] - s[0] >= END_CHORD_M and n > 0:
+            u = chord / n
+        elif heading is not None:
+            u = np.asarray(heading, float)
+        else:
+            u = np.zeros(2)
+        out[past, :2] = p[-1, :2] + (target[past] - s[-1])[:, None] * u
+    return out
+
+
 @dataclass
 class Reference:
     origin: tuple[float, float, float] | None   # lat, lon, alt of the frame `map` origin
@@ -107,8 +169,13 @@ class Reference:
     speed: np.ndarray       # (K,) m/s, hypot(ve, vn)
 
 
-def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float) -> Reference:
+def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float, point: str = 'master',
+                    rover_t=(), rover_llas=()) -> Reference:
     """fix_llas: (N, 4) lat, lon, alt, status; vel_en: (K, 2) ENU east/north m/s.
+
+    point: 'master' — the antenna; 'base_link' — the front bogie pivot at rail level by the
+    organizers' tf (module docstring, D-076); rover_llas: (R, 4) like fix_llas, for base_link.
+    The frame origin is the master fix either way.
 
     Origin = the rule of frame `map` of the tracker (docs/contracts.md §1, D-030): the first
     status-2 fix with stamp <= window_end, else the first valid fix of the window whatever its
@@ -151,4 +218,23 @@ def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float) -> Refere
         poly, poly_s, pos_s = arc_polyline(pos[:, :2])
     else:
         poly, poly_s, pos_s = np.zeros((0, 2)), np.zeros(0), np.zeros(0)
+    if point not in REF_POINTS:
+        raise ValueError(f'point must be one of {REF_POINTS}, not {point!r}')
+    if point == 'base_link' and len(pos):
+        # a rover pair of the tf gives base_link of the rigid body exactly (on the line master ->
+        # rover, BASE_AHEAD_M from master); without one base_link is taken 9.873 m of arc ahead
+        # on the master track, which cuts the curve at the end loops by up to 4.6 m (holdout)
+        d, good = rover_pairs(fix_t, pos, rover_t, rover_llas, origin)
+        heading = None
+        if good.any():
+            u = np.median(d[good, :2] / np.hypot(*d[good, :2].T)[:, None], axis=0)
+            heading = u / np.hypot(*u) if np.hypot(*u) > 0 else None
+        ahead = track_ahead(pos, pos_s, BASE_AHEAD_M, heading)
+        ahead[good] = pos[good] + BASE_AHEAD_M * d[good] / np.hypot(*d[good, :2].T)[:, None]
+        pos = ahead
+        pos[:, 2] -= ANTENNA_HEIGHT_M
+        if len(vel_t) >= 2:
+            poly = pos[:, :2]
+        else:
+            poly, poly_s, pos_s = arc_polyline(pos[:, :2])
     return Reference(origin, fix_t, pos, pos_s, poly, poly_s, vel_t, speed)

@@ -21,7 +21,7 @@ import yaml
 from . import bag as bagmod
 from .bag import CMD, FRONT, REAR
 from .metrics import Estimates, extend_track, match_nearest, project_track
-from .reference import Reference, build_reference, geodetic_to_ecef
+from .reference import Reference, geodetic_to_ecef
 
 EST, REF, FRONT_C, REAR_C, SLIP_C = '#2a78d6', '#0b0b0b', '#eb6834', '#1baf7a', '#e34948'
 GRID_C, MAP_C = '#d9d8d4', '#b8b7b2'
@@ -71,7 +71,8 @@ def route_in_ref_frame(route, origin) -> list:
     return [(np.stack([b.x, b.y, b.z], axis=1) @ a.T + c)[:, :2] for b in route.branches]
 
 
-def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '') -> Series:
+def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '',
+               ref_point: str = bagmod.REF_POINT) -> Series:
     """Run the pipeline over the messages the way `bag.evaluate_bag` does and keep the series."""
     window_end = bagmod.gnss_window_end(msgs, gnss_window_s)
     odometry = (make_odometry or bagmod.default_odometry)()
@@ -80,7 +81,7 @@ def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '') -
     # estimates come in recording order (late bursts, trap 5): lines and slip bands need time order
     order = np.argsort(est.t, kind='stable')
     est = Estimates(est.t[order], est.speed[order], est.pos[order], est.slip[order])
-    ref = build_reference(*bagmod.reference_inputs(msgs), window_end)
+    ref = bagmod.bag_reference(msgs, window_end, ref_point)
 
     scale = wheel_speed_scale()
     wheel_t, wheel_v = {}, {}
@@ -190,12 +191,13 @@ def render(s: Series, out_dir: Path) -> list[Path]:
     return [timeline, xy]
 
 
-def plot_bag(path, gnss_window_s: float, out_dir: Path, make_odometry=None, msgs=None) -> list[Path]:
+def plot_bag(path, gnss_window_s: float, out_dir: Path, make_odometry=None, msgs=None,
+             ref_point: str = bagmod.REF_POINT) -> list[Path]:
     """PNG files of one bag; make_odometry and msgs are for tests, as in `bag.evaluate_bag`."""
     name = Path(path).name
     try:   # metrics.json is already written: one bad bag must not take down the other plots
         msgs = bagmod.read_bag(Path(path)) if msgs is None else msgs
-        return render(bag_series(msgs, gnss_window_s, make_odometry, name), Path(out_dir))
+        return render(bag_series(msgs, gnss_window_s, make_odometry, name, ref_point), Path(out_dir))
     except Exception:
         print(f'{name}: plot failed\n{traceback.format_exc(limit=3)}', file=sys.stderr)
         return []

@@ -20,6 +20,8 @@ import yaml
 from .metrics import Estimates, bag_metrics
 from .reference import build_reference
 
+REF_POINT = 'base_link'   # the point the judge compares (organizers' tf, D-076); --ref-point master for the antenna
+
 REPO = Path(__file__).resolve().parents[3]
 MSG_DIR = REPO / 'src' / 'tram_vehicle_msgs' / 'msg'
 PARAMS_YAML = REPO / 'src' / 'tram_odometry' / 'config' / 'params.yaml'
@@ -141,6 +143,22 @@ def reference_inputs(msgs):
     return fix_t, fix, vel_t, vel
 
 
+def rover_inputs(msgs):
+    t, llas = [], []
+    for topic, m in msgs:
+        if topic == ROVER_FIX:
+            t.append(stamp(m))
+            llas.append((m.latitude, m.longitude, m.altitude, m.status.status))
+    return t, llas
+
+
+def bag_reference(msgs, window_end: float, point: str = REF_POINT):
+    """The reference of a bag at `point` ('base_link' or 'master', D-076)."""
+    rover_t, rover_llas = rover_inputs(msgs) if point != 'master' else ((), ())
+    return build_reference(*reference_inputs(msgs), window_end, point=point,
+                           rover_t=rover_t, rover_llas=rover_llas)
+
+
 def gnss_window_end(msgs, gnss_window_s: float) -> float:
     """Last header.stamp at which GNSS may reach the model: first message + window (D-005)."""
     return stamp(msgs[0][1]) + gnss_window_s if msgs else 0.0
@@ -177,7 +195,8 @@ def finite_only(est: Estimates) -> tuple[Estimates, int]:
     return Estimates(est.t[ok], est.speed[ok], est.pos[ok], est.slip[ok]), int((~ok).sum())
 
 
-def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None) -> dict:
+def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None,
+                 ref_point: str = REF_POINT) -> dict:
     """Metrics dict of one bag (docs/contracts.md §4). make_odometry defaults to
     default_odometry; it and `msgs` are for tests."""
     make_odometry = make_odometry or default_odometry
@@ -189,7 +208,7 @@ def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None
     est, nonfinite = finite_only(est)
     m = {'duration_s': float(max(stamps) - min(stamps)) if stamps else 0.0}
     try:
-        m.update(bag_metrics(build_reference(*reference_inputs(msgs), window_end), est))
+        m.update(bag_metrics(bag_reference(msgs, window_end, ref_point), est))
     except Exception:   # one bad bag must not take down the whole split in the process pool
         crash = crash or 'metrics failed\n' + traceback.format_exc(limit=3)
     m['crashed'] = crash is not None

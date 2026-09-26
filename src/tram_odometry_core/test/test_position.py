@@ -1,6 +1,7 @@
 """PathTracker: GNSS alignment in the init window, motion along the route map (D-007, D-024)."""
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -13,7 +14,11 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / 'tools' / 'pathgraph'))
 import build_route as br  # noqa: E402  (reference ENU of the map builder and of tools/eval)
 
-PARAMS = load_params(ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml')
+PARAMS_YAML = load_params(ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml')
+# the tests below follow the track of the master antenna itself: base_link offset zeroed; the
+# offset of params.yaml (D-076) has its own tests at the end of the file
+PARAMS = replace(PARAMS_YAML, position=replace(PARAMS_YAML.position, base_ahead_m=0.0,
+                                               antenna_height_m=0.0))
 ORIGIN = (55.8104, 37.4623, 168.0)
 M_LAT = 111338.0 / 0.001 / 1000.0           # m per degree of latitude at 55.81 (approx.)
 M_LON = 626.98 / 0.01                       # m per degree of longitude at 55.81 (approx.)
@@ -436,3 +441,65 @@ def test_side_switch_keeps_the_along_track_variance():
     before = tr._var_along(70.0)
     tr.advance(70.0, 7.0)
     assert tr._var_along(70.0) == pytest.approx(before)
+
+
+# base_link offset of params.yaml (D-076): the map is the master antenna track, the output is
+# the front bogie pivot at rail level, 9.873 m ahead of master and 3.0 m below the antennas
+
+
+def test_base_link_offset_is_the_organizers_tf():
+    assert PARAMS_YAML.position.base_ahead_m == pytest.approx(9.873)
+    assert PARAMS_YAML.position.antenna_height_m == pytest.approx(3.0)
+
+
+def test_output_is_base_link_ahead_of_master_and_below_the_antennas():
+    master = PathTracker(PARAMS, _route())
+    base = PathTracker(PARAMS_YAML, _route())
+    start = _lla(-1000.0, 0.0, 170.0)
+    for tr in (master, base):
+        tr.on_fix(*start, 2, distance=50.0)
+    for distance in (50.0, 1050.0):
+        xm, ym, zm, yaw_m, cov_m = master.advance(distance)
+        xb, yb, zb, yaw_b, cov_b = base.advance(distance)
+        assert xb - xm == pytest.approx(-9.873, abs=0.01)     # branch 0 runs west: ahead = -x
+        assert yb - ym == pytest.approx(0.0, abs=0.01)
+        # 3.0 m below the antenna; the map climbs 10 m per 5 km, 9.873 m ahead is 0.02 m higher
+        assert zb - zm == pytest.approx(-3.0 + 10.0 * 9.873 / 5000.0, abs=0.01)
+        assert abs(math.remainder(yaw_b - yaw_m, 2 * math.pi)) < 1e-3
+        assert cov_b == pytest.approx(cov_m, abs=1e-3)        # the uncertainty is the anchor's
+
+
+def test_base_link_ahead_follows_the_join_onto_the_next_branch():
+    tr = PathTracker(PARAMS_YAML, _route())
+    tr.on_fix(*_lla(-4995.0, 0.0), 2, distance=0.0)           # master 5 m before the end
+    x, y, _, yaw, _ = tr.advance(0.0)                          # base_link 4.873 m down branch 1
+    fx, fy, _ = _enu_bag(*_lla(-5000.0, -4.873), origin=_lla(-4995.0, 0.0))
+    assert math.hypot(x - fx, y - fy) < 1.0
+    assert abs(math.remainder(yaw + math.pi / 2, 2 * math.pi)) < 0.05   # heading south
+
+
+def test_stop_snap_stays_on_the_master_arc_with_the_base_link_offset():
+    """Stop places are where master stood: the offset must not move the snap by 9.873 m."""
+    route = _route()
+    stops = ((0, 1500.0),)
+    master = PathTracker(PARAMS, Route(origin=route.origin, branches=route.branches, stops=stops))
+    base = PathTracker(PARAMS_YAML, Route(origin=route.origin, branches=route.branches, stops=stops))
+    for tr in (master, base):
+        tr.on_fix(*_lla(-1000.0, 0.0, 170.0), 2, distance=0.0)
+        assert tr.on_stop(505.0)                              # 5 m past the stop place
+    xm, _, _, _, _ = master.advance(505.0)
+    xb, _, _, _, _ = base.advance(505.0)
+    assert xm == pytest.approx(_enu_bag(*_lla(-1500.0, 0.0), origin=_lla(-1000.0, 0.0, 170.0))[0],
+                               abs=2.0)                       # snapped towards the place
+    assert xb - xm == pytest.approx(-9.873, abs=0.01)
+
+
+def test_pipeline_publishes_base_link_with_the_offset_of_params():
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS_YAML, route=_route())
+    start = _lla(-1000.0, 0.0, 170.0)
+    odo.step(_fix_msg(0.0, start))
+    est = _wheels(odo, 0.0, 100.0, 36.0)                      # 10 m/s for 100 s: 1 km west
+    fx, fy, fz = _enu_bag(*_lla(-2009.873, 0.0, 172.0), origin=start)
+    assert math.hypot(est.x - fx, est.y - fy) < 2.0
+    assert est.z == pytest.approx(fz - 3.0, abs=0.3)

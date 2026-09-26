@@ -10,6 +10,7 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 from . import bag as bagmod
@@ -106,6 +107,8 @@ def main(argv=None) -> int:
     ap.add_argument('--compare', type=Path, help='metrics.json базы (например, прогон origin/main)')
     ap.add_argument('--stress', action='store_true', help='детерминированные сбои входа; отдельный stress.json')
     ap.add_argument('--plot', action='store_true', help='PNG по каждому bag в <out>/plots (нужен matplotlib)')
+    ap.add_argument('--ref-point', choices=('base_link', 'master'), default=bagmod.REF_POINT,
+                    help='точка эталона: base_link по tf организаторов (по умолчанию) или антенна master (D-076)')
     ap.add_argument('--jobs', type=int, default=max(1, min(8, (os.cpu_count() or 2) - 1)))
     ap.add_argument('--out', type=Path, default=None, help='каталог прогона, по умолчанию out/eval/<commit>-<набор>')
     args = ap.parse_args(argv)
@@ -131,20 +134,22 @@ def main(argv=None) -> int:
     t0 = time.monotonic()
     if args.jobs > 1 and len(paths) > 1:
         with ProcessPoolExecutor(min(args.jobs, len(paths))) as ex:
-            results = list(ex.map(bagmod.evaluate_bag, paths, [window] * len(paths)))
+            results = list(ex.map(partial(bagmod.evaluate_bag, ref_point=args.ref_point),
+                                  paths, [window] * len(paths)))
     else:
-        results = [bagmod.evaluate_bag(p, window) for p in paths]
+        results = [bagmod.evaluate_bag(p, window, ref_point=args.ref_point) for p in paths]
     notes = [r.pop(bagmod.NOTES, {}) for r in results]
     nonfinite = sum(n.get('nonfinite', 0) for n in notes)
     mismatch = sum(n.get('stamp_mismatch', 0) for n in notes)
     commit = git_commit()
     label = args.split or (names[0] if len(names) == 1 else 'bags')
-    result = {'commit': commit, 'split': label, 'gnss_window_s': window,
+    result = {'commit': commit, 'split': label, 'gnss_window_s': window, 'ref_point': args.ref_point,
               'created': datetime.now().astimezone().isoformat(timespec='seconds'),
               'bags': dict(zip(names, results))}
     result['summary'] = summarize(result['bags'])
 
-    out = args.out or bagmod.out_dir() / 'eval' / f'{commit}-{label}'
+    suffix = '' if args.ref_point == bagmod.REF_POINT else f'-{args.ref_point}'
+    out = args.out or bagmod.out_dir() / 'eval' / f'{commit}-{label}{suffix}'
     out.mkdir(parents=True, exist_ok=True)
     (out / 'metrics.json').write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding='utf-8')
 
@@ -158,9 +163,10 @@ def main(argv=None) -> int:
     if args.stress:
         if args.jobs > 1 and len(paths) > 1:
             with ProcessPoolExecutor(min(args.jobs, len(paths))) as ex:
-                diagnostics = list(ex.map(evaluate_stress_bag, paths, [window] * len(paths)))
+                diagnostics = list(ex.map(partial(evaluate_stress_bag, ref_point=args.ref_point),
+                                          paths, [window] * len(paths)))
         else:
-            diagnostics = [evaluate_stress_bag(p, window) for p in paths]
+            diagnostics = [evaluate_stress_bag(p, window, ref_point=args.ref_point) for p in paths]
         stress = {'commit': commit, 'split': label, 'gnss_window_s': window,
                   'created': datetime.now().astimezone().isoformat(timespec='seconds'),
                   'bags': dict(zip(names, diagnostics))}
@@ -171,9 +177,10 @@ def main(argv=None) -> int:
         plots = out / 'plots'
         if args.jobs > 1 and len(paths) > 1:
             with ProcessPoolExecutor(min(args.jobs, len(paths))) as ex:
-                files = list(ex.map(plot_bag, paths, [window] * len(paths), [plots] * len(paths)))
+                files = list(ex.map(partial(plot_bag, ref_point=args.ref_point),
+                                    paths, [window] * len(paths), [plots] * len(paths)))
         else:
-            files = [plot_bag(p, window, plots) for p in paths]
+            files = [plot_bag(p, window, plots, ref_point=args.ref_point) for p in paths]
         print(f"\nГрафики: {sum(len(f) for f in files)} PNG -> {plots}")
     return 0
 

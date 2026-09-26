@@ -24,7 +24,8 @@ def test_run_writes_contract_json_and_tables(short_bags, tmp_path, capsys):
     assert cli.main(args + ['--out', str(tmp_path / 'base')]) == 0
     out = capsys.readouterr().out
     res = json.loads((tmp_path / 'base' / 'metrics.json').read_text(encoding='utf-8'))
-    assert {'commit', 'split', 'gnss_window_s', 'created', 'bags', 'summary'} <= set(res)
+    assert {'commit', 'split', 'gnss_window_s', 'ref_point', 'created', 'bags', 'summary'} <= set(res)
+    assert res['ref_point'] == 'base_link'
     assert res['gnss_window_s'] == 5.0 and res['split'] == 'bags'
     for b in short_bags:
         m = res['bags'][b]
@@ -79,7 +80,7 @@ def test_stress_writes_separate_diagnostics_without_changing_metrics_schema(shor
     assert cli.main(['--bag', short_bags[0], '--jobs', '1', '--stress', '--out', str(out)]) == 0
     normal = json.loads((out / 'metrics.json').read_text(encoding='utf-8'))
     stress = json.loads((out / 'stress.json').read_text(encoding='utf-8'))
-    assert set(normal) == {'commit', 'split', 'gnss_window_s', 'created', 'bags', 'summary'}
+    assert set(normal) == {'commit', 'split', 'gnss_window_s', 'ref_point', 'created', 'bags', 'summary'}
     assert set(normal['bags'][short_bags[0]]) == set(METRIC_KEYS) | {'duration_s', 'distance_m', 'n_matched', 'crashed'}
     assert set(stress['bags'][short_bags[0]]) == set(cli.SCENARIOS)
     assert stress['bags'][short_bags[0]]['gap_70']['skipped'] is True

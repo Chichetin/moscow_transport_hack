@@ -124,3 +124,56 @@ def test_arc_follows_doppler_speed_not_fix_wander():
     t, llas = fixes_east(100, step_m=1.0)
     ref = build_reference(t, llas, t, np.tile([10.0, 0.0], (100, 1)), window_end=5.0)
     assert ref.pos_s[-1] == pytest.approx(99.0, abs=0.01)
+
+
+# base_link by the organizers' tf (D-076): master 9.873 m behind, rover 2.563 m ahead, both 3.0 m up
+
+def _rover_of(t, llas, dt=0.0, base_m=12.436):
+    """Rover fixes base_m east of every master fix (the tram runs east), stamps shifted by dt."""
+    rover = llas.copy()
+    rover[:, 1] += base_m / M_PER_DEG_E
+    return t + dt, rover
+
+
+def test_base_link_is_on_the_line_master_rover_and_at_rail_level():
+    t, llas = fixes_east(100)
+    rt, rl = _rover_of(t, llas, dt=0.02)
+    ref = build_reference(t, llas, t, np.tile([10.0, 0.0], (100, 1)), window_end=5.0,
+                          point='base_link', rover_t=rt, rover_llas=rl)
+    master = build_reference(t, llas, t, np.tile([10.0, 0.0], (100, 1)), window_end=5.0)
+    assert ref.origin == master.origin                        # frame origin: the master fix
+    assert ref.pos - master.pos == pytest.approx(np.tile([9.873, 0.0, -3.0], (100, 1)), abs=0.01)
+    assert ref.poly == pytest.approx(ref.pos[:, :2])
+    assert ref.pos_s == pytest.approx(master.pos_s)
+
+
+def test_base_link_without_rover_is_ahead_on_the_track_and_extended_past_its_end():
+    t, llas = fixes_east(100)
+    ref = build_reference(t, llas, t, np.tile([10.0, 0.0], (100, 1)), window_end=5.0,
+                          point='base_link')
+    assert ref.pos[0] == pytest.approx([9.873, 0.0, -3.0], abs=0.01)
+    assert ref.pos[-1] == pytest.approx([99.0 + 9.873, 0.0, -3.0], abs=0.01)   # past the end
+
+
+def test_rover_pair_of_the_wrong_base_or_moment_is_not_used():
+    t, llas = fixes_east(100)
+    for rt, rl in (_rover_of(t, llas, base_m=30.0), _rover_of(t, llas, dt=0.5)):
+        rl[:, 0] += 5.0 / M_PER_DEG_N                         # 5 m north: would show if used
+        ref = build_reference(t, llas, t, np.tile([10.0, 0.0], (100, 1)), window_end=5.0,
+                              point='base_link', rover_t=rt, rover_llas=rl)
+        assert np.abs(ref.pos[:, 1]).max() < 0.01
+
+
+def test_standing_track_takes_the_rover_heading():
+    t, llas = fixes_east(50, step_m=0.0)                     # stands the whole bag
+    rt, rl = _rover_of(t, llas)
+    rl[1:, 1] = np.nan                                        # one rover fix only: pair of fix 0
+    ref = build_reference(t, llas, t, np.zeros((50, 2)), window_end=5.0,
+                          point='base_link', rover_t=rt, rover_llas=rl)
+    assert ref.pos == pytest.approx(np.tile([9.873, 0.0, -3.0], (50, 1)), abs=0.01)
+
+
+def test_unknown_reference_point_is_rejected():
+    t, llas = fixes_east(10)
+    with pytest.raises(ValueError):
+        build_reference(t, llas, [], np.zeros((0, 2)), window_end=5.0, point='rover')

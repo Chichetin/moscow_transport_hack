@@ -163,6 +163,8 @@ class PositionParams:
     fix_gate_m: float
     heading_min_base_m: float
     heading_max_base_m: float
+    base_ahead_m: float
+    antenna_height_m: float
     side_speed_mps: float
     side_min_m: float
     side_max_m: float

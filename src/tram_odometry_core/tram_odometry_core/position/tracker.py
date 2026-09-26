@@ -343,16 +343,18 @@ class PathTracker:
         self._scale += self.p.scale_alpha * (ratio - self._scale)
 
     def advance(self, distance: float, speed: float = 0.0):
-        """(x, y, z, yaw, (var_x, var_y, cov_xy)) at path `distance` and speed (m/s), None
-        before alignment."""
+        """(x, y, z, yaw, (var_x, var_y, cov_xy)) of base_link at path `distance` and speed
+        (m/s), None before alignment. The map, the anchor and the stop places are the track of
+        the master antenna; base_link (the front bogie pivot at rail level, organizers' tf) is
+        `base_ahead_m` ahead of it along the track and `antenna_height_m` below (D-076)."""
         if self._anchor is None:
             return None
         self._take_side(distance, speed)
-        k, s = self._state(distance)
+        k, s = self._state(distance + self.p.base_ahead_m / self._scale)
         x, y, z, yaw = self._at(k, s)
         var_cross = self.p.cross_std_m ** 2
         var_along = var_cross + self._var_along(distance)
         c, sn = math.cos(yaw), math.sin(yaw)
         cov = (var_along * c * c + var_cross * sn * sn, var_along * sn * sn + var_cross * c * c,
                (var_along - var_cross) * c * sn)
-        return x, y, z + self._dz_median, yaw, cov
+        return x, y, z + self._dz_median - self.p.antenna_height_m, yaw, cov
