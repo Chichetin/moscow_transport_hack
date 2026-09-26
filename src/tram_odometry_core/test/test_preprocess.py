@@ -520,3 +520,33 @@ def test_normal_input_between_two_past_glitches_cancels_the_first():
     _feed(pp, [cmd(start + 0.05 * k, 0) for k in range(1, 40)])
     pp.accept(wheel(FRONT_TOPIC, start + 2.0 - 86400.0, 0.0))
     assert pp.t0 == pytest.approx(start)
+
+
+def test_a_gnss_epoch_from_the_past_does_not_close_the_window():
+    """Review #100: fix and vel of one epoch share a stamp; they must not confirm each other."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    _feed(pp, [cmd(start, 0), wheel(FRONT_TOPIC, start, 0.0)])
+    pp.accept(gnss_fix(start - 86400.0, status=2))
+    pp.accept(gnss_vel(start - 86400.0, 1.0, 0.0))
+    assert pp.t0 == pytest.approx(start)
+    assert isinstance(pp.accept(gnss_fix(start + 1.0, status=2)), GnssFix)
+
+
+def test_gnss_never_moves_the_window_start_back():
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    pp.accept(cmd(start, 0))
+    pp.accept(gnss_fix(start - 9.0, status=2))
+    assert pp.t0 == pytest.approx(start)
+
+
+@pytest.mark.parametrize('make', [lambda t: gnss_fix(t, status=2), lambda t: gnss_vel(t, 1.0, 0.0)])
+def test_gnss_far_behind_the_window_start_is_dropped(make):
+    """A GNSS stamp a day in the past is not inside the window, whenever it arrives (D-005)."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    _feed(pp, [cmd(start, 0), wheel(FRONT_TOPIC, start, 0.0)])
+    assert pp.accept(make(start - 86400.0)) is None
+    assert pp.accept(make(start - JUMP - 0.5)) is None
+    assert pp.accept(make(start - 0.05)) is not None               # buffered, trap 5
