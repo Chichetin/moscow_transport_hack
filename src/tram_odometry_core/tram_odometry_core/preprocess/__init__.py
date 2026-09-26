@@ -43,7 +43,8 @@ class Preprocessor:
 
     def __init__(self, params: Params):
         self.p = params
-        self.t0: Optional[float] = None        # stamp of the first raw input ever seen
+        self.t0: Optional[float] = None        # GNSS window start: earliest trusted input stamp
+        self._t0_back: Optional[float] = None  # stamp far behind t0, unconfirmed (#80)
         self._last: dict = {}                  # topic -> last accepted stamp (trap 6 gate)
         self._wheel_prev: dict = {}             # bogie -> last accepted WheelSample
         self._clock: Optional[float] = None    # newest accepted stamp over the vehicle streams
@@ -55,8 +56,7 @@ class Preprocessor:
         t = _stamp(msg)
         if not math.isfinite(t):
             return None
-        if self.t0 is None:
-            self.t0 = t
+        self._window_start(t)
         if topic == FRONT_TOPIC or topic == REAR_TOPIC:
             return self._wheel(topic, t, msg)
         if topic == CMD_TOPIC:
@@ -66,6 +66,28 @@ class Preprocessor:
         if topic == self.p.gnss.topic_vel:
             return self._vel(t, msg)
         return None
+
+    def _window_start(self, t: float) -> None:
+        """Keep `t0` at the earliest trusted input stamp (#80, D-055).
+
+        `t0` starts at the first raw input of any topic. An earlier stamp moves it back: within
+        `input.max_stamp_jump_s` at once (buffered inputs, trap 5), farther only when the next
+        input behind `t0` confirms it within the limit -- the first stamp was from the future.
+        A single stamp far in the past is a glitch; any input at or after `t0` cancels it.
+        The window can only close earlier than the real start + window, never later (D-005).
+        """
+        if self.t0 is None or t >= self.t0:
+            self.t0 = t if self.t0 is None else self.t0
+            self._t0_back = None
+            return
+        jump = self.p.input.max_stamp_jump_s
+        back = self._t0_back
+        confirmed = back is not None and abs(t - back) <= jump
+        if confirmed or self.t0 - t <= jump:
+            self.t0 = min(t, back) if confirmed else t
+            self._t0_back = None
+        else:
+            self._t0_back = t
 
     def _fresh(self, topic: str, t: float) -> bool:
         """Accept a stream sample only if its stamp is newer than the stream's last one and

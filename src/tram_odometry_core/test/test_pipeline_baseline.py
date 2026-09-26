@@ -158,6 +158,25 @@ def test_gnss_after_window_is_ignored():
     assert (a.x, a.y, a.yaw, a.distance) == (b.x, b.y, b.yaw, b.distance)
 
 
+
+def test_gnss_after_window_is_ignored_after_a_future_first_stamp():
+    """#80: the first input of the bag is a command from the future (+1 day); the window is
+    counted from the real start, so GNSS after it changes nothing (D-005)."""
+    def run(late):
+        odo = Odometry(PARAMS)
+        odo.step(cmd(86400.0, 0))
+        odo.step(cmd(0.0, 0))
+        init_east(odo)
+        drive(odo, 1.0, 5.0, KMH_36)
+        if late:
+            t = PARAMS.gnss.init_window_s + 1.0
+            odo.step(gnss_fix(t))
+            odo.step(gnss_vel(t, 0.0, 30.0))
+        return drive(odo, 6.5, 12.0, KMH_36)
+    a, b = run(False), run(True)
+    assert (a.x, a.y, a.yaw, a.distance) == (b.x, b.y, b.yaw, b.distance)
+    assert all(math.isfinite(v) and v < 1e6 for v in a.pos_cov)
+
 def test_gnss_late_never_initialises():
     odo = Odometry(PARAMS)
     odo.step(wheel(FRONT, 0.0, KMH_36))
