@@ -8,7 +8,9 @@ set -euo pipefail
 BAG="${1:?bag id, например 30618_0e41eac3}"; RATE="${2:-1.0}"
 ROOT="$(git rev-parse --show-toplevel)"
 MAIN="$(cd "$(git rev-parse --path-format=absolute --git-common-dir)/.." && pwd)"
+EXPLICIT_TRAM_DATA_DIR="${TRAM_DATA_DIR-}"
 [ -f "$ROOT/.env" ] && set -a && . "$ROOT/.env" && set +a
+[ -n "$EXPLICIT_TRAM_DATA_DIR" ] && TRAM_DATA_DIR="$EXPLICIT_TRAM_DATA_DIR"
 DATA="${TRAM_DATA_DIR:-$MAIN/dataset/data}"; case "$DATA" in /*) ;; *) DATA="$ROOT/$DATA" ;; esac
 OUT="${TRAM_OUT_DIR:-$ROOT/out}"; case "$OUT" in /*) ;; *) OUT="$ROOT/$OUT" ;; esac
 OUT="$OUT/stand/$BAG"; mkdir -p "$OUT"
