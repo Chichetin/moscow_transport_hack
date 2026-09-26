@@ -129,6 +129,11 @@ def main(argv=None) -> int:
         ap.error(f'нет bag в {data}: {", ".join(missing)} (docs/data.md, TRAM_DATA_DIR)')
     window = bagmod.default_gnss_window() if args.gnss_window is None else args.gnss_window
     base = json.loads(args.compare.read_text(encoding='utf-8')) if args.compare else None
+    if base is not None and base.get('ref_point', 'master') != args.ref_point:
+        # metrics.json before D-076 has no ref_point: its reference is the master antenna
+        ap.error(f"--compare: эталон базы {base.get('ref_point', 'master')!r}, а прогона "
+                 f"{args.ref_point!r} (D-076) — пересчитайте базу с --ref-point {args.ref_point} "
+                 f"или запустите этот прогон с --ref-point {base.get('ref_point', 'master')}")
     bagmod.default_odometry()   # fail fast if the pipeline cannot be built
 
     t0 = time.monotonic()
@@ -167,7 +172,7 @@ def main(argv=None) -> int:
                                           paths, [window] * len(paths)))
         else:
             diagnostics = [evaluate_stress_bag(p, window, ref_point=args.ref_point) for p in paths]
-        stress = {'commit': commit, 'split': label, 'gnss_window_s': window,
+        stress = {'commit': commit, 'split': label, 'gnss_window_s': window, 'ref_point': args.ref_point,
                   'created': datetime.now().astimezone().isoformat(timespec='seconds'),
                   'bags': dict(zip(names, diagnostics))}
         (out / 'stress.json').write_text(json.dumps(stress, ensure_ascii=False, indent=1), encoding='utf-8')

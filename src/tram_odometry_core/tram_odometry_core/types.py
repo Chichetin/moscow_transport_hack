@@ -299,6 +299,7 @@ def load_params(path) -> Params:
         raise ValueError('input.max_stamp_jump_s must be positive')
     _validate_filter(params.filter)
     _validate_side(params.position)
+    _validate_base_link(params.position)
     return params
 
 
@@ -309,6 +310,17 @@ def _validate_side(position: PositionParams) -> None:
         raise ValueError('position.side_min_m and side_max_m must satisfy 0 <= min <= max')
     if not (position.side_overrun_m > 0):
         raise ValueError('position.side_overrun_m must be positive')
+
+
+def _validate_base_link(position: PositionParams) -> None:
+    """The output point of D-076: ahead of master along the track, below the antennas; the
+    online wheel scale divides the offset, so it must stay away from 0."""
+    if not (position.base_ahead_m >= 0):
+        raise ValueError('position.base_ahead_m must be nonnegative')
+    if not math.isfinite(position.antenna_height_m):
+        raise ValueError('position.antenna_height_m must be finite')
+    if not (0 <= position.scale_max_dev < 1):
+        raise ValueError('position.scale_max_dev must satisfy 0 <= dev < 1')
 
 
 def _validate_filter(filt: FilterParams) -> None:

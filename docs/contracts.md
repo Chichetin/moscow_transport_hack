@@ -44,7 +44,7 @@ PR** с перечнем потребителей в описании. В том
 |---|---|
 | `header.frame_id` | `map` (`frames.map`) — локальная ENU, метры, начало — первая валидная точка GNSS master в окне выставки (**уточнить у организаторов**, `HANDOFF.md`, #23) |
 | `child_frame_id` | `base_link` (`frames.base`) |
-| `pose.pose.position` | точка `base_link` — ось передней тележки на уровне касания колеса и рельса (tf организаторов 27.09: master x = −9,873, rover x = +2,563, обе z = 3,0 м; D-076): `x` — восток, `y` — север, `z` — вверх, м. По карте — на `position.base_ahead_m` впереди трека master по дуге и на `position.antenna_height_m` ниже высоты антенн |
+| `pose.pose.position` | точка `base_link` — ось передней тележки на уровне касания колеса и рельса (tf организаторов 27.09: master x = −9,873, rover x = +2,563, обе z = 3,0 м; D-076): `x` — восток, `y` — север, `z` — вверх, м. По карте — на `position.base_ahead_m` впереди трека master по дуге и на `position.antenna_height_m` ниже высоты антенн. Исключение: до первого принятого fix (запасная прямая D-021) — точка master, `z = 0` |
 | `pose.pose.orientation` | курс по касательной карты (yaw), кватернион |
 | `pose.covariance` | 6×6 row-major; `[0]`,`[7]` — дисперсии x/y, м²; `[35]` — yaw; неизвестные — `-1` не ставить, ставить большое число |
 | `twist.twist.linear.x` | продольная скорость, м/с (= `/result/velocity`) |

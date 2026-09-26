@@ -557,3 +557,55 @@ def test_a_new_anchor_drops_the_undo_of_an_earlier_side_switch():
     # re-anchored at s = 0 with path 70: path 140 is 70 m along, as a fresh tracker at 70
     assert tr.advance(140.0, 7.0)[:2] == pytest.approx(fresh.advance(70.0, 7.0)[:2], abs=1e-6)
     assert tr._undo is not None and tr._anchor[0] == 3
+
+
+def test_base_link_offset_is_map_arc_whatever_the_online_wheel_scale():
+    """Two stop snaps change the online scale; base_link stays 9.873 m of map arc ahead."""
+    route = _route()
+    stops = ((0, 1500.0), (0, 2000.0))
+    master = PathTracker(PARAMS, Route(origin=route.origin, branches=route.branches, stops=stops))
+    base = PathTracker(PARAMS_YAML, Route(origin=route.origin, branches=route.branches, stops=stops))
+    for tr in (master, base):
+        tr.on_fix(*_lla(-1000.0, 0.0, 170.0), 2, distance=0.0)
+        assert tr.on_stop(505.0) and tr.on_stop(1020.0)      # the wheels read 515 m for 500 m
+        assert tr._scale != pytest.approx(1.0, abs=1e-3)
+    xm, _, _, _, _ = master.advance(1300.0)
+    xb, _, _, _, _ = base.advance(1300.0)
+    assert xb - xm == pytest.approx(-9.873, abs=0.01)
+
+
+def _depot_base_tracker():
+    tr = PathTracker(PARAMS_YAML, _depot_route())
+    tr.on_fix(*_lla(0.0, 0.0), 2, distance=0.0)
+    return tr
+
+
+def test_base_link_follows_the_side_track_once_master_takes_it():
+    tr = _depot_base_tracker()
+    # before the decision (master 5 m past the side start) base_link is on the default path
+    assert tr.advance(45.0, 7.0)[:2] == pytest.approx((54.873, 0.0), abs=0.1)
+    # master 30 m down the side track (branch 3 runs (40, 0) -> (80, -30)): base_link 39.873 m
+    x, y, _, _, _ = tr.advance(70.0, 7.0)
+    assert (x, y) == pytest.approx((40.0 + 0.8 * 39.873, -0.6 * 39.873), abs=0.1)
+
+
+def test_base_link_goes_back_with_master_when_the_side_switch_is_undone():
+    tr = _depot_base_tracker()
+    tr.advance(70.0, 7.0)                                     # onto the side track
+    side_len = tr._s[3][-1]
+    at_end = tr.advance(40.0 + side_len + 29.0, 3.0)          # master waits at the dead end
+    assert at_end[:2] == pytest.approx((80.0, -130.0 - 9.873), abs=0.1)   # base_link past it
+    back = tr.advance(40.0 + side_len + 31.0, 3.0)
+    default = _depot_base_tracker().advance(40.0 + side_len + 31.0, 3.0)
+    assert back[:2] == pytest.approx(default[:2], abs=1e-6)
+
+
+@pytest.mark.parametrize('key, value', [('base_ahead_m', -1.0), ('scale_max_dev', 1.0)])
+def test_load_params_rejects_bad_base_link_keys(tmp_path, key, value):
+    import re
+    text = (ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml').read_text(encoding='utf-8')
+    text = re.sub(rf'(\n\s+{key}:\s*)[-0-9.]+', rf'\g<1>{value}', text)
+    path = tmp_path / 'params.yaml'
+    path.write_text(text, encoding='utf-8')
+    with pytest.raises(ValueError, match=key):
+        load_params(path)

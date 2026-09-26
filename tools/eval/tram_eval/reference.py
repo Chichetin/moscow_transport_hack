@@ -109,14 +109,15 @@ def clean_fixes(fix_t: np.ndarray, fix_llas: np.ndarray) -> tuple[np.ndarray, np
     return fix_t, fix_llas
 
 
-def rover_pairs(fix_t, pos, rover_t, rover_llas, origin):
+def rover_pairs(fix_t, pos, rover_t, rover_llas, origin, min_status: int = MIN_STATUS):
     """For every master fix: the vector master -> rover (ENU, m) of the rover fix with the
     nearest stamp, and whether it is a pair of the tf (stamps within ROVER_MATCH_S, base within
-    ROVER_BASE_TOL_M of ANTENNA_BASE_M)."""
+    ROVER_BASE_TOL_M of ANTENNA_BASE_M). Rover fixes below `min_status` are not paired: the
+    same status rule as the master track (a plain fix next to GBAS ones jumps by metres)."""
     d = np.zeros((len(fix_t), 3))
     good = np.zeros(len(fix_t), bool)
     rover_t, rover_llas = np.asarray(rover_t, float), np.asarray(rover_llas, float).reshape(-1, 4)
-    ok = np.isfinite(rover_t) & np.isfinite(rover_llas).all(axis=1) & (rover_llas[:, 3] >= MIN_STATUS)
+    ok = np.isfinite(rover_t) & np.isfinite(rover_llas).all(axis=1) & (rover_llas[:, 3] >= min_status)
     rover_t, rover_llas = rover_t[ok], rover_llas[ok]
     if not len(rover_t) or not len(fix_t):
         return d, good
@@ -225,7 +226,9 @@ def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float, point: st
         # a rover pair of the tf gives base_link of the rigid body exactly (on the line master ->
         # rover, BASE_AHEAD_M from master); without one base_link is taken 9.873 m of arc ahead
         # on the master track, which cuts the curve at the end loops by up to 4.6 m (holdout)
-        d, good = rover_pairs(fix_t, pos, rover_t, rover_llas, origin)
+        gbas = bool(len(fix_llas)) and bool((fix_llas[:, 3] >= BEST_STATUS).all())
+        d, good = rover_pairs(fix_t, pos, rover_t, rover_llas, origin,
+                              BEST_STATUS if gbas else MIN_STATUS)
         heading = None
         if good.any():
             u = np.median(d[good, :2] / np.hypot(*d[good, :2].T)[:, None], axis=0)

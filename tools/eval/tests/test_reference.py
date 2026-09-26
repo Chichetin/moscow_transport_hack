@@ -189,3 +189,14 @@ def test_fix_without_a_rover_pair_holds_the_heading_of_the_nearest_pair_at_a_sto
     ref = build_reference(t, llas, t, np.r_[np.tile([10.0, 0.0], (80, 1)), np.zeros((20, 2))],
                           window_end=5.0, point='base_link', rover_t=rt, rover_llas=rl)
     assert ref.pos[-1] == pytest.approx(ref.pos[-2], abs=0.01)   # no jump onto the track ahead
+
+
+def test_plain_rover_fix_is_not_paired_with_a_gbas_master_track():
+    t, llas = fixes_east(100, status=2)
+    rt, rl = _rover_of(t, llas)
+    rl[:, 3] = 2
+    rl[50, 0] += 0.4 / M_PER_DEG_N                             # plain fix 0.4 m off: base in tolerance
+    rl[50, 3] = 0
+    ref = build_reference(t, llas, t, np.tile([10.0, 0.0], (100, 1)), window_end=5.0,
+                          point='base_link', rover_t=rt, rover_llas=rl)
+    assert np.abs(ref.pos[:, 1]).max() < 0.01                  # the plain fix did not turn base_link
