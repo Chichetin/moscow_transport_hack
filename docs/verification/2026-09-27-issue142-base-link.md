@@ -1,8 +1,9 @@
 # Выход `/result/position` в `base_link` по tf организаторов (#142, D-077)
 
-- Было: `origin/main` `506900c` (выход — трек антенны master, эталон eval — master).
-  Стало: ветка `worktree-142-base-link` после слияния с `origin/main` `ef47f9a` (#143) и правок
-  по ревью. Строка «master → master» ниже — это `ef47f9a` (выход с рычагом 0 на том же коде).
+- Было: `origin/main` `ef47f9a` = `35dc113` (#145 менял только документы): выход — трек
+  антенны master, эталон eval — master. Строка «master → master» ниже — это он (код ветки с
+  рычагом 0 совпадает с `main`).
+  Стало: ветка `worktree-142-base-link` `968e96a` (слита с `35dc113`, правки по ревью).
 - Среда: Arch Linux, Python 3.14 из `.venv`, `tools/eval`, данные — `dataset/data`. Проверка
   eval, не стенд ROS; стенд — отдельный раздел ниже.
 
@@ -55,7 +56,7 @@ master, при несовпадении в любую
 сторону — ~10 м along и pos3d. По 30618 along RMSE +0,03 м (2,102 → 2,131) при pos3d −0,12 м
 и drift −0,003 п.п.; главные метрики D-012 (медианы всех 26 bag) не хуже. За `base_link` говорят опубликованный tf и `child_frame_id`.
 Точка эталона судьи и начало его frame не подтверждены — вопрос в Q1 (#23); откат — оба ключа
-`0` в `params.yaml`.
+`0` в `params.yaml` и `REF_POINT = 'master'` в `tools/eval/tram_eval/bag.py`.
 
 Штатная команда на коммите ветки (эталон `base_link`, стресс):
 
@@ -63,8 +64,9 @@ master, при несовпадении в любую
 .venv/bin/python tools/eval/run_eval.py --split holdout --stress --jobs 10
 ```
 
-`f8c8cf9`: speed_rmse 0,034, drift_pct 0,014, along_rmse 2,330, pos3d_rmse 2,696; упавших
-bag 0, NaN/inf 0, `t != stamp входа` 0; стресс — 8 сценариев, падений 0.
+`968e96a`: speed_rmse 0,034, drift_pct 0,014, along_rmse 2,332, pos3d_rmse 2,682; упавших
+bag 0, NaN/inf 0, `t != stamp входа` 0; стресс — 8 сценариев, падений 0
+(`out/eval/968e96a-holdout/`).
 
 ## Два bag, где `base_link` сначала проигрывал
 
@@ -78,7 +80,7 @@ bag 0, NaN/inf 0, `t != stamp входа` 0; стресс — 8 сценарие
 ```bash
 .venv/bin/python -m pytest -q                               # хост: зелёный
 bash docker/dev.sh python3 -m pytest -q                     # numpy 1.21.5: зелёный
-bash docker/dev.sh colcon build && colcon test              # 3 пакета; 394 теста, 0 падений
+bash docker/dev.sh colcon build && colcon test              # 968e96a: 3 пакета; 407 тестов, 0 падений
 ```
 
 Высота по bag (выход `base_link` против эталона `base_link`): на bag со статусом 2 — медиана
