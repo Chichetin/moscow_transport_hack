@@ -102,7 +102,7 @@ def main():
         for depth, iters in ((4, 200), (6, 600)):
             m = CatBoostRegressor(depth=depth, iterations=iters, learning_rate=0.05, loss_function='RMSE',
                                   task_type='GPU' if a.gpu else 'CPU', verbose=0, random_seed=0,
-                                  border_count=64, l2_leaf_reg=10)
+                                  border_count=64, l2_leaf_reg=10, allow_writing_files=False)
             m.fit(tr[feats].values, tr.res.values)
             name = f'cb_d{depth}_{iters}'
             m.save_model(str(a.out / f'{name}_{day}.json'), format='json')

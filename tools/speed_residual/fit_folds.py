@@ -46,7 +46,7 @@ def main():
         tr = df[np.asarray(sel) & (np.abs(df.res.values) < LABEL_CLIP)]
         m = CatBoostRegressor(depth=a.depth, iterations=a.iters, learning_rate=0.05, loss_function='RMSE',
                               task_type='GPU' if a.gpu else 'CPU', verbose=0, random_seed=0,
-                              border_count=64, l2_leaf_reg=10)
+                              border_count=64, l2_leaf_reg=10, allow_writing_files=False)
         m.fit(tr[feats].values, tr.res_dt.values)
         path = a.out / f'd{a.depth}_{a.iters}_{name}.json'
         m.save_model(str(path), format='json')
