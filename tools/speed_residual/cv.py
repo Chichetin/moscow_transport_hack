@@ -19,6 +19,9 @@ import pandas as pd
 MODES = np.array(['accel', 'brake', 'stop', 'cruise'])
 LABEL_CLIP = 0.5     # m/s: |v_ref - v| above this is a skid/GNSS glitch, not a learnable bias
 LONG_ROWS = 3000     # bags with fewer matched rows are too short for a per-bag RMSE
+# columns the scripts add next to the features: a feature with one of these names would be
+# overwritten by the label (the 'r' leak of the first run)
+RESERVED = {'bag', 'day', 'v_ref', 'mode', 'res', 'res_dt', 'p', 'e0', 'e1', 't'}
 
 
 def load(rows: Path) -> tuple[pd.DataFrame, list[str]]:
@@ -26,7 +29,7 @@ def load(rows: Path) -> tuple[pd.DataFrame, list[str]]:
     for f in sorted(glob.glob(str(rows / '*.npz'))):
         d = np.load(f)
         feats = [str(x) for x in d['features']]
-        assert not {'bag', 'day', 'v_ref', 'mode', 'res'} & set(feats), 'feature name collides with a label column'
+        assert not RESERVED & set(feats), 'feature name collides with a label column'
         df = pd.DataFrame(d['X'], columns=feats)
         df['bag'], df['day'] = Path(f).stem, str(d['day'])
         df['v_ref'], df['mode'] = d['v_ref'], MODES[d['mode']]

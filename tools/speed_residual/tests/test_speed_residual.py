@@ -33,11 +33,11 @@ def cmd(t, notch):
     return CMD, SimpleNamespace(header=_hdr(t), position=notch)
 
 
-def cruise(t_end=5.0, kmh=36.0):
+def cruise(t_end=5.0, kmh=36.0, notch=1):
     msgs = []
     for k in range(int(t_end * 10)):
         t = 0.1 * k
-        msgs += [cmd(t, 1), wheel(FRONT, t, kmh), wheel(REAR, t, kmh), cmd(t + 0.05, 1)]
+        msgs += [cmd(t, notch), wheel(FRONT, t, kmh), wheel(REAR, t, kmh), cmd(t + 0.05, notch)]
     return msgs
 
 
@@ -90,3 +90,33 @@ def test_missing_history_is_the_sentinel():
     odo, tap = Odometry(PARAMS), FeatureTap()
     x = tap.observe(odo, odo.step(wheel(FRONT, 0.0, 36.0)))
     assert x[INDEX['wr']] == NAN and x[INDEX['n0']] == NAN and x[INDEX['sf1']] == NAN
+
+
+def test_nan_model_output_leaves_the_estimate_unchanged():
+    base = Odometry(PARAMS)
+    bad = CorrectedOdometry(Odometry(PARAMS), lambda x: float('nan'))
+    for raw in cruise(2.0):
+        b, c = base.step(raw), bad.step(raw)
+        if b is not None:
+            assert c.speed == b.speed
+
+
+def test_integrate_adds_the_correction_over_state_time_only_while_moving():
+    corr = 0.02
+    base = Odometry(PARAMS)
+    moving = CorrectedOdometry(Odometry(PARAMS), lambda x: corr, clip=0.03, integrate=True)
+    t_moving = None
+    for raw in cruise():
+        base.step(raw)
+        moving.step(raw)
+        if t_moving is None and moving.odo._v > 0.0:
+            t_moving = moving.odo._t
+    extra = moving.odo._distance - base._distance
+    # the correction of a step reaches the path over the next state-time step
+    assert extra == pytest.approx(corr * (moving.odo._t - t_moving), abs=corr * 0.1)
+    base = Odometry(PARAMS)
+    standing = CorrectedOdometry(Odometry(PARAMS), lambda x: corr, clip=0.03, integrate=True)
+    for raw in cruise(kmh=0.0, notch=-3):
+        base.step(raw)
+        standing.step(raw)
+    assert standing.odo._v == 0.0 and standing.odo._distance == base._distance == 0.0

@@ -165,7 +165,6 @@ class CorrectedOdometry:
         self.clip = clip
         self.integrate = integrate
         self.tap = FeatureTap()
-        self._t_prev = None
         self._corr = 0.0
 
     def step(self, raw):
@@ -178,7 +177,8 @@ class CorrectedOdometry:
                 self.odo._distance += self._corr * dt
         if est is None:
             return None
-        corr = max(-self.clip, min(self.clip, float(self.model(x))))
+        corr = float(self.model(x))
+        corr = max(-self.clip, min(self.clip, corr)) if math.isfinite(corr) else 0.0
         if est.speed + corr < 0.0:
             corr = -est.speed
         self._corr = corr if self.odo._v > 0.0 else 0.0

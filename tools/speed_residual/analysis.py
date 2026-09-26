@@ -20,6 +20,19 @@ def rmse(e) -> float:
     return float(np.sqrt(np.mean(np.square(e))))
 
 
+AUTOCORR_LAGS = (1, 10, 100)   # reference samples, ~0.1 / 1 / 10 s
+
+
+def structure(df):
+    """Autocorrelation of the residual inside bags and the share of its sum of squares by mode."""
+    for lag in AUTOCORR_LAGS:
+        ac = [np.corrcoef(g.res.values[:-lag], g.res.values[lag:])[0, 1]
+              for _, g in df.groupby('bag') if len(g) > lag + 10]
+        print(f'autocorr lag {lag}: median {np.nanmedian(ac):.3f}')
+    sse = (df.res ** 2).sum()
+    print('share of sum of squares by mode:', (df.groupby('mode').res.apply(lambda r: (r ** 2).sum()) / sse).round(3).to_dict())
+
+
 def oracles(df):
     """Per-bag least squares on its own GNSS: an upper bound, not a model."""
     rows = []
@@ -88,6 +101,7 @@ def main():
     a = ap.parse_args()
     df, feats = load(a.rows)
     df['t'] = np.concatenate([np.load(f)['t'] for f in sorted(a.rows.glob('*.npz'))])
+    structure(df)
     oracles(df)
     regimes(df, feats, a.models, a.tag, a.clip)
     tails(df)

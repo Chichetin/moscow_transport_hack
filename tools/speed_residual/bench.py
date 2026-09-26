@@ -51,6 +51,11 @@ def main():
         print(f'{name:18s} n={len(us)} mean {us.mean():6.1f} us  p50 {np.median(us):6.1f}  p99 {np.quantile(us, 0.99):7.1f}  max {us.max():8.1f}')
     print(f'model {Path(a.model).name}: {len(model.trees)} trees, Python objects ~{model_bytes / 1e6:.1f} MB, '
           f'JSON {Path(a.model).stat().st_size / 1e6:.1f} MB')
+    check = Path(a.model[:-len('.json')] + '_check.npy')   # CatBoost predictions saved by fit_folds.py
+    if check.exists():
+        rows = np.load(check)
+        diff = max(abs(model(list(x[:-1])) - x[-1]) for x in rows)
+        print(f'pure-Python vs CatBoost on {len(rows)} rows: max |diff| {diff:.2e} m/s')
 
 
 if __name__ == '__main__':
