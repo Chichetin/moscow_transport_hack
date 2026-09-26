@@ -1,6 +1,7 @@
 """Explicit stand paths must win over defaults copied into a worktree .env."""
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -41,7 +42,10 @@ def test_explicit_data_dir_overrides_dotenv(tmp_path):
     env = dict(os.environ, TRAM_DATA_DIR=_bash_path(data), FAKE_DOCKER_MARKER=str(marker),
                PATH=os.pathsep.join([str(fake_bin), os.environ['PATH']]))
 
-    result = subprocess.run(['bash', str(SCRIPT), 'stress_bag', '1.0'], cwd=tmp_path,
+    # shutil.which, not a bare 'bash': on Windows CreateProcess searches System32 before
+    # PATH, so with WSL installed it starts WSL's bash.exe, which re-parses the argument
+    # through its shell and eats the backslashes of the script path (#130).
+    result = subprocess.run([shutil.which('bash'), str(SCRIPT), 'stress_bag', '1.0'], cwd=tmp_path,
                             env=env, capture_output=True, text=True)
 
     assert result.returncode == 17
