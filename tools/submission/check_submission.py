@@ -38,6 +38,18 @@ MARKER = re.compile(r'\b(TBD|TODO|FIXME|XXX)\b')
 ROW = re.compile(r'^\|\s*([TA]\d+)\s*\|')
 
 
+def ensure_utf8_stdout() -> None:
+    """Console codepage must not crash the gate on its own Cyrillic/emoji output (#124).
+
+    `print()` writes through `sys.stdout`, whose encoding on Windows defaults to the
+    console codepage (e.g. cp1251), not UTF-8; `check_compliance`'s FAIL detail contains
+    U+2705 and raises `UnicodeEncodeError` there without this. `errors='replace'` keeps
+    the verdict itself readable even if a few glyphs render as '?'.
+    """
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+
 def _is_gate_umbrella(issue: dict) -> bool:
     labels = issue.get('labels') or []
     return (issue.get('number') == GATE_ISSUE
@@ -76,7 +88,7 @@ def check_layouts(out: Path, commit: str) -> tuple[str, str]:
 
 def check_tree(root: Path) -> tuple[str, str]:
     res = subprocess.run(['git', '-C', str(root), 'status', '--porcelain', '--untracked-files=no'],
-                         capture_output=True, text=True)
+                         capture_output=True, text=True, encoding='utf-8')
     if res.returncode != 0:
         return UNVERIFIED, 'git status не отработал'
     changed = res.stdout.split('\n')
@@ -136,7 +148,7 @@ def open_blockers() -> list | None:
     try:
         res = subprocess.run(['gh', 'issue', 'list', '--label', 'blocker', '--state', 'open',
                               '--limit', '100', '--json', 'number,title,labels'],
-                             capture_output=True, text=True, timeout=30, cwd=ROOT)
+                             capture_output=True, text=True, encoding='utf-8', timeout=30, cwd=ROOT)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return json.loads(res.stdout) if res.returncode == 0 else None
@@ -159,10 +171,11 @@ def exit_code(rows: list[tuple[str, str, str]]) -> int:
 
 
 def main() -> int:
+    ensure_utf8_stdout()
     root = Path(subprocess.run(['git', 'rev-parse', '--show-toplevel'], capture_output=True,
-                               text=True, check=True).stdout.strip())
+                               text=True, encoding='utf-8', check=True).stdout.strip())
     commit = subprocess.run(['git', '-C', str(root), 'rev-parse', 'HEAD'], capture_output=True,
-                            text=True, check=True).stdout.strip()
+                            text=True, encoding='utf-8', check=True).stdout.strip()
     rows = [('blockers', *check_blockers(open_blockers())),
             ('layouts', *check_layouts(out_dir(root), commit)),
             ('tree', *check_tree(root)),
