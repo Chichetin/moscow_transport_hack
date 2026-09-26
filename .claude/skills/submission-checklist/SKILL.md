@@ -75,9 +75,41 @@ bash docker/jury-stand.sh <holdout bag> 1.0       # сеть выключена,
       без подсказок и без файлов из рабочей копии. Главный риск сдачи — «у организаторов
       не запустилось», а не точность модели.
 
-- [ ] ссылки на файлы — на ветку `main` / тег сдачи, открываются у человека без доступа?
-      (репозиторий приватный: форма жюри требует ссылок — решить открыть доступ или
-      приложить экспорт; см. `HANDOFF.md`, блокеры)
+- [ ] шесть ссылок формы на `main` открываются без входа в GitHub; проверить по процедуре
+      ниже. #41 закрывается только после шести успешных анонимных запросов.
+
+### Ссылки для шести полей формы (#41, D-063)
+
+В день сдачи **владелец открывает основной репозиторий**
+`Chichetin/moscow_transport_hack`. Ссылки ведут на `main`, поэтому перед заполнением формы
+убедиться, что #19 и #20 влиты и документы на `main` соответствуют commit сдачи.
+
+| Поле | Вставить в форму |
+|---|---|
+| 1. Пакеты ROS 2 Humble | `https://github.com/Chichetin/moscow_transport_hack/tree/main/src` |
+| 2. Инструкция жюри | `https://github.com/Chichetin/moscow_transport_hack/blob/main/README.md` |
+| 3. Математическая модель | `https://github.com/Chichetin/moscow_transport_hack/blob/main/docs/model.md` |
+| 4. Допущения и параметры | `https://github.com/Chichetin/moscow_transport_hack/blob/main/docs/parameters.md` |
+| 5. Точность и быстродействие | `https://github.com/Chichetin/moscow_transport_hack/blob/main/docs/accuracy.md` |
+| 6. Ограничения и план развития | `https://github.com/Chichetin/moscow_transport_hack/blob/main/docs/roadmap.md` |
+
+После действия владельца проверить **каждую** ссылку в новом окне без входа в GitHub
+(режим инкогнито): страница открывается без запроса авторизации, показывает нужный каталог
+или документ и не выдаёт 404. Независимая проверка без GitHub CLI, токена и cookie:
+
+```bash
+for path in tree/main/src blob/main/README.md blob/main/docs/model.md \
+            blob/main/docs/parameters.md blob/main/docs/accuracy.md \
+            blob/main/docs/roadmap.md; do
+  curl -q -L -sS --netrc-file /dev/null -o /dev/null \
+    -w "%{http_code} %{url_effective}\n" \
+    "https://github.com/Chichetin/moscow_transport_hack/$path"
+done
+```
+
+Ожидается шесть строк `200` с адресами этого репозитория, без перенаправления на вход.
+Записать дату, commit `origin/main` и шесть результатов в #41, затем закрыть #41.
+До этого 404 означает, что ссылки для жюри ещё не готовы.
 
 ## 3. Честность цифр
 
