@@ -138,25 +138,31 @@ class Preprocessor:
 
     def _wheel(self, topic: str, t: float, msg) -> Optional[WheelSample]:
         kmh = msg.velocity
-        if not _finite_number(kmh) or kmh < 0.0:
+        if not _finite_number(kmh):
             return None
         if not self._fresh(topic, t):
             return None
+        # A negative reading is a slow roll-back or noise around standstill (#111, D-064):
+        # 0 m/s, not a drop -- dropping keeps only the positive half of the noise.
+        negative = kmh < 0.0
         bogie = 'front' if topic == FRONT_TOPIC else 'rear'
         scale = (self.p.vehicle.wheel_scale_front if bogie == 'front'
                  else self.p.vehicle.wheel_scale_rear)
         speed = kmh * self.p.input.wheel_speed_scale * scale     # the only km/h -> m/s site
+        if negative:
+            speed = 0.0
         if speed > self.p.input.max_wheel_speed_mps:
             return None                        # beyond any tram speed: glitch (also the first)
         prev = self._wheel_prev.get(bogie)
-        if prev is not None and speed != 0.0:
+        if prev is not None and (speed != 0.0 or negative):
             dt = t - prev.t
             if dt > 0 and abs(speed - prev.speed) / dt > self.p.input.max_wheel_accel_mps2:
                 # Faster than physically possible. The one exception is a bogie stuck at
                 # exactly 0 (trap 8) that jumps back to the real speed when it gets unstuck
                 # -- the slip detector needs that reading (D-027). It is told from a glitch
                 # at standstill (#73) by the other bogie: fresh and reading the same speed.
-                if prev.speed != 0.0 or not self._other_agrees(bogie, t, speed):
+                # A clamped negative is not a stuck bogie: in motion it is a glitch.
+                if negative or prev.speed != 0.0 or not self._other_agrees(bogie, t, speed):
                     return None
         sample = WheelSample(t=t, bogie=bogie, speed=speed)
         self._wheel_prev[bogie] = sample

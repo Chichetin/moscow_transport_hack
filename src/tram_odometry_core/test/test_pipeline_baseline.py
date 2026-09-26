@@ -121,11 +121,18 @@ def test_non_monotonic_stamp_dropped_and_no_rollback():
     assert nxt.distance >= est.distance
 
 
-@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf'), -5.0])
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), -float('inf')])
 def test_bad_wheel_value_dropped_without_crash(bad):
     odo = Odometry(PARAMS)
     assert odo.step(wheel(FRONT, 1.0, bad)) is None
     assert odo.step(wheel(FRONT, 1.1, KMH_36)).speed == pytest.approx(10.0)
+
+
+def test_negative_wheel_at_standstill_is_zero_speed():
+    """#111: a negative reading (slow roll-back, noise around 0) is 0 m/s, not dropped."""
+    odo = Odometry(PARAMS)
+    est = odo.step(wheel(FRONT, 1.0, -0.3))
+    assert est is not None and est.speed == 0.0
 
 
 def test_garbage_input_dropped():
