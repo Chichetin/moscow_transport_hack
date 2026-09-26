@@ -81,3 +81,12 @@ def test_random_samples_are_reproducible_new_and_on_the_grid():
     keys = [tune.key_of(c) for c in a]
     assert len(set(keys)) == 20 and tune.key_of(start) not in keys
     assert all(c[k] in tune.GRID[k] for c in a for k in tune.GRID)
+
+
+def test_random_samples_cover_a_small_grid_without_repeats_or_the_start(monkeypatch):
+    monkeypatch.setattr(tune, 'GRID', {'filter.q_accel': (0.5, 1.0), 'filter.r_wheel': (0.05, 0.1)})
+    start = {'filter.q_accel': 0.5, 'filter.r_wheel': 0.05}
+    got = tune.sample(start, 10, seed=18)
+    assert sorted(tune.key_of(c) for c in got) == sorted(
+        tune.key_of({'filter.q_accel': a, 'filter.r_wheel': r})
+        for a in (0.5, 1.0) for r in (0.05, 0.1) if (a, r) != (0.5, 0.05))
