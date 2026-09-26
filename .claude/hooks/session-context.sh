@@ -34,7 +34,7 @@ fi
 blockers="$(printf '%s' "$issues" | jq -r \
   '.[] | select(any(.labels[]; .name == "blocker")) | "  #\(.number) \(.title)"')"
 if [ -n "$blockers" ]; then
-  echo "[blocker] открыты — сдача красная, пока открыт хоть один (D-025). Можешь закрыть — закрой раньше своей задачи:"
+  echo "[blocker] открыты — сдача красная, пока открыт хоть один (D-025; кроме зонтичной #96 с меткой gate — D-065). Можешь закрыть — закрой раньше своей задачи:"
   printf '%s\n' "$blockers"
 fi
 
