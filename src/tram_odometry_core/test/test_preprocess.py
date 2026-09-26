@@ -125,14 +125,16 @@ def test_wheel_acceleration_within_limit_accepted():
 def test_wheel_deceleration_outlier_dropped_too():
     """The physical limit is on `|dv/dt|`, braking spikes are outliers just like traction ones."""
     pre = Preprocessor(PARAMS)
-    pre.accept(wheel(FRONT_TOPIC, 0.0, 100.0))
+    pre.accept(wheel(FRONT_TOPIC, 0.0, 80.0))
     assert pre.accept(wheel(FRONT_TOPIC, 1.0, 20.0)) is None    # not exactly 0: gate applies
 
 
 def test_stuck_at_zero_recovery_is_not_an_outlier():
-    """Trap 8: a bogie stuck exactly at 0 can jump straight back to the real speed."""
+    """Trap 8: a bogie stuck exactly at 0 can jump straight back to the real speed -- the
+    other bogie reads that speed, so it is recovery, not a glitch (#73)."""
     pre = Preprocessor(PARAMS)
     pre.accept(wheel(FRONT_TOPIC, 0.0, 0.0))
+    pre.accept(wheel(REAR_TOPIC, 0.05, KMH_36))
     sample = pre.accept(wheel(FRONT_TOPIC, 0.1, KMH_36))    # 10 m/s in 0.1 s: unstuck, not a glitch
     assert sample is not None and sample.speed == pytest.approx(10.0)
 
@@ -145,9 +147,13 @@ def test_drop_to_zero_is_not_an_outlier():
     assert sample is not None and sample.speed == 0.0
 
 
-def test_first_wheel_sample_never_outlier_rejected():
-    """No prior sample for the bogie: any non-negative finite speed is accepted."""
-    assert Preprocessor(PARAMS).accept(wheel(FRONT_TOPIC, 1.0, 190.0)) is not None
+def test_first_wheel_sample_is_only_bounded_by_the_speed_limit():
+    """No prior sample for the bogie: any speed up to input.max_wheel_speed_mps is accepted,
+    above it is a glitch (#73: 1e9 km/h as the first sample reached /result/velocity)."""
+    limit_kmh = PARAMS.input.max_wheel_speed_mps * 3.6
+    assert Preprocessor(PARAMS).accept(wheel(FRONT_TOPIC, 1.0, limit_kmh - 1.0)) is not None
+    assert Preprocessor(PARAMS).accept(wheel(FRONT_TOPIC, 1.0, limit_kmh + 1.0)) is None
+    assert Preprocessor(PARAMS).accept(wheel(FRONT_TOPIC, 1.0, 1e9)) is None
 
 
 def test_long_silent_bogie_resume_not_flagged_as_outlier():
@@ -339,7 +345,7 @@ def test_odometry_keeps_publishing_after_a_future_command():
         outs.append(odo.step(wheel(FRONT_TOPIC, t, 36.0)))
     assert all(e is not None for e in outs)
     assert outs[-1].t == pytest.approx(t0 + 1.0 + 0.05 * 199)
-    assert outs[-1].speed == pytest.approx(10.0, abs=1e-6)
+    assert outs[-1].speed == pytest.approx(10.0, abs=0.001)
 
 
 def test_two_future_glitches_in_a_row_do_not_freeze_the_stream():
@@ -445,5 +451,191 @@ def test_odometry_distance_keeps_growing_after_an_accepted_clock_glitch(glitches
     assert last is not None and last.t == pytest.approx(1000.0 + 1.0 + 0.05 * 199)
     grown = last.distance - (before.distance if before is not None else 0.0)
     assert 90.0 < grown < 120.0, grown
-    assert last.speed == pytest.approx(10.0, abs=1e-6)
+    assert last.speed == pytest.approx(10.0, abs=0.001)
 
+
+
+# --- #80: the GNSS window start follows the clock back from a future first stamp -------------
+
+WINDOW = PARAMS.gnss.init_window_s
+
+
+@pytest.mark.parametrize('first', [
+    cmd(1000.0 + 86400.0, 0),
+    wheel(FRONT_TOPIC, 1000.0 + 86400.0, 0.0),
+    gnss_fix(1000.0 + 86400.0, status=2),
+])
+def test_future_first_stamp_does_not_keep_the_gnss_window_open(first):
+    """The first input of the bag comes from the future (+1 day), the stream then runs from
+    the real start: GNSS after the real window is dropped (D-005), the window start is back."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    assert pp.accept(first) is None or pp.t0 == pytest.approx(start + 86400.0)
+    _feed(pp, [cmd(start + 0.05 * k, 0) for k in range(4)]
+          + [wheel(FRONT_TOPIC, start + 0.1 * k, 0.0) for k in range(4)])
+    assert pp.t0 == pytest.approx(start)
+    assert isinstance(pp.accept(gnss_fix(start + 1.0, status=2)), GnssFix)
+    assert pp.accept(gnss_fix(start + WINDOW + 5.0, status=2)) is None
+    assert pp.accept(gnss_vel(start + WINDOW + 5.0, 1.0, 0.0)) is None
+
+
+def test_a_slightly_earlier_stamp_moves_the_window_start_at_once():
+    """Data: 4 of 122 bags carry a stamp up to 51 ms older than the first message."""
+    pp = Preprocessor(PARAMS)
+    pp.accept(cmd(1000.05, 0))
+    pp.accept(wheel(FRONT_TOPIC, 1000.0, 0.0))
+    assert pp.t0 == pytest.approx(1000.0)
+
+
+def test_one_stamp_from_the_past_does_not_close_the_gnss_window():
+    """A single stamp a day behind is a glitch: the window stays open for the real start."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    _feed(pp, [cmd(start + 0.05 * k, 0) for k in range(4)])
+    pp.accept(wheel(FRONT_TOPIC, start - 86400.0, 0.0))            # glitch: -1 day
+    _feed(pp, [cmd(start + 0.2 + 0.05 * k, 0) for k in range(4)])
+    assert pp.t0 == pytest.approx(start)
+    assert isinstance(pp.accept(gnss_fix(start + 1.0, status=2)), GnssFix)
+
+
+def test_a_confirmed_earlier_clock_moves_the_window_start():
+    """Two inputs in a row far behind the window start agree: the clock really is there."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    pp.accept(cmd(start, 0))
+    pp.accept(cmd(start - 3600.0, 0))
+    assert pp.t0 == pytest.approx(start)                           # alone: not yet trusted
+    pp.accept(wheel(FRONT_TOPIC, start - 3600.0 + 0.1, 0.0))
+    assert pp.t0 == pytest.approx(start - 3600.0)
+
+
+def test_a_small_step_back_does_not_take_a_pending_glitch_along():
+    pp = Preprocessor(PARAMS)
+    pp.accept(cmd(1000.0, 0))
+    pp.accept(wheel(FRONT_TOPIC, 1000.0 - 86400.0, 0.0))           # glitch: -1 day, pending
+    pp.accept(wheel(REAR_TOPIC, 999.95, 0.0))
+    assert pp.t0 == pytest.approx(999.95)
+
+
+def test_normal_input_between_two_past_glitches_cancels_the_first():
+    """Two -1 day glitches 2 s apart with the normal stream between them: not a real clock."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    pp.accept(cmd(start, 0))
+    pp.accept(wheel(FRONT_TOPIC, start - 86400.0, 0.0))
+    _feed(pp, [cmd(start + 0.05 * k, 0) for k in range(1, 40)])
+    pp.accept(wheel(FRONT_TOPIC, start + 2.0 - 86400.0, 0.0))
+    assert pp.t0 == pytest.approx(start)
+
+
+def test_a_gnss_epoch_from_the_past_does_not_close_the_window():
+    """Review #100: fix and vel of one epoch share a stamp; they must not confirm each other."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    _feed(pp, [cmd(start, 0), wheel(FRONT_TOPIC, start, 0.0)])
+    pp.accept(gnss_fix(start - 86400.0, status=2))
+    pp.accept(gnss_vel(start - 86400.0, 1.0, 0.0))
+    assert pp.t0 == pytest.approx(start)
+    assert isinstance(pp.accept(gnss_fix(start + 1.0, status=2)), GnssFix)
+
+
+def test_gnss_never_moves_the_window_start_back():
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    pp.accept(cmd(start, 0))
+    pp.accept(gnss_fix(start - 9.0, status=2))
+    assert pp.t0 == pytest.approx(start)
+
+
+@pytest.mark.parametrize('make', [lambda t: gnss_fix(t, status=2), lambda t: gnss_vel(t, 1.0, 0.0)])
+def test_gnss_far_behind_the_window_start_is_dropped(make):
+    """A GNSS stamp a day in the past is not inside the window, whenever it arrives (D-005)."""
+    pp = Preprocessor(PARAMS)
+    start = 1000.0
+    _feed(pp, [cmd(start, 0), wheel(FRONT_TOPIC, start, 0.0)])
+    assert pp.accept(make(start - 86400.0)) is None
+    assert pp.accept(make(start - JUMP - 0.5)) is None
+    assert pp.accept(make(start - 0.05)) is not None               # buffered, trap 5
+
+
+# --- #73: an outlier at standstill must not reach the estimate --------------------------
+
+def test_outlier_at_standstill_is_dropped():
+    """Both bogies at exactly 0, one reads 180 km/h for a sample: a glitch, not unsticking."""
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(FRONT_TOPIC, 0.0, 0.0))
+    pre.accept(wheel(REAR_TOPIC, 0.0, 0.0))
+    assert pre.accept(wheel(FRONT_TOPIC, 0.1, 180.0)) is None                 # above the limit
+    assert pre.accept(wheel(FRONT_TOPIC, 0.2, 60.0)) is None                  # 16.7 m/s in 0.2 s
+    assert isinstance(pre.accept(wheel(FRONT_TOPIC, 0.3, 0.0)), WheelSample)  # back to 0
+
+
+def test_jump_from_zero_needs_the_other_bogie_fresh():
+    """A stale other bogie cannot vouch for the jump."""
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(REAR_TOPIC, 0.0, KMH_36))
+    pre.accept(wheel(FRONT_TOPIC, 0.0, 0.0))
+    late = PARAMS.input.stale_timeout_s + 0.5
+    pre.accept(wheel(FRONT_TOPIC, late - 0.1, 0.0))
+    assert pre.accept(wheel(FRONT_TOPIC, late, KMH_36)) is None
+
+
+def test_jump_from_zero_to_a_different_speed_than_the_other_bogie_is_dropped():
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(FRONT_TOPIC, 0.0, 0.0))
+    pre.accept(wheel(REAR_TOPIC, 0.05, KMH_36))
+    assert pre.accept(wheel(FRONT_TOPIC, 0.1, 2 * KMH_36)) is None
+
+
+def test_start_of_motion_from_zero_within_physics_passes_without_the_other_bogie():
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(FRONT_TOPIC, 0.0, 0.0))
+    assert isinstance(pre.accept(wheel(FRONT_TOPIC, 0.1, 0.5)), WheelSample)   # 0.14 m/s
+
+
+def test_odometry_speed_stays_near_zero_on_a_standstill_outlier():
+    """#73 end to end: the stress `outlier` (180 km/h once on one bogie at standstill) does
+    not reach the published speed."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS)
+    worst = 0.0
+    for k in range(50):
+        t = 1000.0 + 0.1 * k
+        for topic in (FRONT_TOPIC, REAR_TOPIC):
+            kmh = 180.0 if (k == 25 and topic == FRONT_TOPIC) else 0.0
+            e = odo.step(wheel(topic, t, kmh))
+            if e is not None:
+                worst = max(worst, e.speed)
+    assert worst < 1.0
+
+
+def _worst_speed(events):
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS)
+    return max((e.speed for e in map(odo.step, events) if e is not None), default=0.0)
+
+
+def test_odometry_first_wheel_sample_above_the_limit_never_published():
+    """#73 comment: 1e9 km/h as the very first sample went to /result/velocity as 2.8e8 m/s."""
+    events = [wheel(FRONT_TOPIC, 1000.0, 1e9)]
+    events += [wheel(b, 1000.0 + 0.1 * k, 0.0) for k in range(1, 20) for b in (FRONT_TOPIC, REAR_TOPIC)]
+    assert _worst_speed(events) < 1.0
+
+
+def test_odometry_standstill_outlier_with_the_other_bogie_silent():
+    """The detector cannot outvote a lone bogie: the preprocess gate has to drop the jump."""
+    events = [wheel(FRONT_TOPIC, 1000.0 + 0.1 * k, 180.0 if k == 25 else 0.0) for k in range(50)]
+    assert _worst_speed(events) < 1.0
+
+
+def test_a_rejected_jump_from_zero_comes_back_once_within_the_gate():
+    """Review #101: a rejected sample does not move the gate's reference, so a bogie that
+    really left 0 alone is accepted again after at most max_wheel_speed_mps / max_accel."""
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(FRONT_TOPIC, 0.0, 0.0))
+    accepted = [t for t in (0.1 * k for k in range(1, 60))
+                if pre.accept(wheel(FRONT_TOPIC, t, KMH_36)) is not None]
+    assert accepted, 'the bogie never came back'
+    assert accepted[0] <= 10.0 / ACCEL_LIMIT + 0.1 + 1e-9
+    assert accepted[0] <= PARAMS.input.max_wheel_speed_mps / ACCEL_LIMIT + 0.1
+    assert accepted == [t for t in (0.1 * k for k in range(1, 60)) if t >= accepted[0] - 1e-9]

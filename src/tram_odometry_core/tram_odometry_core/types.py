@@ -96,6 +96,7 @@ class InputParams:
     wheel_speed_scale: float
     stale_timeout_s: float
     max_wheel_accel_mps2: float
+    max_wheel_speed_mps: float
     max_stamp_jump_s: float
 
 
@@ -139,6 +140,8 @@ class FilterParams:
 class SlipParams:
     front_rear_threshold_mps: float
     model_residual_threshold_mps2: float
+    noise_accel_mps2: float
+    noise_hold_s: float
 
 
 @dataclass(frozen=True)
@@ -273,6 +276,8 @@ def load_params(path) -> Params:
         raise KeyError("params file must contain '/**' -> 'ros__parameters'") from None
     params = _build(Params, raw, 'params')
     _validate_drive(params.drive)
+    if not (params.input.max_wheel_speed_mps > 0):
+        raise ValueError('input.max_wheel_speed_mps must be positive')
     if not (params.input.max_stamp_jump_s > 0):
         raise ValueError('input.max_stamp_jump_s must be positive')
     _validate_filter(params.filter)
