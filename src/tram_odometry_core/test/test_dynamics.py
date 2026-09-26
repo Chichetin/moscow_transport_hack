@@ -64,7 +64,7 @@ def test_invalid_speed_is_rejected(speed):
 
 def test_calibrated_tables_of_params_yaml():
     """D-033 numbers: neutral is drag only, full traction at 5 m/s is the table row, full
-    brake is the identified adhesion limit."""
+    brake is the table row capped by the adhesion limit (the limit is not below it, D-070)."""
     d = BASE.drive
     assert accel(0, 5., BASE) == pytest.approx(-BASE.resistance.c0)
     width = len(d.speed_grid_mps)
@@ -73,7 +73,9 @@ def test_calibrated_tables_of_params_yaml():
                    d.traction_power_w_per_kg / 5.)
     assert accel(15, 5., BASE) == pytest.approx(expected - BASE.resistance.c0)
     assert 0.5 < accel(15, 5., BASE) < d.adhesion_accel_mps2
-    assert accel(-15, 12., BASE) == pytest.approx(-d.adhesion_accel_mps2 - BASE.resistance.c0)
+    brake = float(np.interp(12., d.speed_grid_mps, d.brake_accel_table[15 * width:16 * width]))
+    assert brake <= d.adhesion_accel_mps2
+    assert accel(-15, 12., BASE) == pytest.approx(-brake - BASE.resistance.c0)
 
 
 def test_negative_response_delay_is_rejected():

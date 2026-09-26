@@ -67,7 +67,7 @@ def test_estimate_filter_diagnostic_is_optional():
 
 
 def test_filter_pair_and_scale_parameters_have_their_documented_values():
-    # D-062: moved out of SpeedFilter unchanged; the values are the constants of PR #104
+    # D-073: moved out of SpeedFilter unchanged; the values are the constants of PR #104
     f = T.load_params(PARAMS_YAML).filter
     assert (f.bias_release_speed_mps, f.pair_window_s, f.departure_slack_mps,
             f.departure_var_factor) == (0.5, 0.02, 0.05, 9.0)
