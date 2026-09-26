@@ -420,7 +420,7 @@ def test_fast_tram_past_the_side_track_start_takes_it_and_stays_on_it():
     x, y, _, _, _ = tr.advance(70.0, 7.0)        # 30 m past the side track start
     assert math.hypot(x - 40.0, y) == pytest.approx(30.0, abs=0.1)
     assert y < -10.0                             # off branch 0, on the side track
-    far = tr.advance(400.0, 2.0)                 # slow again: still there, up to its dead end
+    far = tr.advance(195.0, 2.0)                 # slow again: still there, 5 m past its dead end
     assert far[:2] == pytest.approx((80.0, -130.0), abs=0.1)
 
 
@@ -436,3 +436,34 @@ def test_side_switch_keeps_the_along_track_variance():
     before = tr._var_along(70.0)
     tr.advance(70.0, 7.0)
     assert tr._var_along(70.0) == pytest.approx(before)
+
+
+@pytest.mark.parametrize('speed', [math.nan, math.inf, -math.inf])
+def test_non_finite_speed_never_takes_the_side_track(speed):
+    tr = _depot_tracker()
+    assert tr.advance(70.0, speed)[:2] == pytest.approx((70.0, 0.0), abs=0.1)
+
+
+def test_running_past_the_side_dead_end_goes_back_to_the_default_path():
+    """A false switch must not freeze the estimate at the dead end: the side track is 40+100 m
+    long, so 30 m of path beyond its end means the tram was on the loop all along."""
+    tr = _depot_tracker()
+    tr.advance(70.0, 7.0)                          # switched: 30 m along the side track
+    side_len = tr._s[3][-1]
+    at_end = tr.advance(40.0 + side_len + 29.0, 3.0)
+    assert at_end[:2] == pytest.approx((80.0, -130.0), abs=0.1)   # still waiting at its end
+    back = tr.advance(40.0 + side_len + 31.0, 3.0)
+    default = _depot_tracker().advance(40.0 + side_len + 31.0, 3.0)
+    assert back[:2] == pytest.approx(default[:2], abs=1e-6)
+
+
+@pytest.mark.parametrize('key, value', [('side_speed_mps', 0.0), ('side_min_m', 60.0),
+                                        ('side_overrun_m', 0.0)])
+def test_load_params_rejects_bad_side_keys(tmp_path, key, value):
+    text = (ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml').read_text(encoding='utf-8')
+    import re
+    text = re.sub(rf'(\n\s+{key}:\s*)[-0-9.]+', rf'\g<1>{value}', text)
+    path = tmp_path / 'params.yaml'
+    path.write_text(text, encoding='utf-8')
+    with pytest.raises(ValueError, match=key):
+        load_params(path)
