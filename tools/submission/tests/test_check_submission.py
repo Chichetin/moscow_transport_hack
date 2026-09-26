@@ -108,6 +108,22 @@ def test_open_blockers_decodes_gh_output_as_utf8(monkeypatch):
     assert seen['kwargs'].get('encoding') == 'utf-8'
 
 
+# --- tree
+
+def test_check_tree_decodes_git_status_as_utf8(monkeypatch, tmp_path):
+    """git always emits UTF-8; a non-ASCII path in `git status` must not depend on the
+    console's locale encoding either (#124, same class of bug as open_blockers)."""
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen['kwargs'] = kwargs
+        return type('R', (), {'returncode': 0, 'stdout': ''})()
+
+    monkeypatch.setattr(cs.subprocess, 'run', fake_run)
+    cs.check_tree(tmp_path)
+    assert seen['kwargs'].get('encoding') == 'utf-8'
+
+
 # --- layouts report
 
 def test_missing_report_for_head_fails(tmp_path):

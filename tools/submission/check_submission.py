@@ -43,8 +43,9 @@ def ensure_utf8_stdout() -> None:
 
     `print()` writes through `sys.stdout`, whose encoding on Windows defaults to the
     console codepage (e.g. cp1251), not UTF-8; `check_compliance`'s FAIL detail contains
-    U+2705 and raises `UnicodeEncodeError` there without this. `errors='replace'` keeps
-    the verdict itself readable even if a few glyphs render as '?'.
+    U+2705 and raises `UnicodeEncodeError` there without this. `errors='replace'` is a
+    defensive fallback, not the point: encoding *to* UTF-8 can represent any character,
+    so it only fires on an already-broken surrogate -- the fix is the target encoding.
     """
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
