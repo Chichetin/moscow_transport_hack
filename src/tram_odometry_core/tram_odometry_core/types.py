@@ -176,9 +176,9 @@ class PositionParams:
     stop_min_s: float
     stop_snap_max_m: float
     stop_std_m: float
-    scale_alpha: float
     scale_max_dev: float
     scale_min_arc_m: float
+    relock_sigma: float
 
 
 @dataclass(frozen=True)
@@ -302,6 +302,7 @@ def load_params(path) -> Params:
     _validate_filter(params.filter)
     _validate_side(params.position)
     _validate_base_link(params.position)
+    _validate_scale(params.position)
     return params
 
 
@@ -323,6 +324,16 @@ def _validate_base_link(position: PositionParams) -> None:
         raise ValueError('position.antenna_height_m must be finite')
     if not (0 <= position.scale_max_dev < 1):
         raise ValueError('position.scale_max_dev must satisfy 0 <= dev < 1')
+
+
+def _validate_scale(position: PositionParams) -> None:
+    """The online wheel scale is a Kalman state (#154): its prior and the stop place variance
+    must be positive, or a gain is 0/0."""
+    for name in ('along_drift_frac', 'stop_std_m', 'relock_sigma'):
+        if not (getattr(position, name) > 0):
+            raise ValueError(f'position.{name} must be positive')
+    if not (position.scale_min_arc_m >= 0):
+        raise ValueError('position.scale_min_arc_m must be nonnegative')
 
 
 def _validate_filter(filt: FilterParams) -> None:

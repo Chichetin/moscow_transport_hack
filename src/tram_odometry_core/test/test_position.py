@@ -600,7 +600,9 @@ def test_base_link_goes_back_with_master_when_the_side_switch_is_undone():
     assert back[:2] == pytest.approx(default[:2], abs=1e-6)
 
 
-@pytest.mark.parametrize('key, value', [('base_ahead_m', -1.0), ('scale_max_dev', 1.0)])
+@pytest.mark.parametrize('key, value', [('base_ahead_m', -1.0), ('scale_max_dev', 1.0),
+                                        ('along_drift_frac', 0.0), ('stop_std_m', 0.0),
+                                        ('relock_sigma', 0.0), ('scale_min_arc_m', -1.0)])
 def test_load_params_rejects_bad_base_link_keys(tmp_path, key, value):
     import re
     text = (ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml').read_text(encoding='utf-8')

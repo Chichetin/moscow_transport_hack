@@ -14,8 +14,12 @@ shifted by the run's median height offset from the map in the window.
 
 Stop places (D-034): a stop of the tram (the pipeline detects it) close to a stop place of the
 map moves s to that place, weighted by the variances, and resets the along-track variance.
-Between two snaps on one branch the ratio of map arc to wheel path updates a slow online wheel
-scale. Both use the map only, never GNSS after the window.
+The online wheel scale is a scalar Kalman state (#154): its reference is the GNSS anchor, then
+the last place it was measured at; a snap on the same branch at least `scale_min_arc_m` of map
+arc on measures the ratio of map arc to wheel path with the variance of both ends over the
+path squared, so long arcs weigh more. A stop past the gate is a signal, unless it is the second
+of two misses on one side that grow with the path as a scale error does: then s locks onto the
+place again. All of it uses the map only, never GNSS after the window.
 """
 import math
 from typing import Optional, Tuple
@@ -70,6 +74,11 @@ class PathTracker:
                        for k in range(len(self._map))]
         self._var0 = 0.0                      # along-track variance at the anchor, m^2
         self._scale = 1.0                     # online wheel scale: map arc per metre of wheel path
+        self._scale_var = self.p.along_drift_frac ** 2   # its variance: the prior is trap 2's spread
+        # reference of the scale: (branch, arc from the anchor to it in m, path there, variance
+        # of the point in m^2); the anchor first, then the place of the last scale update
+        self._ref: Optional[Tuple[int, float, float, float]] = None
+        self._miss: Optional[Tuple[float, float]] = None   # path, place - s of the last stop past the gate
         self._last_snap: Optional[Tuple[int, float, float]] = None   # branch, place s, distance
         self._master = None                   # (ECEF, distance) of the last accepted master fix
         self._rover = None                    # (ECEF, status) of the last accepted rover fix
@@ -142,8 +151,8 @@ class PathTracker:
         after all: back to it, as if the switch never happened."""
         if self._undo is not None:
             if self._overrun(distance) > self.p.side_overrun_m:
-                self._anchor, self._var0, self._last_snap = self._undo
-                self._undo = None
+                self._anchor, self._var0, self._last_snap, self._ref = self._undo
+                self._undo, self._miss = None, None
             return
         if not (math.isfinite(speed) and speed > self.p.side_speed_mps):
             return
@@ -151,12 +160,12 @@ class PathTracker:
         side = self._side[k]
         if side is None or not self.p.side_min_m <= s - side[0] <= self.p.side_max_m:
             return
-        self._undo = (self._anchor, self._var0, self._last_snap)
+        self._undo = (self._anchor, self._var0, self._last_snap, self._ref)
         var = self._var_along(distance)
         j = side[1]
         self._anchor = (j, float(self._s[j][0]) + s - side[0], distance)
         self._var0 = var
-        self._last_snap = None
+        self._last_snap = self._ref = self._miss = None
 
     def _overrun(self, distance: float) -> float:
         """Path beyond the dead end of the side branch at `distance` (0 before it): the state
@@ -280,6 +289,8 @@ class PathTracker:
         self._undo = None
         self._var0 = self.p.anchor_std_m ** 2
         self._last_snap = None
+        self._ref = (k, 0.0, distance, self._var0)    # the anchor: first reference of the scale
+        self._miss = None
         return k, s, float(p[2])
 
     def _state(self, distance: float):
@@ -318,38 +329,78 @@ class PathTracker:
         snapped to a stop place of the map."""
         if self._anchor is None or not math.isfinite(distance):
             return False
-        k, s = self._state(distance)
+        k, s, over = self._walk(distance)
         places = self._stops[k]
         if not len(places):
             return False
         distances = np.abs(places - s)
         nearest = int(np.argmin(distances))
-        if distances[nearest] > self.p.stop_snap_max_m:
-            return False                      # not at a stop place: a signal, keep s
-        if len(places) > 1:
-            second = float(np.partition(distances, 1)[1])
-            if second - distances[nearest] <= 2.0 * self.p.stop_std_m:
-                return False                  # map uncertainty cannot distinguish close candidates
         place = float(places[nearest])
+        # map uncertainty cannot distinguish close candidates (D-047)
+        ambiguous = len(places) > 1 and (float(np.partition(distances, 1)[1]) - distances[nearest]
+                                         <= 2.0 * self.p.stop_std_m)
+        if distances[nearest] > self.p.stop_snap_max_m:
+            if not self._relock(place - s, distance, ambiguous):
+                return False                  # not at a stop place: a signal, keep s
+            # the lock was lost, so the scale is not known after all: the arc measures it anew
+            self._scale_var = max(self._scale_var, self.p.along_drift_frac ** 2)
+        elif ambiguous:
+            return False
         var = self._var_along(distance)
         gain = var / (var + self.p.stop_std_m ** 2)
-        self._update_scale(k, place, distance)
+        walked = self._scale * (distance - self._anchor[2]) + gain * (place - s)   # old -> new anchor
+        updated = over <= 0.0 and self._update_scale(k, place - s, distance)
         self._anchor = (k, s + gain * (place - s), distance)
         self._undo = None
         self._var0 = (1.0 - gain) * var
         self._last_snap = (k, place, distance)
+        self._miss = None
+        if updated or self._ref is None or over > 0.0:
+            self._ref = (k, place - self._anchor[1], distance, self.p.stop_std_m ** 2)
+        else:                                 # a short arc: the reference stays where it was
+            kr, arc, d_ref, var_ref = self._ref
+            self._ref = (kr, arc - walked, d_ref, var_ref)
         return True
 
-    def _update_scale(self, k: int, place: float, distance: float) -> None:
-        """Slow update of the wheel scale from two snaps on one branch far enough apart."""
-        if self._last_snap is None or self._last_snap[0] != k:
-            return
-        _, place0, d0 = self._last_snap
-        if place - place0 < self.p.scale_min_arc_m or distance <= d0:
-            return
-        ratio = min(max((place - place0) / (distance - d0), 1.0 - self.p.scale_max_dev),
-                    1.0 + self.p.scale_max_dev)
-        self._scale += self.p.scale_alpha * (ratio - self._scale)
+    def _update_scale(self, k: int, innovation: float, distance: float) -> bool:
+        """Kalman update of the wheel scale by the ratio of the map arc from the reference to the
+        place (`innovation` = place - s ahead of the walk) over the wheel path between them. The
+        ratio's variance is that of both ends over the path squared: a long arc weighs more.
+        True when the scale was measured."""
+        if self._ref is None or self._ref[0] != k:
+            self._ref = None                  # a join between: its arc is off the map's by ~10 m
+            return False
+        _, arc0, d_ref, var_ref = self._ref
+        wheel = distance - d_ref
+        if wheel <= 0.0:
+            return False
+        arc = self._scale * (distance - self._anchor[2]) + innovation - arc0
+        if arc < self.p.scale_min_arc_m:
+            return False
+        r = (var_ref + self.p.stop_std_m ** 2) / wheel ** 2
+        gain = self._scale_var / (self._scale_var + r)
+        self._scale = min(max(self._scale + gain * (arc / wheel - self._scale),
+                              1.0 - self.p.scale_max_dev), 1.0 + self.p.scale_max_dev)
+        self._scale_var *= 1.0 - gain
+        return True
+
+    def _relock(self, innovation: float, distance: float, ambiguous: bool) -> bool:
+        """A stop past the gate is a signal, unless the wheel scale has carried s off the
+        places: then the misses (place - s) are on one side and grow with the path from the
+        anchor. True for the second such miss when it continues the line of the first within
+        `relock_sigma`; a miss no scale within 1 +- scale_max_dev explains resets the pair."""
+        path = distance - self._anchor[2]
+        if path <= 0.0 or abs(self._scale + innovation / path - 1.0) > self.p.scale_max_dev:
+            self._miss = None
+            return False
+        if ambiguous:
+            return False
+        miss, self._miss = self._miss, (distance, innovation)
+        if miss is None or miss[1] * innovation <= 0.0 or distance <= miss[0]:
+            return False
+        q = path / (miss[0] - self._anchor[2])
+        var = self.p.stop_std_m ** 2 * (1.0 + q * q) + self._var0 * (1.0 - q) ** 2
+        return abs(innovation - q * miss[1]) <= self.p.relock_sigma * math.sqrt(var)
 
     def advance(self, distance: float, speed: float = 0.0):
         """(x, y, z, yaw, (var_x, var_y, cov_xy)) of base_link at path `distance` and speed
