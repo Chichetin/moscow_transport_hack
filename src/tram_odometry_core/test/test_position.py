@@ -237,15 +237,47 @@ def test_pipeline_ignores_gnss_after_the_window():
     assert math.hypot(est.x - fx, est.y - fy) < 2.0
 
 
-def test_pipeline_before_the_first_fix_starts_at_the_map_origin_in_the_grid():
-    """No fix yet: the straight line (D-021) runs from the map's own origin and is published in
-    the grid like the rest (D-083), never as local metres near 0."""
+def test_pipeline_with_map_before_any_fix_stays_local():
+    """#163: no fix yet, the map's own origin is not where this run is -> local metres, not an
+    absolute point at the start of the map (it was 5 km off on train bags)."""
     from tram_odometry_core.pipeline import Odometry
     est = _wheels(Odometry(PARAMS, route=_route()), 0.0, 1.0, 36.0)
-    fx, fy, fz = _grid(*_lla(est.distance, 0.0))              # yaw 0: east
-    assert math.hypot(est.x - fx, est.y - fy) < 0.1 and est.z == pytest.approx(fz, abs=0.01)
-    assert est.x > 1e4 and est.y > 1e4
-    assert est.position_absolute is True          # the map origin is a geodetic anchor (#162)
+    assert est.position_absolute is False             # published in `odom` (#162)
+    assert (est.x, est.y) == pytest.approx((est.distance, 0.0))
+
+
+def test_pipeline_with_map_before_the_anchor_runs_the_line_from_the_first_fix():
+    """#163: the map rejects the fix (off the map), so the tracker is not anchored: the
+    straight line (D-021) runs from that fix in the grid, not from the map's own origin."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    off_map = _lla(-1000.0, 2000.0, 170.0)                    # 2 km off every branch
+    odo.step(_fix_msg(0.0, off_map))
+    est = _wheels(odo, 0.0, 1.0, 36.0)
+    assert est.position_absolute is True
+    fx, fy, _ = _grid(*off_map)
+    assert math.hypot(est.x - fx, est.y - fy) < est.distance + 0.1
+    mx, my, _ = _grid(*ORIGIN)
+    assert math.hypot(est.x - mx, est.y - my) > 1500.0       # far from the map's origin
+
+
+def test_pipeline_anchor_after_the_line_moves_onto_the_map():
+    """#163: an accepted fix after a rejected one anchors the map; the jump goes from the
+    honest line at the first fix to the map, never through the map's origin."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    near = _lla(-1000.0, 80.0, 170.0)                          # past the 50 m gate: rejected
+    odo.step(_fix_msg(0.0, near))
+    before = _wheels(odo, 0.0, 0.5, 36.0)
+    mx, my, _ = _grid(*ORIGIN)
+    assert before.position_absolute and math.hypot(before.x - mx, before.y - my) > 900.0
+    on_map = _lla(-1000.0, 0.0, 170.0)
+    odo.step(_fix_msg(0.6, on_map))
+    after = _wheels(odo, 0.6, 1.0, 36.0)
+    assert after.position_absolute is True
+    fx, fy, _ = _grid(*on_map)
+    assert math.hypot(after.x - fx, after.y - fy) < 10.0
+    assert math.hypot(after.x - before.x, after.y - before.y) < 100.0
 
 
 def test_pipeline_without_route_keeps_the_baseline():
