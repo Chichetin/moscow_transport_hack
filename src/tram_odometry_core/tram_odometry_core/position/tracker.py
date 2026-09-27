@@ -38,7 +38,9 @@ class PathTracker:
         self.p = params.position
         self.route = route
         self._s = [b.s for b in route.branches]
-        self._step = [float(b.s[1] - b.s[0]) for b in route.branches]
+        # the mean step, not s[1] - s[0]: s is stored to 3 decimals, and a first step rounded up
+        # puts s[i] up to 1 m behind i * step at the end of a 5 km branch
+        self._step = [float(b.s[-1] - b.s[0]) / (len(b.s) - 1) for b in route.branches]
         self._map = [np.column_stack([b.x, b.y, b.z]) for b in route.branches]
         self._next = [self._join(k) for k in range(len(self._map))]
         self._fork = [self._fork_join(k) for k in range(len(self._map))]
