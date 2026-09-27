@@ -361,8 +361,11 @@ class PathTracker:
         last = self._last_snap
         if last is None or last[0] != k or distance <= last[2] or place < last[1]:
             return
-        self._chain_arc += place - last[1]
-        self._chain_wheel += distance - last[2]
+        arc, wheel = place - last[1], distance - last[2]
+        if abs(arc - wheel) > 2.0 * self.p.stop_snap_max_m + self.p.scale_max_dev * wheel:
+            return     # not one stretch of track: e.g. a whole loop passed with no snap on the way
+        self._chain_arc += arc
+        self._chain_wheel += wheel
 
     @property
     def speed_scale(self) -> float:
