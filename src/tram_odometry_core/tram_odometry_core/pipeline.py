@@ -39,6 +39,9 @@ class Odometry:
         self._v = 0.0                         # current speed, m/s
         self._v_measured = 0.0                # speed at the last accepted wheel sample
         self._t_wheel_rx: Optional[float] = None   # state time when a wheel last arrived
+        self._pair_wait_since: Optional[float] = None
+        self._last_pair_stamp: Optional[float] = None
+        self._pair_period_s: Optional[float] = None
         self._distance = 0.0
         self._x = self._y = 0.0
         self._yaw = 0.0
@@ -86,6 +89,8 @@ class Odometry:
             # in the future of every input now; follow the input instead of freezing there
             self._t = t
             self._t_wheel_rx = t if self._t_wheel_rx is not None else None
+            self._pair_wait_since = None
+            self._last_pair_stamp = self._pair_period_s = None
             self._stop_since, self._stop_snapped = None, False
         now = t if self._t is None else max(self._t, t)
         front, rear = self._wheel['front'], self._wheel['rear']
@@ -110,8 +115,26 @@ class Odometry:
             # trail the controller by seconds (docs/data.md trap 5) while the wheels talk
             st = dataclasses.replace(st, front_trust=0.0, rear_trust=0.0)
         self._slip_state = st
+        if front is not None and rear is not None and front.t == rear.t:
+            if self._last_pair_stamp is None or front.t > self._last_pair_stamp:
+                if self._last_pair_stamp is not None:
+                    period = front.t - self._last_pair_stamp
+                    if period <= self.params.input.stale_timeout_s:
+                        self._pair_period_s = period
+                self._last_pair_stamp = front.t
+            self._pair_wait_since = None
+        elif wheel_arrived and front is not None and rear is not None \
+                and self._pair_wait_since is None:
+            newest = front if front.t > rear.t else rear
+            if (front.speed > 0.0 and rear.speed > 0.0
+                    and abs(newest.speed - self._v_measured)
+                    > 0.5 * self.params.slip.front_rear_threshold_mps):
+                self._pair_wait_since = now
+        wait_limit = self._pair_period_s or self.params.input.stale_timeout_s
+        wait_for_pair = (self._pair_wait_since is not None
+                         and now - self._pair_wait_since < wait_limit)
         used = [(w, s.speed) for w, s in ((st.front_trust, front), (st.rear_trust, rear))
-                if s is not None and w > 0.0]
+                if s is not None and w > 0.0 and not wait_for_pair]
         if used:
             self._v = sum(w * v for w, v in used) / sum(w for w, _ in used)
             self._v_measured = self._v

@@ -28,8 +28,8 @@ class Preprocessor:
     gate (trap 6: up to 6-7 rollbacks on a bogie, up to 20 on the 20 Hz controller — trap 9;
     a repeated or past stamp is dropped, not integrated with `dt < 0`). Wheel speed is
     converted km/h -> m/s here and nowhere else (D-003), then gated by
-    `input.max_wheel_accel_mps2`: a jump implying a higher `|dv/dt|` than physically possible
-    is a sensor glitch, not real driving, and is dropped rather than fed to the estimator. The
+    `input.max_wheel_accel_mps2`: a jump above this hard threshold is dropped; smaller
+    disturbances reach the two-bogie comparison so opposite wheel noise can cancel. The
     gate is skipped when the previous or the new sample reads exactly 0: a bogie stuck at 0
     (trap 8) reports the real speed the instant it gets unstuck, and `slip.SlipDetector`
     depends on seeing that exact-0 reading to tell a stuck sensor from real motion — rejecting

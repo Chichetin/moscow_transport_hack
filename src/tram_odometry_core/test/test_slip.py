@@ -103,6 +103,39 @@ def test_model_accel_shifts_the_prediction():
     assert s.slip_rear and not s.slip_front
 
 
+def test_same_direction_wheel_changes_are_not_treated_as_cancelling_noise():
+    # Recorded pattern on 30618_33bec73f: both wheels accelerate, but one is much
+    # faster. Their midpoint happens to straddle the model prediction.
+    det = SlipDetector(P)
+    det.update(ws('front', 0.0, 3.745), ws('rear', 0.0, 4.137), 0.0, 4.0)
+    det.update(ws('front', 0.1, 3.884), ws('rear', 0.0, 4.137), 0.56, 4.0)
+    s = det.update(ws('front', 0.1, 3.884), ws('rear', 0.1, 4.475), 0.56, 4.0)
+    assert s.front_trust == 1.0 and s.rear_trust == 0.0
+
+
+def test_opposite_pair_changes_can_recover_after_prediction_falls_behind():
+    det = SlipDetector(P)
+    det.update(ws('front', 0.0, 4.0), ws('rear', 0.0, 4.0), 0.0, 4.0)
+    det.update(ws('front', 0.1, 4.8), ws('rear', 0.1, 3.2), 0.0, 4.0)
+    det.update(ws('front', 0.2, 4.9), ws('rear', 0.1, 3.2), 0.0, 2.5)
+    s = det.update(ws('front', 0.2, 4.9), ws('rear', 0.2, 3.1), 0.0, 2.5)
+    assert s.front_trust == 1.0 and s.rear_trust == 1.0
+
+
+def test_opposite_pair_changes_do_not_start_noise_mode_far_from_prediction():
+    det = SlipDetector(P)
+    det.update(ws('front', 0.0, 4.0), ws('rear', 0.0, 4.0), 0.0, 4.0)
+    s = det.update(ws('front', 0.1, 4.8), ws('rear', 0.1, 3.2), 0.0, 2.5)
+    assert s.front_trust == 0.0 and s.rear_trust == 1.0
+
+
+def test_existing_large_bogie_disagreement_does_not_start_noise_mode():
+    det = SlipDetector(P)
+    det.update(ws('front', 0.0, 9.04), ws('rear', 0.0, 6.70), 0.0, 7.9)
+    s = det.update(ws('front', 0.1, 8.98), ws('rear', 0.1, 6.72), 0.0, 7.9)
+    assert s.front_trust == 1.0 and s.rear_trust == 0.0
+
+
 def test_tolerance_grows_with_gap():
     det = SlipDetector(P)
     det.update(ws('front', 0.0, 10.0), ws('rear', 0.0, 10.0), 0.0, 10.0)
