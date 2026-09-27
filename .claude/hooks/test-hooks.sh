@@ -33,6 +33,11 @@ rm bot.js
 echo 'client = OpenAI(api_key="sk-3f9a8c72b1d04e6fa9b7c2d5e8f10a4b")' > llm.py
 expect block "ключ LLM в коде"                      check-secrets.sh
 rm llm.py
+echo 'KEY sk-3f9a8c72b1d04e6fa9b7c2d5e8f10a4b' > notes.md
+expect block "голый ключ sk- в тексте"              check-secrets.sh
+echo 'run_eval.py --out /tmp/msk-issue161-base-84a3304-train' > notes.md
+expect pass  "путь /tmp/msk-… — не ключ sk-"        check-secrets.sh
+rm notes.md
 echo 'TRAM_DATA_DIR=/data' > .env
 expect block ".env не в .gitignore"                 check-secrets.sh
 echo '.env' > .gitignore

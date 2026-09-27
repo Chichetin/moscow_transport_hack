@@ -25,7 +25,7 @@ if [ "${#EXISTING[@]}" -gt 0 ]; then
       -e '-----BEGIN [A-Z ]*PRIVATE KEY-----' \
       -e '(token|secret|password|passwd|api[_-]?key)["'"'"']?[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_.+/=-]{16,}' \
       -e 'gh[pousr]_[A-Za-z0-9]{36}' \
-      -e 'sk-[A-Za-z0-9_-]{20,}' \
+      -e '(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{20,}' \
       -- "${EXISTING[@]}" 2>/dev/null \
     | grep -v -i -E 'secret-scan: allow|your|example|changeme|placeholder|xxxx|<[a-z_]+>|\$\{|process\.env|os\.environ|getenv' \
     | cut -d: -f1,2)"
