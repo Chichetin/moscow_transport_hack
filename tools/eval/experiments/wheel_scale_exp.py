@@ -57,8 +57,17 @@ VARIANTS = {
     'h123_p15': dict(H12, prior=0.015, recover=True, rec_scale='kf'),
     'h123_chain': dict(H12, recover=True, rec_scale='kf', chain_relock=True),
     # H3 alone on the EMA of main: the relock of a lost lock, the scale as in main (the
-    # candidate of #154 after h123 was rejected; the core of this branch is it bit for bit)
-    'h3': dict(mode='base', recover=True, rec_scale='kf'),
+    # candidate of #154 after h123 was rejected; the core of this branch is it bit for bit).
+    # same = when the second miss is the same standstill as the pending one (it keeps the first
+    # miss and never relocks): 'gate' closer than stop_snap_max_m of path (a creep in a queue,
+    # review of #160); 'arc' closer than scale_min_arc_m; 'grow' the growth |y1| (q - 1) of the
+    # line within rec_k sigma of the residual; None = frozen 6853330 (only the same path)
+    'h3': dict(mode='base', recover=True, rec_scale='kf', same='gate'),
+    'h3_v0': dict(mode='base', recover=True, rec_scale='kf'),
+    'h3_arc': dict(mode='base', recover=True, rec_scale='kf', same='arc'),
+    'h3_grow': dict(mode='base', recover=True, rec_scale='kf', same='grow'),
+    # the speed chain of #153 also skips the pair that starts at a relock place
+    'h3_chain_from': dict(mode='base', recover=True, rec_scale='kf', same='gate', chain_from=False),
 }
 
 
@@ -73,7 +82,8 @@ class Tracker(PathTracker):
         self._P = (0.0, 0.0, self._prior_var)    # kf2: var s, cov(s, c), var c at the anchor
         self._Pc = self._prior_var                # kf1: var of the scale
         self._ref = None                          # (arc of the ref from the anchor, its path, var, branch)
-        self._pending = None                      # H3: (path, innovation) of the last miss
+        self._pending = None                      # H3: (distance, innovation) of the last miss
+        self._relocked = False                    # the last snap was a relock
         self._meas_var = cfg.get('meas_std', self.p.stop_std_m) ** 2   # a place as a scale reference
         self.log = []
 
@@ -177,9 +187,12 @@ class Tracker(PathTracker):
                 off, d_ref, v, kr = self._ref
                 self._ref = (off - walked, d_ref, v, kr)
         # the speed chain of #153 (main since 63762d2) takes the pair of consecutive snaps;
-        # the pair that ends at a relock stays out of it (as in the core) unless chain_relock
-        if hasattr(self, '_accumulate_chain') and (not relock or self.cfg.get('chain_relock')):
+        # the pair that ends at a relock stays out of it (as in the core) unless chain_relock;
+        # chain_from=False: the pair that starts at one too
+        if hasattr(self, '_accumulate_chain') and (not relock or self.cfg.get('chain_relock')) and (
+                self.cfg.get('chain_from', True) or not self._relocked):
             self._accumulate_chain(k, place, distance)
+        self._relocked = relock
         self._undo = None
         self._last_snap = (k, place, distance)
         self._pending = None
@@ -224,21 +237,25 @@ class Tracker(PathTracker):
         """Two misses past the gate, of one sign and growing with the path from the anchor as a
         scale error does, relock onto the place; a signal stop gives an unrelated miss."""
         dd = distance - self._anchor[2]
+        R = self.p.stop_std_m ** 2
+        var0 = self._var_along(self._anchor[2])
+        rec_k = self.cfg.get('rec_k', 2.0)
+        pend = self._pending
+        if pend is not None and self._same_stop(pend, distance, dd, R, var0, rec_k):
+            return False
         if dd <= 0.0 or abs(self._scale + y / dd - 1.0) > self.p.scale_max_dev:
             self._pending = None
             return False
         if len(places) > 1 and float(np.partition(dist, 1)[1]) - dist[i] <= 2.0 * self.p.stop_std_m:
             return False
-        pend, self._pending = self._pending, (distance, y)
+        self._pending = (distance, y)
         if pend is None or pend[1] * y <= 0.0 or distance <= pend[0]:
             return False
         d1, y1 = pend
         dd1 = d1 - self._anchor[2]
         q = dd / dd1
-        R = self.p.stop_std_m ** 2
-        var0 = self._var_along(self._anchor[2])
         resid = y - y1 * q
-        if abs(resid) > self.cfg.get('rec_k', 2.0) * math.sqrt(R * (1.0 + q * q) + var0 * (1.0 - q) ** 2):
+        if abs(resid) > rec_k * math.sqrt(R * (1.0 + q * q) + var0 * (1.0 - q) ** 2):
             return False
         # the lock was lost: the scale is not known after all. rec_scale: 'implied' jumps to
         # the scale the miss implies; 'kf' lets the ratio from the reference update it with the
@@ -256,7 +273,22 @@ class Tracker(PathTracker):
         k2, s2, over = self._walk(distance)
         self._snap(k, s2, place, distance, over, relock=True)
         self._log('recover', distance, k, s, place, y)
+        self.log[-1].update(d1=d1, y1=y1, q=q)
         return True
+
+    def _same_stop(self, pend, distance, dd, R, var0, rec_k):
+        """The stop is the same standstill as the pending miss (cfg 'same', see VARIANTS)."""
+        how = self.cfg.get('same')
+        if how == 'gate':
+            return distance - pend[0] < self.p.stop_snap_max_m
+        if how == 'arc':
+            return distance - pend[0] < self.p.scale_min_arc_m
+        if how == 'grow':
+            dd1 = pend[0] - self._anchor[2]
+            q = dd / dd1
+            growth = abs(pend[1]) * (q - 1.0)
+            return growth <= rec_k * math.sqrt(R * (1.0 + q * q) + var0 * (1.0 - q) ** 2)
+        return False
 
 
 def make(cfg):

@@ -12,7 +12,8 @@ Runs (numbers only; the statistics are in wheel_scale_stats.py):
           and the stops with the truth from the GNSS master track (eval only).
   std     clean + scale_up / scale_down / gap_both_30 of stress.py: sensitivity around h123.
   verify  dumps Estimates of the core (mode 'core') or of a variant of wheel_scale_exp, to
-          check that 'base' / 'h123' are the commits bit for bit (compare with 'cmp').
+          check that 'base' / 'h123' / 'h3' are the commits bit for bit (compare with 'cmp');
+          a bag outside train only with 'core' or a frozen candidate.
 
 The variants are those of wheel_scale_exp.py (PathTracker replaced in memory) plus EXTRA.
 Holdout takes only 'base', 'h123' and 'h3', the frozen candidates (D-011); 'std' is train only.
@@ -56,8 +57,7 @@ def _variants():
     h12 = w.H12
     h123 = w.VARIANTS['h123']
     extra = {
-        # H3 without H2: the relock on main's EMA (no H1), and on the EMA with the anchor (H1)
-        'h3': dict(mode='base', recover=True, rec_scale='kf'),
+        # H3 without H2 on the EMA with the anchor (H1); on main's EMA it is 'h3' of wheel_scale_exp
         'h13': dict(mode='ema', keep_ref=True, recover=True, rec_scale='kf'),
         # one parameter at a time around h123: relock_sigma, scale prior, sigma of a place as
         # a scale reference, minimal arc from the reference
@@ -236,7 +236,11 @@ def run(mode, split, variants):
 
 
 def verify(dump, vname, bags):
-    """Estimates of clean + STD on each bag: mode 'core' = default_odometry of this tree."""
+    """Estimates of clean + STD on each bag: mode 'core' = default_odometry of this tree.
+    A bag outside train only with 'core' or a frozen candidate (D-011)."""
+    train = set(bag.load_splits()['train'])
+    if vname not in ('core',) + HOLDOUT_OK and not set(bags) <= train:
+        raise SystemExit(f'{sorted(set(bags) - train)}: not train, only core or {HOLDOUT_OK} (D-011)')
     cfg = None if vname == 'core' else _variants()[vname]
     d = Path(dump)
     d.mkdir(parents=True, exist_ok=True)

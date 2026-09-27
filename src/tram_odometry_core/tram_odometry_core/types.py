@@ -315,8 +315,8 @@ def load_params(path) -> Params:
     _validate_slip(params.slip)
     _validate_side(params.position)
     _validate_base_link(params.position)
-    if not (params.position.relock_sigma > 0):
-        raise ValueError('position.relock_sigma must be positive')
+    if not (math.isfinite(params.position.relock_sigma) and params.position.relock_sigma > 0):
+        raise ValueError('position.relock_sigma must be positive and finite')
     return params
 
 

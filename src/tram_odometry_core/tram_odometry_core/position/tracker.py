@@ -59,7 +59,7 @@ class PathTracker:
         self._chain_arc = 0.0                 # m, map arc between consecutive snaps on one branch
         self._chain_wheel = 0.0               # m, wheel path between the same snaps
         self._last_snap: Optional[Tuple[int, float, float]] = None   # branch, place s, distance
-        self._pending: Optional[Tuple[float, float]] = None   # path, place - s of the last miss
+        self._pending: Optional[Tuple[float, float]] = None   # distance, place - s of the last miss
         self._master = None                   # (ECEF, distance) of the last accepted master fix
         self._rover = None                    # (ECEF, status) of the last accepted rover fix
 
@@ -334,7 +334,9 @@ class PathTracker:
         var = self._var_along(distance)
         gain = var / (var + self.p.stop_std_m ** 2)
         self._update_scale(k, place, distance)
-        if not relock:     # the pair across a lost lock may hold a wheel gap or a false relock
+        # the pair across a lost lock may hold a wheel gap or a false relock; the next pair,
+        # from the relock place on, stays in the chain (docs/model.md, #154)
+        if not relock:
             self._accumulate_chain(k, place, distance)
         self._anchor = (k, s + gain * (place - s), distance)
         self._undo = self._pending = None
@@ -347,15 +349,21 @@ class PathTracker:
         places: then the misses (`innovation` = place - s) are on one side and grow with the
         path from the anchor. True for the second such miss in a row when it lies on the line
         of the first within `relock_sigma`; a miss no scale within 1 +- scale_max_dev explains
-        drops the first one, a miss at an ambiguous place is skipped (#154)."""
+        drops the first one, a miss at an ambiguous place is skipped (#154). A stop closer than
+        stop_snap_max_m of path to the first miss is the same standstill (a creep in a queue,
+        which the pipeline sees as two): at q ~ 1 the residual is the creep, well inside the
+        line, so that stop changes nothing and the first miss stays."""
+        first = self._pending
+        if first is not None and distance - first[0] < self.p.stop_snap_max_m:
+            return False
         path = distance - self._anchor[2]
         if path <= 0.0 or abs(self._scale + innovation / path - 1.0) > self.p.scale_max_dev:
             self._pending = None
             return False
         if ambiguous:
             return False
-        first, self._pending = self._pending, (distance, innovation)
-        if first is None or first[1] * innovation <= 0.0 or distance <= first[0]:
+        self._pending = (distance, innovation)
+        if first is None or first[1] * innovation <= 0.0:
             return False
         # both misses are e = c * path + a (c: scale error, a: anchor error of var0) plus a
         # place error of stop_std_m each; the second minus q times the first cancels c

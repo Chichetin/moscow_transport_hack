@@ -339,6 +339,60 @@ def test_a_second_stop_at_the_same_path_is_not_a_second_miss():
     assert [tr.on_stop(1421.0), tr.on_stop(1421.0)] == [False, False]
 
 
+@pytest.mark.parametrize('from_anchor', [1000.0, 1400.0, 2000.0, 3000.0])
+@pytest.mark.parametrize('queue, creep', [(q, c) for q in (25.0, 30.0, 40.0)
+                                          for c in (0.3, 0.5, 2.0, 5.0) if q - c > 20.0])
+def test_a_creep_in_a_queue_is_one_standstill(from_anchor, queue, creep):
+    """Reviewer of #160: exact wheels, a queue `queue` m short of a place and a creep of
+    `creep` m in it, both past the snap gate (the pipeline sees two standstills). Both misses
+    are one place - s apart by the creep, q = 1 + creep / path: the residual y - q y1 is about
+    the creep, inside 2 sigma (5.7 m) of the line. A second stop closer than stop_snap_max_m of
+    path to the pending miss is the same standstill: no relock; the place and the next ones
+    snap exactly (main)."""
+    places = [START_S + from_anchor + k * 500.0 for k in range(3)]
+    tr = _tracker([(0, s) for s in places])
+    stops = [from_anchor - queue, from_anchor - queue + creep] + [s - START_S for s in places]
+    assert [tr.on_stop(d) for d in stops] == [False, False, True, True, True]
+    assert tr._state(stops[-1])[1] == pytest.approx(places[-1], abs=0.01)
+
+
+def test_a_creep_in_a_queue_keeps_the_first_miss():
+    """Wheels 1.5 % long: 21 m past the place of 2400, a creep of 10 m (31 m past it, off the
+    line of the first miss), then 24 m past 2600: on the line of the first miss, not of the
+    creep. The creep is the same standstill and keeps the first miss: relock at 2600."""
+    tr = _tracker([(0, 2400.0), (0, 2600.0)])
+    assert [tr.on_stop(d) for d in (1421.0, 1431.0, 1624.0)] == [False, False, True]
+    assert tr._last_snap == (0, 2600.0, 1624.0)
+
+
+def test_a_creep_past_the_scale_bound_keeps_the_first_miss():
+    """Wheels 2.9 % long: 29 m past the place of 2000 (2.8 % of the path), a creep of 5 m in
+    the same standstill to 34 m past it (3.3 %: no wheel scale explains it) and 34.8 m past
+    2200 on the line of the first miss. The creep is not a signal: the first miss stays."""
+    tr = _tracker([(0, 2000.0), (0, 2200.0)])
+    assert [tr.on_stop(d) for d in (1029.0, 1034.0, 1234.8)] == [False, False, True]
+
+
+@pytest.mark.parametrize('creep, relocked', [(19.9, False), (20.0, True)])
+def test_the_same_standstill_is_closer_than_the_snap_gate(creep, relocked):
+    """The bound is stop_snap_max_m of path. With loose places (stop_std_m 10 m, 2 sigma about
+    28 m) a creep of 20 m from 45 m to 25 m short of the place fits the line of the first miss:
+    at 20 m it is another stop and relocks, closer it is the same standstill."""
+    tr = _tracker([(0, 3000.0)], _position(stop_std_m=10.0))
+    assert [tr.on_stop(1955.0), tr.on_stop(1955.0 + creep)] == [False, relocked]
+
+
+def test_a_true_scale_error_still_relocks_past_a_queue():
+    """Wheels 1.5 % long and a queue with a creep of 0.5 m before the first missed place: the
+    creep changes nothing, the next place on the line relocks and the rest snap."""
+    places = [2400.0, 2600.0, 2800.0, 3000.0]
+    tr = _tracker([(0, s) for s in places])
+    origin = _anchor_xy(tr)
+    stops = [1421.0, 1421.5] + [(s - START_S) * WHEEL for s in places[1:]]
+    assert [tr.on_stop(d) for d in stops] == [False, False, True, True, True]
+    assert abs(_arc(tr, 2000.0 * WHEEL, origin) - 2000.0) < 3.0
+
+
 @pytest.mark.parametrize('ambiguous_at', [1627.04, 1640.0])
 def test_an_ambiguous_place_is_skipped_and_keeps_the_first_miss(ambiguous_at):
     """D-047: a miss at two places 3 m apart (on the line of the first miss or off it) neither
