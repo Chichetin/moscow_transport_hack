@@ -45,3 +45,11 @@ clean и `scale_up`/`scale_down`/`gap_both_30`, ложные привязки �
 .venv/bin/python tools/eval/experiments/wheel_scale_stats.py pairs out/eval/<base>/metrics.json out/eval/<head>/metrics.json   # бутстрэп, знаковый, Wilcoxon, перестановки
 .venv/bin/python tools/eval/experiments/wheel_scale_stats.py grid out/wheel_scale_ext/grid-train   # и sensgrid, curve; std out/wheel_scale_ext/std-train
 ```
+
+Контрольный bag судьи (#188, #186): наш выход против эталона `/localization/kinematic_state` из
+пакета организаторов `check-code` по осям x/y/z, вдоль/поперёк, курс и скорость, участки с
+|cross| > 3 м и расстояние эталона до карты (`docs/verification/2026-09-27-control-bag-axes.md`).
+
+```bash
+.venv/bin/python tools/eval/experiments/control_bag_axes.py <check-code>/bags/30618_88aea4d9
+```

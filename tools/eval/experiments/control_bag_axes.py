@@ -6,9 +6,11 @@ Usage (from the repository root):
 The control bag of the organizers (check-code, 30618_88aea4d9) carries the judge's reference
 `/localization/kinematic_state` (nav_msgs/Odometry, frame map, child base_link, 50 Hz). The
 pipeline runs exactly as in tools/eval (GNSS cut after the window); every reference sample is
-matched to the nearest published position within 0.05 s, like the judge's synchronizer. Printed:
-x/y/z errors, along/cross split by the reference yaw, speed error, stretches with |cross| > 3 m
-and how far the reference and the estimate are from the map there.
+matched to the nearest published position within 0.05 s (many-to-one: close to, not the same as,
+the judge's ApproximateTimeSynchronizer, which uses each message once). Printed: x/y/z errors,
+along/cross split by the reference yaw, yaw error while moving (the judge does not score yaw),
+speed error, stretches with |cross| > 3 m and how far the reference and the estimate are from
+the map segments there.
 """
 import math
 import sys
@@ -27,6 +29,7 @@ from tram_odometry_core.types import load_route  # noqa: E402
 
 REF_TOPIC = '/localization/kinematic_state'
 CROSS_BIG_M = 3.0
+MOVING_MPS = 1.0          # yaw is compared only faster than this
 
 
 def stats(a):
@@ -49,6 +52,15 @@ def main():
     ref = np.array(sorted(ref), float)
     est, crash, _ = B.run_pipeline(msgs, B.default_odometry(), B.gnss_window_end(msgs, B.default_gnss_window()))
     ok = est.absolute if est.absolute is not None else np.ones(len(est.t), bool)
+    # the same run once more for the published yaw (tram_eval.Estimates has no yaw)
+    odo, window_end, est_yaw = B.default_odometry(), B.gnss_window_end(msgs, B.default_gnss_window()), []
+    for topic, m in msgs:
+        if topic in B.GNSS and B.stamp(m) > window_end:
+            continue
+        e = odo.step(B.to_raw(topic, m))
+        if e is not None:
+            est_yaw.append(e.yaw)
+    est_yaw = np.asarray(est_yaw)
     ri, ei = match_nearest(ref[:, 0], est.t[ok])
     pos, r = est.pos[ok][ei], ref[ri]
     d = pos - r[:, 1:4]
@@ -61,14 +73,24 @@ def main():
     print(f'3D     rmse {np.sqrt(np.mean(dist ** 2)):.3f} max {dist.max():.3f}')
     vi, vj = match_nearest(ref[:, 0], est.t)
     print(f'speed  {stats(est.speed[vj] - ref[vi, 5])}')
+    moving = np.abs(r[:, 5]) > MOVING_MPS
+    dyaw = np.degrees(np.angle(np.exp(1j * (est_yaw[ok][ei] - r[:, 4]))))[moving]
+    print(f'yaw moving, deg: median {np.median(dyaw):+.2f} p95|.| {np.quantile(np.abs(dyaw), 0.95):.2f} '
+          f'max|.| {np.max(np.abs(dyaw)):.2f}')
 
     route = load_route(ROOT / 'src' / 'tram_odometry' / 'maps' / 'route.csv')
     rot, e0, grid = geo.enu_rotation(*route.origin[:2]), geo.ecef(*route.origin), B.output_grid()
     branches = [np.array([geo.enu_to_grid(rot, e0, grid, float(x), float(y), float(z))[:2]
-                          for x, y, z in zip(b.x[::2], b.y[::2], b.z[::2])]) for b in route.branches]
+                          for x, y, z in zip(b.x, b.y, b.z)]) for b in route.branches]
 
     def to_map(p):
-        return min(float(np.min(np.hypot(*(b - p).T))) for b in branches)
+        """Distance to the nearest map segment (not vertex), m."""
+        best = math.inf
+        for b in branches:
+            a, v = b[:-1], np.diff(b, axis=0)
+            u = np.clip(((p - a) * v).sum(1) / np.maximum((v * v).sum(1), 1e-12), 0.0, 1.0)
+            best = min(best, float(np.min(np.hypot(*(a + v * u[:, None] - p).T))))
+        return best
 
     t = r[:, 0] - ref[0, 0]
     big = np.flatnonzero(np.abs(cross) > CROSS_BIG_M)
