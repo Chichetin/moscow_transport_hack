@@ -21,7 +21,7 @@ class SpeedFilter:
     without traction (#105, D-061).
 
     Without a fresh trusted wheel for longer than `input.stale_timeout_s` (both bogies silent,
-    frozen or out) the bias decays to 0 with `filter.bias_decay_s` (#176, D-090): it was
+    frozen or out) the bias decays to 0 with `filter.bias_decay_s` (#176, D-094): it was
     learned for the grade and the table error of the moment before the pause and is not
     carried over the pause. A wheel rejected by the NIS gate still counts as heard.
     """
@@ -82,7 +82,7 @@ class SpeedFilter:
         self._t = t
         self._model_accel = accel_model
         # the part of the step past stale_timeout_s without a trusted wheel: the bias is a
-        # Gauss-Markov process there (D-090), a random walk while wheels are heard. It decays
+        # Gauss-Markov process there (D-094), a random walk while wheels are heard. It decays
         # before the speed moves, so the step runs on the acceleration state() reports
         quiet = (0.0 if self._t_heard is None
                  else min(dt, t - self._t_heard - self._stale_timeout))

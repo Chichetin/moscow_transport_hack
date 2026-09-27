@@ -1,6 +1,9 @@
 """Node tests (need ROS: bash docker/dev.sh python3 -m pytest src/tram_odometry/test)."""
+import importlib
 import math
 import random
+import sys
+import types
 from dataclasses import replace
 from pathlib import Path
 
@@ -43,6 +46,41 @@ def node():
     yield n
     n.destroy_node()
     rclpy.shutdown()
+
+
+def test_vehicle_inputs_include_controller_with_full_messages():
+    assert on.VEHICLE_INPUTS == [('/vehicle/front_bogie_velocity', VelocitySensor),
+                                 ('/vehicle/rear_bogie_velocity', VelocitySensor),
+                                 ('/vehicle/driver_position_cmd', DriverControllerCommand)]
+
+
+def test_node_imports_without_controller_message(monkeypatch):
+    """#184: the judge image's tram_vehicle_msgs has VelocitySensor only; the node runs on bogies."""
+    stripped = types.ModuleType('tram_vehicle_msgs.msg')
+    stripped.VelocitySensor = VelocitySensor
+    monkeypatch.setitem(sys.modules, 'tram_vehicle_msgs.msg', stripped)
+    try:
+        importlib.reload(on)
+        assert on.DriverControllerCommand is None
+        assert on.VEHICLE_INPUTS == [('/vehicle/front_bogie_velocity', VelocitySensor),
+                                     ('/vehicle/rear_bogie_velocity', VelocitySensor)]
+        rclpy.init()
+        n = on.OdometryNode(params_file=str(PARAMS_FILE))
+        try:
+            sent = []
+            monkeypatch.setattr(n.pub_diagnostics, 'publish', sent.append)
+            n.on_input('/vehicle/front_bogie_velocity', _wheel())
+            n.on_input('/vehicle/rear_bogie_velocity', _wheel())
+            assert n.errors == 0
+            inputs = {v.key: v.value for v in sent[0].status[1].values}
+            assert inputs['cmd_age_s'] == 'unknown' and inputs['front_age_s'] == '0.0'
+        finally:
+            n.destroy_node()
+            rclpy.shutdown()
+    finally:
+        monkeypatch.undo()
+        importlib.reload(on)
+    assert on.DriverControllerCommand is DriverControllerCommand
 
 
 def test_raw_is_topic_and_untouched_message_like_eval(node, monkeypatch):

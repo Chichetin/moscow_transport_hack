@@ -48,7 +48,7 @@ def test_process_covariance_respects_seconds_and_bias_units():
 
 
 def test_bias_variance_follows_the_decay_on_a_pause():
-    # a Gauss-Markov bias on a pause of the wheels (D-090): P_bb' = decay^2 * P_bb + q_bias * dt
+    # a Gauss-Markov bias on a pause of the wheels (D-094): P_bb' = decay^2 * P_bb + q_bias * dt
     filt = initialized()
     filt.predict(PARAMS.input.stale_timeout_s, 0.0)
     before = filt._cov[1, 1]
@@ -448,7 +448,7 @@ def test_restart_before_the_first_wheel_is_ignored():
 
 
 def test_bias_decays_to_zero_while_no_wheel_is_accepted():
-    # both bogies silent, frozen or out (#176, D-090): the bias learned before the pause (the
+    # both bogies silent, frozen or out (#176, D-094): the bias learned before the pause (the
     # grade and the table error of that moment, or noise) is not carried over the pause; past
     # input.stale_timeout_s without an accepted wheel it decays with filter.bias_decay_s
     filt = initialized()

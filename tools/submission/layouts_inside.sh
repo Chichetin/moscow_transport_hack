@@ -16,6 +16,14 @@ for d in "$JURY_MSGS" "$ORIG_MSGS"; do
   cp /repo/src/tram_vehicle_msgs/vendor/* "$d/" && cp -r /repo/src/tram_vehicle_msgs/msg "$d/"
 done
 sed -i '/<maintainer/d' "$ORIG_MSGS/package.xml"
+# Образ судьи организаторов (check-code, #184): tram_vehicle_msgs только с VelocitySensor.
+# Наш vendor видит этот пакет и свою копию не собирает, DriverControllerCommand нет — нода
+# обязана импортироваться и работать по тележкам, bag play топик контроллера пропустит.
+JUDGE_MSGS=/tmp/judge_msgs/tram_vehicle_msgs
+mkdir -p "$JUDGE_MSGS/msg"
+cp /repo/src/tram_vehicle_msgs/vendor/* "$JUDGE_MSGS/" &&
+  cp /repo/src/tram_vehicle_msgs/msg/VelocitySensor.msg "$JUDGE_MSGS/msg/"
+sed -i '/msg\/DriverControllerCommand.msg/d' "$JUDGE_MSGS/CMakeLists.txt"
 
 build() { # build <раскладка> <каталог workspace> [аргументы colcon build]
   local name="$1" ws="$2"; shift 2
@@ -23,8 +31,10 @@ build() { # build <раскладка> <каталог workspace> [аргуме�
 }
 
 importable() { # importable <раскладка> <каталог workspace>: сообщения и нода видны после source
+  local msgs='VelocitySensor, DriverControllerCommand'
+  case "$1" in judge_*) msgs='VelocitySensor' ;; esac   # в пакете судьи контроллера нет
   (source "$2/install/setup.bash" &&
-   python3 -c 'from tram_vehicle_msgs.msg import VelocitySensor, DriverControllerCommand' &&
+   python3 -c "from tram_vehicle_msgs.msg import $msgs" &&
    python3 -c 'import tram_odometry.odometry_node') > "$LOGS/$1.import.log" 2>&1
 }
 
@@ -38,6 +48,8 @@ layout() { # layout <имя> <что имитирует>; готовит /tmp/<�
     jury_msgs_in_src)  cp -r "$JURY_MSGS" "$ws/src/" && cp -r /repo "$ws/src/repo" ;;
     over_orig_msgs)    cp -r "$ORIG_MSGS" "$ws/src/" && cp -r /repo/src/* "$ws/src/" ;;
     jury_msgs_over)    cp -r /repo/src/* "$ws/src/" && cp -r "$JURY_MSGS" "$ws/src/" ;;
+    judge_msgs_in_src) cp -r "$JUDGE_MSGS" "$ws/src/" && cp -r /repo "$ws/src/repo" ;;
+    judge_msgs_over)   cp -r /repo/src/* "$ws/src/" && cp -r "$JUDGE_MSGS" "$ws/src/" ;;
     up_to|merge_install|symlink_install) cp -r /repo/src/* "$ws/src/" ;;
     underlay)          mkdir -p "/tmp/$name/under/src" && cp -r "$JURY_MSGS" "/tmp/$name/under/src/" &&
                        build "$name.underlay" "/tmp/$name/under" &&
@@ -68,42 +80,53 @@ layout up_to            "README, но colcon build --packages-up-to tram_odometr
 layout merge_install    "README, но colcon build --merge-install"
 layout symlink_install  "README, но colcon build --symlink-install"
 layout underlay         "tram_vehicle_msgs жюри собран отдельно (underlay), наш src поверх"
+layout judge_msgs_in_src "клон в <ws>/src/ образа судьи: tram_vehicle_msgs только с VelocitySensor (#184)"
+layout judge_msgs_over   "cp -r src/*, затем tram_vehicle_msgs судьи (только VelocitySensor) поверх (#184)"
 
-# Запуск: только в раскладке README (install-дерево то же во всех), каждый bag отдельно.
+# Запуск: в раскладке README (install-дерево то же во всех, кроме пакета сообщений) каждый bag
+# отдельно; первый bag ещё раз в judge_msgs_over — без DriverControllerCommand (#184).
 RUN=/tmp/run.tsv; : > "$RUN"
-LAUNCH="$(ls /tmp/readme/ws/install/tram_odometry/share/tram_odometry/launch/*.launch.py 2>/dev/null | head -1)"
-for b in $BAGS; do
-  if [ -z "$LAUNCH" ]; then
-    printf '%s\t%s\t%s\n' "$b" skipped "нет launch в tram_odometry" >> "$RUN"; continue
+run_bag() { # run_bag <каталог workspace> <bag> <ключ в отчёте>
+  local ws="$1" b="$2" key="$3" launch
+  launch="$(ls "$ws"/install/tram_odometry/share/tram_odometry/launch/*.launch.py 2>/dev/null | head -1)"
+  if [ -z "$launch" ]; then
+    printf '%s\t%s\t%s\n' "$key" skipped "нет launch в tram_odometry" >> "$RUN"; return
   fi
   ( # без job control фоновые процессы стартуют с игнорируемым SIGINT и не останавливаются
     set -m
-    source /tmp/readme/ws/install/setup.bash
-    ros2 launch "$LAUNCH" > "$LOGS/run.$b.node.log" 2>&1 & NODE=$!
+    source "$ws/install/setup.bash"
+    ros2 launch "$launch" > "$LOGS/run.$key.node.log" 2>&1 & NODE=$!
     sleep 3
-    ros2 bag record -o "/tmp/rec_$b" /result/velocity /result/position > "$LOGS/run.$b.record.log" 2>&1 & REC=$!
+    ros2 bag record -o "/tmp/rec_$key" /result/velocity /result/position > "$LOGS/run.$key.record.log" 2>&1 & REC=$!
     sleep 2
-    timeout 25 ros2 bag play "/bags/$b" > "$LOGS/run.$b.play.log" 2>&1
+    timeout 25 ros2 bag play "/bags/$b" > "$LOGS/run.$key.play.log" 2>&1
     sleep 2
     alive=yes; kill -0 $NODE 2>/dev/null || alive=no
     kill -INT $REC 2>/dev/null; wait $REC 2>/dev/null
     kill -INT $NODE 2>/dev/null; wait $NODE 2>/dev/null
-    info="$(ros2 bag info "/tmp/rec_$b" 2>/dev/null)"
+    info="$(ros2 bag info "/tmp/rec_$key" 2>/dev/null)"
     vel="$(printf '%s\n' "$info" | grep 'Topic: /result/velocity' | grep -oE 'Count: [0-9]+' | grep -oE '[0-9]+')"
     pos="$(printf '%s\n' "$info" | grep 'Topic: /result/position' | grep -oE 'Count: [0-9]+' | grep -oE '[0-9]+')"
-    note="нода жива: $alive; /result/velocity: ${vel:-0}; /result/position: ${pos:-0}"
-    if [ "$alive" = yes ] && [ "${vel:-0}" -gt 0 ] && [ "${pos:-0}" -gt 0 ]; then
-      if checked="$(python3 /repo/tools/submission/check_recording.py "/bags/$b" "/tmp/rec_$b" 2>&1)"; then
+    # исключение ядра нода ловит и живёт дальше, но вход пропущен — это поломка (#184)
+    errs="$(grep -cE 'input skipped|Traceback' "$LOGS/run.$key.node.log")"
+    note="нода жива: $alive; /result/velocity: ${vel:-0}; /result/position: ${pos:-0}; ошибок в логе ноды: $errs"
+    if [ "$alive" = yes ] && [ "${vel:-0}" -gt 0 ] && [ "${pos:-0}" -gt 0 ] && [ "$errs" -eq 0 ]; then
+      # проверка читает и входной топик контроллера: типы из README-раскладки (полный пакет)
+      if checked="$(source /tmp/readme/ws/install/setup.bash &&
+                    python3 /repo/tools/submission/check_recording.py "/bags/$b" "/tmp/rec_$key" 2>&1)"; then
         st=ok
       else
         st=fail
       fi
       note="$note; $checked"
     else st=fail; fi
-    python3 /repo/tools/submission/layout_report.py "$RUN" "$b" "$st" "$note"
+    python3 /repo/tools/submission/layout_report.py "$RUN" "$key" "$st" "$note"
   )
-  echo "== run $b: $(tail -1 "$RUN" | cut -f2-)"
-done
+  echo "== run $key: $(tail -1 "$RUN" | cut -f2-)"
+}
+for b in $BAGS; do run_bag /tmp/readme/ws "$b" "$b"; done
+FIRST="${BAGS%% *}"
+[ -n "$FIRST" ] && run_bag /tmp/judge_msgs_over/ws "$FIRST" "$FIRST@judge_msgs"
 
 python3 - "$RES" "$RUN" "/out/layouts-$COMMIT.json" <<'PY'
 import datetime, json, os, sys
