@@ -7,8 +7,9 @@ import pytest
 from tram_eval import bag, cli, plot
 from tram_eval.bag import CMD, FRONT, REAR
 from tram_eval.reference import geodetic_to_enu
+from tram_odometry_core.position.geo import wgs84_to_mgrs_grid
 
-from test_bag import LAT0, LON0, M_PER_DEG_E, DeadReckoning, drive
+from test_bag import LAT0, LON0, M_PER_DEG_E, DeadReckoning, RelativeOnly, drive
 from test_cli import short_bags  # noqa: F401  (fixture)
 
 
@@ -50,23 +51,21 @@ def test_plot_bag_reports_a_failure_instead_of_raising(tmp_path, capsys):
     assert 'empty: plot failed' in capsys.readouterr().err
 
 
-def test_route_moves_into_the_frame_of_the_reference():
+def test_route_is_drawn_in_the_fixed_grid_independently_of_reference_origin():
     east = np.array([0.0, 100.0, 200.0])
     route = NS(origin=(LAT0, LON0 + 100.0 / M_PER_DEG_E, 150.0),
                branches=(NS(x=east, y=np.zeros(3), z=np.zeros(3)),))
-    same = plot.route_in_ref_frame(NS(origin=route.origin, branches=route.branches), route.origin)
-    assert np.allclose(same[0], np.stack([east, np.zeros(3)], axis=1), atol=1e-6)
-    moved = plot.route_in_ref_frame(route, (LAT0, LON0, 150.0))
-    assert np.allclose(moved[0][:, 0], east + 100.0, atol=0.5)   # the map origin is 100 m east of the run's
-    assert np.allclose(moved[0][:, 1], 0.0, atol=0.5)
-    assert plot.route_in_ref_frame(route, None) == []
+    same = plot.route_in_grid(NS(origin=route.origin, branches=route.branches))
+    assert same[0][0] == pytest.approx(wgs84_to_mgrs_grid(*route.origin)[:2], abs=0.01)
+    moved = plot.route_in_grid(route)
+    assert np.allclose(moved[0], same[0], atol=1e-6)
+    assert plot.route_in_grid(None) == []
     # kilometres apart the tangent planes turn by ~1e-3 rad: metres at the far end of the line
     far_origin, point = (LAT0 + 0.05, LON0 + 0.05, 160.0), (LAT0 + 0.1, LON0 + 0.1, 170.0)
     in_map = geodetic_to_enu(*point, far_origin)
     far = NS(origin=far_origin, branches=(NS(x=in_map[None, 0], y=in_map[None, 1], z=in_map[None, 2]),))
-    run_origin = (LAT0, LON0, 150.0)
-    assert np.allclose(plot.route_in_ref_frame(far, run_origin)[0][0], geodetic_to_enu(*point, run_origin)[:2],
-                       atol=1e-3)
+    assert np.allclose(plot.route_in_grid(far)[0][0],
+                       wgs84_to_mgrs_grid(*point)[:2], atol=1e-3)
 
 
 def test_plot_bag_writes_timeline_and_map(tmp_path):
@@ -78,6 +77,45 @@ def test_plot_bag_writes_timeline_and_map(tmp_path):
     wheels_only = [(t, m) for t, m in drive(duration=30.0) if t in (FRONT, REAR, CMD)]
     files = plot.plot_bag('nognss', 5.0, tmp_path, make_odometry=DeadReckoning, msgs=wheels_only)
     assert all(f.exists() for f in files)
+
+
+def test_relative_positions_do_not_stretch_fixed_grid_plot(tmp_path, monkeypatch):
+    pytest.importorskip('matplotlib')
+    from matplotlib.axes import Axes
+
+    limits = []
+    original = Axes.set_xlim
+
+    def capture(self, left=None, right=None, *args, **kwargs):
+        if left is not None and right is not None:
+            limits.append((left, right))
+        return original(self, left, right, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, 'set_xlim', capture)
+    msgs = drive(duration=20.0)
+    series = plot.bag_series(msgs, 5.0, RelativeOnly, ref_point='master')
+    assert len(series.pos_err_t) == 0 and not series.est.absolute_mask().any()
+    assert [p.name for p in plot.render(series, tmp_path)] == ['_timeline.png', '_xy.png']
+    assert limits[-1][1] - limits[-1][0] < 500.0  # reference is ~200 m long, odom starts near x=0
+
+
+def test_without_gnss_the_xy_plot_shows_relative_odometry(tmp_path, monkeypatch):
+    pytest.importorskip('matplotlib')
+    from matplotlib.axes import Axes
+
+    labels = []
+    original = Axes.set_xlabel
+
+    def capture(self, xlabel, *args, **kwargs):
+        labels.append(xlabel)
+        return original(self, xlabel, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, 'set_xlabel', capture)
+    msgs = [(topic, msg) for topic, msg in drive(10.0) if topic in (FRONT, REAR, CMD)]
+    series = plot.bag_series(msgs, 5.0, RelativeOnly)
+    assert len(series.ref.pos) == 0 and not series.est.absolute_mask().any()
+    plot.render(series, tmp_path)
+    assert labels[-1] == 'x (локально), м'
 
 
 def test_cli_plot_writes_png_per_bag(short_bags, tmp_path):  # noqa: F811

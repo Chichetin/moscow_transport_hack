@@ -7,7 +7,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tram_odometry_core.position import PathTracker
+from tram_odometry_core.position import PathTracker as GridPathTracker
+from tram_odometry_core.position.geo import wgs84_to_mgrs_grid
 from tram_odometry_core.types import Branch, Route, load_params, load_route
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -19,6 +20,13 @@ PARAMS_YAML = load_params(ROOT / 'src' / 'tram_odometry' / 'config' / 'params.ya
 # offset of params.yaml (D-077) has its own tests at the end of the file
 PARAMS = replace(PARAMS_YAML, position=replace(PARAMS_YAML.position, base_ahead_m=0.0,
                                                antenna_height_m=0.0))
+
+
+class PathTracker(GridPathTracker):
+    """Exercise route and base_link geometry in its local ENU before output projection."""
+
+    def advance(self, distance, speed=0.0):
+        return self._advance_local(distance, speed)
 ORIGIN = (55.8104, 37.4623, 168.0)
 M_LAT = 111338.0 / 0.001 / 1000.0           # m per degree of latitude at 55.81 (approx.)
 M_LON = 626.98 / 0.01                       # m per degree of longitude at 55.81 (approx.)
@@ -27,6 +35,10 @@ M_LON = 626.98 / 0.01                       # m per degree of longitude at 55.81
 def _lla(e, n, alt=ORIGIN[2]):
     """Approximate inverse ENU (tests only): points are then mapped with the exact lla_to_enu."""
     return ORIGIN[0] + n / M_LAT, ORIGIN[1] + e / M_LON, alt
+
+
+def _grid(e, n, alt=ORIGIN[2]):
+    return wgs84_to_mgrs_grid(*_lla(e, n, alt))
 
 
 def _branch(lats, lons, alts):
@@ -71,6 +83,19 @@ def test_load_route_of_the_repository_map():
 def test_not_ready_before_a_fix():
     tr = PathTracker(PARAMS, _route())
     assert not tr.ready and tr.advance(10.0) is None
+
+
+def test_output_uses_the_organizers_fixed_grid_example():
+    lat, lon, alt = 55.8088325462547, 37.4602768500852, 167.4109
+    assert wgs84_to_mgrs_grid(lat, lon, alt) == pytest.approx(
+        (103501.6309, 85876.1201, 167.4109), abs=0.01)
+    route = Route(origin=(lat, lon, alt), branches=(Branch(
+        s=np.array([0.0, 1.0]), x=np.array([0.0, 1.0]),
+        y=np.zeros(2), z=np.zeros(2)),))
+    tr = GridPathTracker(PARAMS, route)
+    tr.on_fix(lat, lon, alt, 2, distance=0.0)
+    assert tr.advance(0.0)[:3] == pytest.approx(
+        (103501.6309, 85876.1201, 167.4109), abs=0.01)
 
 
 def test_takes_loop_branch_that_escapes_a_dead_end_at_a_fork():
@@ -213,9 +238,12 @@ def test_pipeline_follows_the_map_after_the_window():
     start = _lla(-1000.0, 0.0, 170.0)
     odo.step(_fix_msg(0.0, start))
     est = _wheels(odo, 0.0, 100.0, 36.0)              # 10 m/s for 100 s: 1 km west
-    fx, fy, _ = _enu_bag(*_lla(-2000.0, 0.0, 172.0), origin=start)
-    assert est.gnss_used and math.hypot(est.x - fx, est.y - fy) < 2.0
-    assert abs(math.remainder(est.yaw - math.pi, 2 * math.pi)) < 0.01
+    fx, fy, _ = _grid(-2000.0, 0.0, 172.0)
+    assert est.gnss_used and est.position_absolute
+    assert math.hypot(est.x - fx, est.y - fy) < 2.0
+    west = _grid(-2001.0, 0.0, 172.0)
+    heading = math.atan2(west[1] - fy, west[0] - fx)
+    assert abs(math.remainder(est.yaw - heading, 2 * math.pi)) < 0.01
 
 
 def test_pipeline_ignores_gnss_after_the_window():
@@ -226,7 +254,7 @@ def test_pipeline_ignores_gnss_after_the_window():
     _wheels(odo, 0.0, 10.0, 36.0)
     odo.step(_fix_msg(PARAMS.gnss.init_window_s + 5.0, _lla(-1500.0, 0.0, 171.0)))  # after window
     est = _wheels(odo, 10.1, 20.0, 36.0)
-    fx, fy, _ = _enu_bag(*_lla(-1200.0, 0.0, 170.4), origin=start)
+    fx, fy, _ = _grid(-1200.0, 0.0, 170.4)
     assert math.hypot(est.x - fx, est.y - fy) < 2.0
 
 
@@ -375,8 +403,10 @@ def test_pipeline_takes_the_heading_from_the_rover_in_the_window_only():
         odo.step(_rover_msg(rover_t, _lla(-1000.0 + 12.4, -3.0)))
         est = _wheels(odo, rover_t, rover_t + 10.0, 36.0)        # 10 m/s for 10 s: 100 m
         assert est.distance > 90.0
-        assert (est.x > 90.0 and est.y < -4.0) == expect_east, rover_t        # eastbound track
-        assert (est.x < -90.0 and est.y > 2.0) != expect_east, rover_t        # westbound track
+        east = _grid(-900.0, -8.0)
+        west = _grid(-1100.0, 0.0)
+        assert (math.hypot(est.x - east[0], est.y - east[1]) < 2.0) == expect_east, rover_t
+        assert (math.hypot(est.x - west[0], est.y - west[1]) < 2.0) != expect_east, rover_t
 
 
 def _polyline(points):
@@ -500,7 +530,7 @@ def test_pipeline_publishes_base_link_with_the_offset_of_params():
     start = _lla(-1000.0, 0.0, 170.0)
     odo.step(_fix_msg(0.0, start))
     est = _wheels(odo, 0.0, 100.0, 36.0)                      # 10 m/s for 100 s: 1 km west
-    fx, fy, fz = _enu_bag(*_lla(-2009.873, 0.0, 172.0), origin=start)
+    fx, fy, fz = _grid(-2009.873, 0.0, 172.0)
     assert math.hypot(est.x - fx, est.y - fy) < 2.0
     assert est.z == pytest.approx(fz - 3.0, abs=0.3)
 

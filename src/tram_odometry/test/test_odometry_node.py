@@ -25,7 +25,8 @@ def _estimate(t=1756195560.123456789):
     return Estimate(t=t, speed=7.5, speed_var=0.04, accel=0.3, accel_model=0.25,
                     distance=120.0, x=-35.0, y=12.5, z=3.25, yaw=math.pi / 3,
                     pos_cov=(4.0, 9.0, 1.5),
-                    slip=SlipState(1.0, 1.0, False, False, None), gnss_used=False)
+                    slip=SlipState(1.0, 1.0, False, False, None), gnss_used=False,
+                    position_absolute=True)
 
 
 def _wheel(v=36.0):
@@ -73,6 +74,12 @@ def test_position_message_follows_contract():
     assert min(c[14], c[21], c[28], c[35]) >= on.UNKNOWN_VAR and -1.0 not in list(c)
     assert m.twist.twist.linear.x == 7.5 and m.twist.covariance[0] == 0.04
     assert m.twist.covariance[7] >= on.UNKNOWN_VAR
+
+
+def test_position_before_alignment_has_a_relative_frame():
+    params = load_params(PARAMS_FILE)
+    m = on.position_msg(replace(_estimate(), position_absolute=False), STAMP, params)
+    assert m.header.frame_id == 'odom' and m.child_frame_id == 'base_link'
 
 
 def test_velocity_message_follows_contract():

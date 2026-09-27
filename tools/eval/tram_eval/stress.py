@@ -116,6 +116,8 @@ def _errors(ref_t, ref_value, clean, dirty, value_name, event_start, event_end, 
     # build_reference sorts and deduplicates both GNSS time axes before interpolation.
     di, ce = match_nearest(dirty.t, clean.t)
     keep = (dirty.t[di] >= ref_t[0]) & (dirty.t[di] <= ref_t[-1])
+    if value_name == 'pos':
+        keep &= dirty.absolute_mask()[di] & clean.absolute_mask()[ce]
     di, ce = di[keep], ce[keep]
     if not len(di):
         return None, None, None, None, 0, 0

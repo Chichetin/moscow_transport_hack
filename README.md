@@ -69,13 +69,17 @@ ros2 bag play <каталог bag>                            # терминал
 | `/result/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 1–10 Гц | флаги проскальзывания, возраст входов и состояние обеих тележек |
 
 `header.stamp` на обоих выходах — время входного сообщения из bag (не wall clock).
-`frame_id`: у `/result/velocity` — `base_link`, у `/result/position` — `map` с
-`child_frame_id` = `base_link`. Начало frame `map` — первый
-GNSS-fix master статуса 2 в окне выставки (иначе первый валидный), оси ENU, как у эталона.
+`frame_id`: у `/result/velocity` — `base_link`, у `/result/position` после привязки —
+`map` с `child_frame_id=base_link`. Координаты `map` — непрерывная сетка UTM 37N
+от начала квадрата MGRS `37UCB`: `x=easting−300000`, `y=northing−6100000` м.
+До первого принятого GNSS fix и без карты положение остаётся относительным от начала
+прогона; в этих сообщениях `frame_id=odom`, чтобы не выдавать его за абсолютное.
 `pose.pose.position` — точка `base_link` по tf организаторов: ось передней тележки на уровне
 касания колеса и рельса, 9,873 м впереди антенны master и 3,0 м ниже антенн
 (`position.base_ahead_m`, `position.antenna_height_m`; D-077). Выход в точке самой антенны
 master — оба ключа `0` в `params.yaml`.
+Высота `z` после привязки — оценка высоты `base_link` над эллипсоидом WGS84;
+организаторы пока не подтвердили высотный датум судьи.
 
 ```bash
 ros2 topic hz /result/velocity                       # ≈ 40 Гц

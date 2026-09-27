@@ -12,8 +12,13 @@ later (the tram is rigid and runs forward on its track). `point='master'` keeps 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import sys
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'src' / 'tram_odometry_core'))
+from tram_odometry_core.position.geo import EnuGrid
 
 # WGS84
 A_WGS84 = 6378137.0
@@ -161,9 +166,9 @@ def track_ahead(pos: np.ndarray, pos_s: np.ndarray, ahead: float, heading=None) 
 
 @dataclass
 class Reference:
-    origin: tuple[float, float, float] | None   # lat, lon, alt of the frame `map` origin
+    origin: tuple[float, float, float] | None   # geodetic origin of the internal ENU track
     pos_t: np.ndarray       # (N,) s, header.stamp of master fix, sorted
-    pos: np.ndarray         # (N, 3) m, ENU
+    pos: np.ndarray         # (N, 3) m, fixed continuous 37UCB grid
     pos_s: np.ndarray       # (N,) m, arc of each point along the reference track, non-decreasing
     poly: np.ndarray        # (M, 2) m, track for projection (the fixes; decimated without vel)
     poly_s: np.ndarray      # (M,) m, arc of the vertices, non-decreasing
@@ -171,8 +176,8 @@ class Reference:
     speed: np.ndarray       # (K,) m/s, hypot(ve, vn)
 
 
-def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float, point: str = 'master',
-                    rover_t=(), rover_llas=()) -> Reference:
+def _build_reference_local(fix_t, fix_llas, vel_t, vel_en, window_end: float,
+                           point: str = 'master', rover_t=(), rover_llas=()) -> Reference:
     """fix_llas: (N, 4) lat, lon, alt, status; vel_en: (K, 2) ENU east/north m/s.
 
     point: 'master' — the antenna; 'base_link' — the front bogie pivot at rail level by the
@@ -251,3 +256,20 @@ def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float, point: st
         else:
             poly, poly_s, pos_s = arc_polyline(pos[:, :2])
     return Reference(origin, fix_t, pos, pos_s, poly, poly_s, vel_t, speed)
+
+
+def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float,
+                    point: str = 'master', rover_t=(), rover_llas=()) -> Reference:
+    """Whole-bag GNSS proxy in fixed 37UCB, at master or base_link (D-077)."""
+    local = _build_reference_local(fix_t, fix_llas, vel_t, vel_en, window_end,
+                                   point, rover_t, rover_llas)
+    if not len(local.pos):
+        return local
+    grid = EnuGrid(local.origin)
+    pos = np.array([grid.point(*p) for p in local.pos])
+    if len(local.vel_t) >= 2:
+        poly, poly_s, pos_s = pos[:, :2], local.poly_s, local.pos_s
+    else:
+        poly, poly_s, pos_s = arc_polyline(pos[:, :2])
+    return Reference(local.origin, local.pos_t, pos, pos_s, poly, poly_s,
+                     local.vel_t, local.speed)

@@ -2,8 +2,7 @@
 
 Timeline: speed (estimate, reference, both bogies as recorded), speed error, along/cross
 error, driver controller, slip flags. Map: the route of maps/route.csv, reference and
-estimate in the frame of the eval reference (ENU of `Reference.origin`), where the metrics
-compare them; its origin follows the rule of frame `map` of the tracker (D-050, #70). For
+estimate in the fixed continuous 37UCB grid used by the metrics. For
 debugging, docs/accuracy.md and the pitch; not part of
 metrics.json (contracts §4). matplotlib is imported only in `render`: the dev image has
 no matplotlib (docker/Dockerfile, D-039).
@@ -21,7 +20,8 @@ import yaml
 from . import bag as bagmod
 from .bag import CMD, FRONT, REAR
 from .metrics import Estimates, extend_track, match_nearest, project_track
-from .reference import Reference, geodetic_to_ecef
+from .reference import Reference
+from tram_odometry_core.position.geo import EnuGrid
 
 EST, REF, FRONT_C, REAR_C, SLIP_C = '#2a78d6', '#0b0b0b', '#eb6834', '#1baf7a', '#e34948'
 GRID_C, MAP_C = '#d9d8d4', '#b8b7b2'
@@ -52,23 +52,13 @@ def wheel_speed_scale() -> float:
     return float(params['/**']['ros__parameters']['input']['wheel_speed_scale'])
 
 
-def enu_rotation(lat_deg: float, lon_deg: float) -> np.ndarray:
-    """Rows: east, north, up unit vectors in ECEF."""
-    la, lo = np.radians(lat_deg), np.radians(lon_deg)
-    return np.array([[-np.sin(lo), np.cos(lo), 0.0],
-                     [-np.sin(la) * np.cos(lo), -np.sin(la) * np.sin(lo), np.cos(la)],
-                     [np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)]])
-
-
-def route_in_ref_frame(route, origin) -> list:
-    """x/y of the map branches (ENU of the map's own origin) in the ENU of `origin`; the same
-    transform as PathTracker._set_origin, applied at the origin of the eval reference."""
-    if route is None or origin is None:
+def route_in_grid(route) -> list:
+    """x/y of each master-antenna map branch in the fixed 37UCB grid."""
+    if route is None:
         return []
-    rot_run = enu_rotation(*origin[:2])
-    a = rot_run @ enu_rotation(*route.origin[:2]).T
-    c = rot_run @ (geodetic_to_ecef(*route.origin) - geodetic_to_ecef(*origin))
-    return [(np.stack([b.x, b.y, b.z], axis=1) @ a.T + c)[:, :2] for b in route.branches]
+    grid = EnuGrid(route.origin)
+    return [np.array([grid.point(x, y, z)[:2] for x, y, z in zip(b.x, b.y, b.z)])
+            for b in route.branches]
 
 
 def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '',
@@ -80,7 +70,8 @@ def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '',
     est, _ = bagmod.finite_only(est)
     # estimates come in recording order (late bursts, trap 5): lines and slip bands need time order
     order = np.argsort(est.t, kind='stable')
-    est = Estimates(est.t[order], est.speed[order], est.pos[order], est.slip[order])
+    absolute = None if est.position_absolute is None else est.position_absolute[order]
+    est = Estimates(est.t[order], est.speed[order], est.pos[order], est.slip[order], absolute)
     ref = bagmod.bag_reference(msgs, window_end, ref_point)
 
     scale = wheel_speed_scale()
@@ -93,7 +84,9 @@ def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '',
 
     ri, ei = match_nearest(ref.vel_t, est.t)
     speed_err_t, speed_err = ref.vel_t[ri], est.speed[ei] - ref.speed[ri]
-    ri, ei = match_nearest(ref.pos_t, est.t)
+    valid = np.flatnonzero(est.absolute_mask())
+    ri, local_ei = match_nearest(ref.pos_t, est.t[valid])
+    ei = valid[local_ei]
     along, cross = np.zeros(0), np.zeros(0)
     if len(ri):
         s_est, cross = project_track(*extend_track(ref.poly, ref.poly_s), est.pos[ei, :2], ref.pos_t[ri],
@@ -102,7 +95,7 @@ def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '',
     return Series(name, bagmod.stamp(msgs[0][1]), wheel_t, wheel_v,
                   np.array([c[0] for c in cmd], float), np.array([c[1] for c in cmd], float),
                   est, ref, speed_err_t, speed_err, ref.pos_t[ri], along, cross,
-                  route_in_ref_frame(getattr(odometry, 'route', None), ref.origin), crash)
+                  route_in_grid(getattr(odometry, 'route', None)) if ref.origin else [], crash)
 
 
 def _rmse(e) -> str:
@@ -165,7 +158,9 @@ def render(s: Series, out_dir: Path) -> list[Path]:
     fig.savefig(timeline, dpi=110)
     plt.close(fig)
 
-    track = np.vstack([p for p in (s.ref.pos[:, :2], s.est.pos[:, :2]) if len(p)] or [np.zeros((1, 2))])
+    relative_only = len(s.ref.pos) == 0 and not s.est.absolute_mask().any()
+    plot_pos = s.est.pos if relative_only else s.est.pos[s.est.absolute_mask()]
+    track = np.vstack([p for p in (s.ref.pos[:, :2], plot_pos[:, :2]) if len(p)] or [np.zeros((1, 2))])
     lo, hi = track.min(axis=0), track.max(axis=0)
     pad = max(50.0, 0.1 * float((hi - lo).max()))
     lo, hi = lo - pad, hi + pad
@@ -174,15 +169,15 @@ def render(s: Series, out_dir: Path) -> list[Path]:
     for k, xy in enumerate(s.route):
         ax.plot(xy[:, 0], xy[:, 1], color=MAP_C, lw=2.5, alpha=0.6, label='карта route.csv' if k == 0 else None)
     ax.plot(s.ref.pos[:, 0], s.ref.pos[:, 1], color=REF, lw=1.2, label='эталон GNSS')
-    ax.plot(s.est.pos[:, 0], s.est.pos[:, 1], color=EST, lw=1.2, label='оценка')
-    if len(s.est.pos):
-        ax.plot(*s.est.pos[0, :2], 'o', color=EST, ms=8, label='старт')
+    ax.plot(plot_pos[:, 0], plot_pos[:, 1], color=EST, lw=1.2, label='оценка')
+    if len(plot_pos):
+        ax.plot(*plot_pos[0, :2], 'o', color=EST, ms=8, label='старт')
     ax.set_xlim(lo[0], hi[0])
     ax.set_ylim(lo[1], hi[1])
     ax.set_aspect('equal', adjustable='box')
-    ax.set_xlabel('x (восток), м')
-    ax.set_ylabel('y (север), м')
-    ax.set_title(title, fontsize=9, loc='left')
+    ax.set_xlabel('x (локально), м' if relative_only else 'x (восток), м')
+    ax.set_ylabel('y (локально), м' if relative_only else 'y (север), м')
+    ax.set_title(title + ('  [локальная odom]' if relative_only else ''), fontsize=9, loc='left')
     ax.legend(loc='best', fontsize=8, frameon=False)
     _style(ax)
     xy = out_dir / f'{s.name}_xy.png'

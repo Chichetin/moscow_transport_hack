@@ -13,8 +13,8 @@
 тележек и позиция контроллера; GNSS master fix/vel допускается только в первые
 `gnss.init_window_s` секунд по `header.stamp`. Позиция контроллера проходит проверку
 и задаёт ускорение модели после задержки `drive.response_delay_s`. GNSS rover fix в том же окне
-даёт только курс master → rover для выбора ветки выставки (D-062). Выходы ноды — `/result/velocity` в м/с и `/result/position` в метрах,
-ENU прогона; их заполнение выполняют
+даёт только курс master → rover для выбора ветки выставки (D-062). Выходы ноды — `/result/velocity` в м/с и `/result/position` в метрах
+непрерывной сетки `37UCB` после привязки (`odom` до неё); их заполнение выполняют
 [`velocity_msg` и `position_msg`](../src/tram_odometry/tram_odometry/odometry_node.py).
 
 Внутренние величины `Estimate`: скорость `speed` (м/с), путь `distance` (м), положение
@@ -173,6 +173,13 @@ s = s_anchor + scale · (distance − distance_anchor);
 ```
 
 Высота карты сдвигается на медиану разности высот fix и карты за окно выставки.
+Геометрия маршрута остаётся во внутренней ENU. После сдвига точки master к `base_link`
+на `position.base_ahead_m` вдоль дуги и вниз на `position.antenna_height_m`
+[`EnuGrid.point`](../src/tram_odometry_core/tram_odometry_core/position/geo.py)
+переводит результат через ECEF и WGS84 в UTM 37N с фиксированным началом
+`37UCB` (`x=easting−300000`, `y=northing−6100000`). Курс и ковариация x/y
+поворачиваются в оси сетки. Если якоря нет, `Estimate.position_absolute=False`,
+и нода публикует запасную прямую в относительном frame `odom`.
 При достижении конца ветки продолжение ищется в пределах `position.join_m`; если конец —
 тупик, а до него от ветки отходит путь с продолжением, по умолчанию берётся он (петля
 западной конечной). Второй, тупиковый, путь, отходящий от ветки, — «боковой»: въезд в

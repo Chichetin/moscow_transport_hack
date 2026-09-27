@@ -2,8 +2,10 @@
 import numpy as np
 import pytest
 
-from tram_eval.reference import (A_WGS84, E2_WGS84, arc_polyline, build_reference,
-                                 geodetic_to_enu)
+from tram_eval.reference import (A_WGS84, E2_WGS84, arc_polyline,
+                                 _build_reference_local as build_reference,
+                                 build_reference as build_reference_grid, geodetic_to_enu)
+from tram_odometry_core.position.geo import wgs84_to_mgrs_grid
 
 LAT0, LON0, ALT0 = 55.75, 37.60, 150.0
 M_PER_DEG_N = np.radians(1) * A_WGS84 * (1 - E2_WGS84) / (1 - E2_WGS84 * np.sin(np.radians(LAT0)) ** 2) ** 1.5
@@ -33,6 +35,24 @@ def test_reference_track_speed_and_origin():
     assert ref.pos[-1] == pytest.approx([99.0, 0, 0], abs=0.01)
     assert ref.pos_s[-1] == pytest.approx(99.0, abs=0.01)
     assert ref.speed == pytest.approx(np.full(100, 10.0))
+
+
+def test_public_reference_is_in_the_same_fixed_grid_as_the_tracker():
+    t, llas = fixes_east(100)
+    ref = build_reference_grid(t, llas, t, np.tile([10.0, 0.0], (100, 1)),
+                               window_end=5.0, point='master')
+    assert ref.pos[0] == pytest.approx(wgs84_to_mgrs_grid(*llas[0, :3]), abs=0.01)
+    assert ref.pos[-1] == pytest.approx(wgs84_to_mgrs_grid(*llas[-1, :3]), abs=0.01)
+    assert ref.poly == pytest.approx(ref.pos[:, :2])
+
+    rover = llas.copy()
+    rover[:, 1] += 12.436 / M_PER_DEG_E
+    base = build_reference_grid(t, llas, t, np.tile([10.0, 0.0], (100, 1)),
+                                window_end=5.0, point='base_link',
+                                rover_t=t, rover_llas=rover)
+    assert np.median(np.linalg.norm(base.pos[:, :2] - ref.pos[:, :2], axis=1)) == \
+        pytest.approx(9.873, abs=0.05)
+    assert base.pos[:, 2] == pytest.approx(np.full(len(t), ALT0 - 3.0), abs=0.01)
 
 
 def test_outlier_km_jump_and_no_fix_are_dropped_first_point_too():

@@ -23,6 +23,7 @@ from typing import Optional, Tuple
 import numpy as np
 
 from ..types import Params, Route
+from .geo import EnuGrid
 
 WGS84_A = 6378137.0          # m
 WGS84_E2 = 6.69437999014e-3
@@ -63,6 +64,7 @@ class PathTracker:
         self._map_rot, self._map_ecef0 = _enu_rotation(lat0, lon0), _ecef(lat0, lon0, alt0)
         self._origin_status: Optional[int] = None
         self._rot = self._ecef0 = None
+        self._grid = None
         self._anchor: Optional[Tuple[int, float, float]] = None   # branch, s, distance
         self._dz = []                         # run height - map height, one per window fix
         self._dz_median = 0.0
@@ -167,6 +169,7 @@ class PathTracker:
     def _set_origin(self, lat: float, lon: float, alt: float, status: int) -> None:
         self._origin_status = status
         self._rot, self._ecef0 = _enu_rotation(lat, lon), _ecef(lat, lon, alt)
+        self._grid = EnuGrid((lat, lon, alt))
         lat0, lon0, alt0 = self.route.origin
         a = self._rot @ _enu_rotation(lat0, lon0).T
         c = self._rot @ (_ecef(lat0, lon0, alt0) - self._ecef0)
@@ -351,11 +354,8 @@ class PathTracker:
                     1.0 + self.p.scale_max_dev)
         self._scale += self.p.scale_alpha * (ratio - self._scale)
 
-    def advance(self, distance: float, speed: float = 0.0):
-        """(x, y, z, yaw, (var_x, var_y, cov_xy)) of base_link at path `distance` and speed
-        (m/s), None before alignment. The map, the anchor and the stop places are the track of
-        the master antenna; base_link (the front bogie pivot at rail level, organizers' tf) is
-        `base_ahead_m` ahead of it along the track and `antenna_height_m` below (D-077)."""
+    def _advance_local(self, distance: float, speed: float = 0.0):
+        """Internal path geometry in ENU at the accepted master fix (D-077)."""
         if self._anchor is None:
             return None
         self._take_side(distance, speed)
@@ -365,9 +365,26 @@ class PathTracker:
         # base_ahead_m past a dead end: base_link keeps up to that much ahead of it there
         over = min(over, self.p.base_ahead_m)
         x, y = x + over * math.cos(yaw), y + over * math.sin(yaw)
+        z += self._dz_median - self.p.antenna_height_m
         var_cross = self.p.cross_std_m ** 2
         var_along = var_cross + self._var_along(distance)
         c, sn = math.cos(yaw), math.sin(yaw)
         cov = (var_along * c * c + var_cross * sn * sn, var_along * sn * sn + var_cross * c * c,
                (var_along - var_cross) * c * sn)
-        return x, y, z + self._dz_median - self.p.antenna_height_m, yaw, cov
+        return x, y, z, yaw, cov
+
+    def advance(self, distance: float, speed: float = 0.0):
+        """Base link in fixed 37UCB; None before GNSS alignment."""
+        local = self._advance_local(distance, speed)
+        if local is None:
+            return None
+        x, y, z, yaw, _ = local
+        gx, gy, gz = self._grid.point(x, y, z)
+        hx, hy, _ = self._grid.point(x + math.cos(yaw), y + math.sin(yaw), z)
+        grid_yaw = math.atan2(hy - gy, hx - gx)
+        var_cross = self.p.cross_std_m ** 2
+        var_along = var_cross + self._var_along(distance)
+        c, sn = math.cos(grid_yaw), math.sin(grid_yaw)
+        cov = (var_along * c * c + var_cross * sn * sn, var_along * sn * sn + var_cross * c * c,
+               (var_along - var_cross) * c * sn)
+        return gx, gy, gz, grid_yaw, cov

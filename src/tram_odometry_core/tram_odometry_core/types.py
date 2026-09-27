@@ -80,6 +80,7 @@ class Estimate:
     pos_cov: Tuple[float, float, float]   # var_x, var_y, cov_xy
     slip: SlipState
     gnss_used: bool
+    position_absolute: bool = False  # True only when map alignment defines fixed-grid coordinates
     filter_diagnostics: Optional[FilterDiagnostics] = None
 
 

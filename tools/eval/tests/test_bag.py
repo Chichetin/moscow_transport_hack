@@ -5,6 +5,7 @@ import pytest
 
 from tram_eval import bag
 from tram_eval.bag import CMD, FRONT, MASTER_FIX, MASTER_VEL, REAR, ROVER_FIX, evaluate_bag, run_pipeline
+from tram_odometry_core.position.geo import wgs84_to_mgrs_grid
 
 LAT0, LON0 = 55.75, 37.60
 M_PER_DEG_E = 62_860.0           # approx at 55.75 N, enough for a synthetic track
@@ -40,7 +41,7 @@ def drive(duration=60.0, speed=10.0):
 
 
 class DeadReckoning:
-    """Test double of pipeline.Odometry: wheel mean / 3.6 integrated east from x = 0."""
+    """Test double: wheel mean / 3.6 along the synthetic master track in 37UCB."""
 
     def __init__(self, crash_at=None, stamp_offset=0.0):
         self.seen, self.x, self.t, self.v = [], 0.0, None, 0.0
@@ -57,7 +58,8 @@ class DeadReckoning:
         if self.t is not None and t > self.t:
             self.x += self.v * (t - self.t)
         self.t = t if self.t is None else max(self.t, t)
-        return NS(t=t + self.stamp_offset, speed=self.v, x=self.x, y=0.0,
+        gx, gy, _ = wgs84_to_mgrs_grid(LAT0, LON0 + self.x / M_PER_DEG_E, 150.0)
+        return NS(t=t + self.stamp_offset, speed=self.v, x=gx, y=gy,
                   slip=NS(slip_front=False, slip_rear=topic == REAR))
 
 
@@ -165,3 +167,22 @@ def test_bag_without_gnss_has_no_metrics_and_does_not_crash():
     m = evaluate_bag('fake', 5.0, make_odometry=DeadReckoning, msgs=msgs)
     assert m['crashed'] is False and m['n_matched'] == 0
     assert m['speed_rmse'] is None and m['along_rmse'] is None and m['drift_pct'] is None
+
+
+class RelativeOnly(DeadReckoning):
+    """A model with wheel speed but no accepted map alignment."""
+
+    def step(self, raw):
+        est = super().step(raw)
+        est.x, est.y = self.x, 0.0
+        est.position_absolute = False
+        return est
+
+
+def test_relative_position_is_not_scored_against_fixed_grid():
+    msgs = drive(10.0)
+    est, _, _ = run_pipeline(msgs, RelativeOnly(), bag.gnss_window_end(msgs, 5.0))
+    assert not est.position_absolute.any()
+    m = evaluate_bag('relative', 5.0, make_odometry=RelativeOnly, msgs=msgs, ref_point='master')
+    assert m['crashed'] is False and m['speed_rmse'] == pytest.approx(0.0, abs=1e-9)
+    assert all(m[k] is None for k in ('along_rmse', 'cross_rmse', 'pos3d_rmse', 'drift_pct'))

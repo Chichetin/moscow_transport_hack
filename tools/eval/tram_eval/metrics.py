@@ -39,8 +39,12 @@ SIGNED_METRICS = ('speed_bias_accel', 'speed_bias_brake', 'speed_bias_stop', 'sp
 class Estimates:
     t: np.ndarray           # (N,) s, Estimate.t (= stamp of the input that produced it)
     speed: np.ndarray       # (N,) m/s
-    pos: np.ndarray         # (N, 3) m, frame map; z as published (0 until the model has one)
+    pos: np.ndarray         # (N, 3) m, map when absolute; otherwise local odom
     slip: np.ndarray        # (N,) bool, slip_front or slip_rear
+    position_absolute: np.ndarray | None = None  # (N,) bool; None for legacy synthetic data (all absolute)
+
+    def absolute_mask(self) -> np.ndarray:
+        return np.ones(len(self.t), dtype=bool) if self.position_absolute is None else self.position_absolute
 
 
 def match_nearest(ref_t: np.ndarray, est_t: np.ndarray, tol: float = MATCH_TOL_S):
@@ -145,7 +149,9 @@ def bag_metrics(ref: Reference, est: Estimates) -> dict:
             if sel.any():
                 m[f'speed_bias_{name}'] = float(np.mean(err[sel]))
 
-    ri, ei = match_nearest(ref.pos_t, est.t)
+    absolute = np.flatnonzero(est.absolute_mask())
+    ri, local_ei = match_nearest(ref.pos_t, est.t[absolute])
+    ei = absolute[local_ei]
     if len(ri):
         ref_xyz, est_xyz = ref.pos[ri], est.pos[ei]
         s_est, cross = project_track(*extend_track(ref.poly, ref.poly_s), est_xyz[:, :2], ref.pos_t[ri],

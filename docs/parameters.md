@@ -10,7 +10,7 @@
 
 | Ключ | Единица, смысл и текущее использование |
 |---|---|
-| `frames.map` | Имя локальной системы ENU для `Odometry.header.frame_id`; по умолчанию `map`. Использует ROS-обёртка. |
+| `frames.map` | Имя фиксированной сетки `37UCB` для `Odometry.header.frame_id` после привязки; по умолчанию `map`. До привязки нода ставит `odom` для относительных координат. |
 | `frames.base` | Имя системы вагона для `Odometry.child_frame_id` и `VelocitySensor.header.frame_id`; `base_link`. |
 | `input.wheel_speed_scale` | Множитель км/ч → м/с (`1/3,6`), применяется один раз в `Preprocessor._wheel`. |
 | `input.stale_timeout_s` | Секунды допустимого молчания тележки; старше этого `SlipDetector.update` ставит доверие 0. |

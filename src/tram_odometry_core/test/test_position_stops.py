@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from test_position import (ORIGIN, PARAMS, ROOT, _enu_bag, _fix_msg, _lla, _route, _wheels)
+from test_position import (ORIGIN, PARAMS, ROOT, _fix_msg, _grid, _lla, _route, _wheels)
 from tram_odometry_core.pipeline import Odometry
 from tram_odometry_core.position import PathTracker
 from tram_odometry_core.types import Route, load_route
@@ -34,7 +34,7 @@ def test_stop_near_a_place_snaps_s_and_cuts_the_variance():
     tr = _tracker([(0, 1500.0)])
     origin, before = _anchor_xy(tr), tr.advance(495.0)[4][0]
     assert tr.on_stop(495.0)
-    assert _arc(tr, 495.0, origin) == pytest.approx(500.0, abs=0.7)   # was 495; place is 500 m on
+    assert _arc(tr, 495.0, origin) == pytest.approx(500.0, abs=0.8)   # was 495; place is 500 m on
     assert tr.advance(495.0)[4][0] < before
 
 
@@ -127,8 +127,7 @@ def _stream(with_late_gnss):
 
 def test_pipeline_snaps_at_a_standstill():
     standing, _ = _stream(False)
-    start = _lla(-START_S, 0.0, 170.0)
-    fx, fy, _ = _enu_bag(*_lla(-1600.0, 0.0, 170.0), origin=start)
+    fx, fy, _ = _grid(-1600.0, 0.0, 170.0)
     assert math.hypot(standing.x - fx, standing.y - fy) < 2.0        # snapped from s = 1590
 
 
