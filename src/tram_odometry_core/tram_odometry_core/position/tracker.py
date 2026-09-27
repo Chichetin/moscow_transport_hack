@@ -240,7 +240,10 @@ class PathTracker:
         self._master = (_ecef(lat, lon, alt), distance)
         k, s, z = self._anchor_master()
         self._dz.append(z - self._at(k, s)[2])
-        self._dz_median = float(np.median(self._dz))
+        dz = float(np.median(self._dz))
+        # a run's GNSS height is metres off the map; tens of metres is a glitch of the window's
+        # fixes (status 0 jumps), not the run: keep the map height then (#169, D-087)
+        self._dz_median = dz if abs(dz) <= self.p.height_offset_max_m else 0.0
 
     def on_rover(self, lat: float, lon: float, alt: float, status: int) -> None:
         """A GNSS rover fix of the init window: heading only, never the origin or the anchor
