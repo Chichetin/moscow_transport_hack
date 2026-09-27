@@ -1,6 +1,6 @@
 """Read-only core experiments. Paths are explicit; no ROS execution or hidden parameter tuning."""
 from __future__ import annotations
-import argparse, ast, dataclasses, importlib.util, json, math, os, statistics, subprocess, sys, time, traceback
+import argparse, ast, dataclasses, importlib.util, json, math, os, re, statistics, subprocess, sys, time, traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from types import SimpleNamespace as NS
@@ -50,7 +50,9 @@ def ours(variant):
         # Change only the one path-integration expression; source and symbol checks fail closed.
         src=(REPO/'src/tram_odometry_core/tram_odometry_core/pipeline.py').read_text()
         assert src.count('        ds = self._v * dt')==1
-        src=src.replace('        self._v, _, _ = self._filter.state()', '        previous_speed = self._v\n        self._v, _, _ = self._filter.state()')
+        # eeca835: `self._v, _, _ = ...`, later main: `self._v, _, accel = ...`; exactly one line either way.
+        src,n=re.subn(r'^(        )(self\._v, _, \w+ = self\._filter\.state\(\))$',r'\1previous_speed = self._v\n\1\2',src,flags=re.M)
+        assert n==1
         src=src.replace('        ds = self._v * dt','        ds = 0.5 * (previous_speed + self._v) * dt')
         scope={'__name__':'tram_odometry_core.trapezoid_experiment','__package__':'tram_odometry_core'}
         exec(compile(src,'trapezoid_experiment','exec'),scope)
@@ -58,17 +60,22 @@ def ours(variant):
     # LCM-inspired experiments are opt-in and do not modify the runtime pipeline.
     if variant=='ours_adapt':
         src=(REPO/'src/tram_odometry_core/tram_odometry_core/estimator/__init__.py').read_text()
-        src=src.replace('        self._scale_delta = 0.0','        self._scale_delta = 0.0\n        self._innovation_window = []')
-        old='        projected = self._cov @ observation'
-        new='''        self._innovation_window.append(abs(innovation))
+        anchor='        self._scale_delta = 0.0'
+        assert src.count(anchor)==1
+        src=src.replace(anchor,anchor+'\n        self._innovation_window = []')
+        # The bare `projected = self._cov @ observation` also sits (deeper indented) in the paired-zero
+        # branch, so anchor on the innovation line + projected line: exactly one site, fail closed otherwise.
+        old='        innovation = measurement - observation @ self._x\n        projected = self._cov @ observation'
+        new='''        innovation = measurement - observation @ self._x
+        self._innovation_window.append(abs(innovation))
         self._innovation_window = self._innovation_window[-30:]
         if len(self._innovation_window) >= 10:
             robust_std = sorted(self._innovation_window)[len(self._innovation_window)//2] * 1.4826
             if robust_std > 3.0 * self._p.r_wheel ** 0.5:
                 measurement_var = max(measurement_var, min(1.0, robust_std)**2 / (trust * scale**2) + self._p.q_accel * age)
         projected = self._cov @ observation'''
-        assert old in src
-        src=src.replace(old,new,1)
+        assert src.count(old)==1
+        src=src.replace(old,new)
         scope={'__name__':'tram_odometry_core.estimator.adapt_experiment','__package__':'tram_odometry_core.estimator'}
         exec(compile(src,'adapt_experiment','exec'),scope)
         odo._filter=scope['SpeedFilter'](odo.params)
