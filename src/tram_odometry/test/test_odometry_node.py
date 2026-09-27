@@ -21,11 +21,12 @@ PARAMS_FILE = Path(__file__).resolve().parents[1] / 'config' / 'params.yaml'
 STAMP = Time(sec=1756195560, nanosec=123456789)   # float seconds would lose the nanoseconds
 
 
-def _estimate(t=1756195560.123456789):
+def _estimate(t=1756195560.123456789, position_absolute=True):
     return Estimate(t=t, speed=7.5, speed_var=0.04, accel=0.3, accel_model=0.25,
                     distance=120.0, x=-35.0, y=12.5, z=3.25, yaw=math.pi / 3,
                     pos_cov=(4.0, 9.0, 1.5),
-                    slip=SlipState(1.0, 1.0, False, False, None), gnss_used=False)
+                    slip=SlipState(1.0, 1.0, False, False, None), gnss_used=False,
+                    position_absolute=position_absolute)
 
 
 def _wheel(v=36.0):
@@ -73,6 +74,32 @@ def test_position_message_follows_contract():
     assert min(c[14], c[21], c[28], c[35]) >= on.UNKNOWN_VAR and -1.0 not in list(c)
     assert m.twist.twist.linear.x == 7.5 and m.twist.covariance[0] == 0.04
     assert m.twist.covariance[7] >= on.UNKNOWN_VAR
+
+
+def test_local_position_is_published_in_odom_not_in_the_grid():
+    """No geodetic anchor yet (no map, no fix): local metres go out in `odom` (REP-105), never
+    under `map`, which means the MGRS grid (D-083, #162)."""
+    params = load_params(PARAMS_FILE)
+    assert on.position_msg(_estimate(position_absolute=False), STAMP, params).header.frame_id == 'odom'
+    assert on.position_msg(_estimate(), STAMP, params).header.frame_id == params.frames.map
+
+
+def test_node_without_map_publishes_odom_until_the_first_fix(node, monkeypatch):
+    """The whole node: without a map the first output is local (`odom`), after a master fix in
+    the GNSS window it is the grid (`map`)."""
+    node.odometry = on.Odometry(node.params)             # no route: no anchor until a fix
+    frames = []
+    monkeypatch.setattr(node.pub_position, 'publish', lambda m: frames.append(m.header.frame_id))
+    node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
+    fix = NavSatFix()
+    fix.header.stamp = Time(sec=STAMP.sec, nanosec=STAMP.nanosec + 1000)
+    fix.latitude, fix.longitude, fix.altitude = 55.8088325462547, 37.4602768500852, 170.0
+    node.on_input('/sensing/gnss/master/fix', fix)
+    w = _wheel(36.0)
+    w.header.stamp = Time(sec=STAMP.sec, nanosec=STAMP.nanosec + 2000)
+    node.on_input('/vehicle/front_bogie_velocity', w)
+    assert node.errors == 0
+    assert frames[0] == 'odom' and frames[-1] == node.params.frames.map
 
 
 def test_velocity_message_follows_contract():

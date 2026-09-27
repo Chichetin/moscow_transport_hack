@@ -202,6 +202,7 @@ class Odometry:
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used,
+            position_absolute=frame is not None,   # no map, no fix: local metres (#162)
             filter_diagnostics=self._filter.diagnostics())
 
     def _on_fix(self, sample: GnssFix) -> None:

@@ -178,3 +178,24 @@ def test_bag_without_gnss_has_no_metrics_and_does_not_crash():
     m = evaluate_bag('fake', 5.0, make_odometry=DeadReckoning, msgs=msgs)
     assert m['crashed'] is False and m['n_matched'] == 0
     assert m['speed_rmse'] is None and m['along_rmse'] is None and m['drift_pct'] is None
+
+
+class LocalFirst(DeadReckoning):
+    """Publishes local metres (position_absolute False) until the first master fix."""
+
+    def step(self, raw):
+        est = super().step(raw)
+        self.anchored = getattr(self, 'anchored', False) or raw[0] == MASTER_FIX
+        est.position_absolute = self.anchored
+        if not self.anchored:
+            est.x, est.y, est.z = self.x, 0.0, 0.0
+        return est
+
+
+def test_local_positions_are_counted_and_not_scored():
+    msgs = drive()
+    est, _, _ = run_pipeline(msgs, LocalFirst(), bag.gnss_window_end(msgs, 5.0))
+    assert (~est.absolute).sum() == 3 and est.absolute[3:].all()   # front, rear, cmd before the fix
+    m = evaluate_bag('fake', 5.0, make_odometry=LocalFirst, msgs=msgs, ref_point='master')
+    assert m[bag.NOTES]['position_local'] == 3
+    assert m['along_rmse'] < 1.0 and m['pos3d_max'] < 1.0         # the local 0 m is never scored
