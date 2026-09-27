@@ -215,16 +215,17 @@ def test_speed_scale_skips_a_pair_that_is_not_one_stretch_of_track():
 
 
 def test_speed_scale_skips_a_place_behind_the_previous_one():
-    tr = _tracker([(0, 1500.0), (0, 2100.0)])
-    assert tr.on_stop(1100.0)                          # s = 2100
-    tr._anchor = (0, 1500.0, 1700.0)
-    assert tr.on_stop(1700.0)                          # place 1500 behind 2100
+    # 30 m back over 5 m of wheels passes the stretch guard; only the order check stops it
+    tr = _tracker([(0, 1500.0), (0, 1530.0)])
+    assert tr.on_stop(530.0)                           # s = 1530
+    tr._anchor = (0, 1500.0, 535.0)
+    assert tr.on_stop(535.0)                           # place 1500 behind 1530
     assert tr._chain_arc == 0.0 and tr._chain_wheel == 0.0
 
 
-def test_speed_scale_ignores_a_repeated_stop_at_the_same_path():
+def test_speed_scale_ignores_a_stop_at_a_shorter_path():
     tr = _tracker([(0, 1500.0), (0, 1600.0)])
     assert tr.on_stop(500.0) and tr.on_stop(603.0)
     sums = (tr._chain_arc, tr._chain_wheel)
-    tr.on_stop(603.0)                                  # e.g. the same standstill after a clock resync
+    assert tr.on_stop(600.0)                           # the same place 3 m of path earlier
     assert (tr._chain_arc, tr._chain_wheel) == sums
