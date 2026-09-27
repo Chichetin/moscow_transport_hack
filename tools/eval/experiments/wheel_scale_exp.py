@@ -56,6 +56,9 @@ VARIANTS = {
     'h123_k3': dict(H12, recover=True, rec_scale='kf', rec_k=3.0),
     'h123_p15': dict(H12, prior=0.015, recover=True, rec_scale='kf'),
     'h123_chain': dict(H12, recover=True, rec_scale='kf', chain_relock=True),
+    # H3 alone on the EMA of main: the relock of a lost lock, the scale as in main (the
+    # candidate of #154 after h123 was rejected; the core of this branch is it bit for bit)
+    'h3': dict(mode='base', recover=True, rec_scale='kf'),
 }
 
 
