@@ -300,5 +300,5 @@ branch,s_m,n_bags
 `branch`, `s_m` — место на карте `route.csv` (тот же `s`); `n_bags` — сколько train bag там
 останавливались (справочно, ядро не читает). Файл строит `tools/pathgraph/build_stops.py` из
 train, лежит рядом с `route.csv` и ставится в `share/tram_odometry/maps/` тем же `glob('maps/*.csv')`.
-Отсутствие файла — не ошибка (мест нет, привязки нет). Ключи `position.stop_*`, `position.scale_*`,
+Отсутствие файла — не ошибка (мест нет, привязки нет). Ключи `position.stop_*`, `position.scale_*`, `position.relock_sigma`,
 `position.anchor_std_m`, `position.heading_min_base_m`, `position.heading_max_base_m`, `position.side_speed_mps`, `position.side_min_m`, `position.side_max_m`, `position.side_overrun_m` (`params.yaml`, §3) — часть контракта.

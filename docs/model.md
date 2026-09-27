@@ -189,19 +189,32 @@ s = s_anchor + scale · (distance − distance_anchor);
 [`stops.csv`](../src/tram_odometry/maps/stops.csv) поправить `s` к ближайшему
 месту, если оно не дальше `position.stop_snap_max_m`.
 Поправка взвешенная: `gain = var/(var + stop_std_m²)`, затем `s += gain·(s_stop-s)`;
-остаточная дисперсия `var` умножается на `1-gain`. Если две принятые стоянки
-находятся на одной ветке и расстояние между ними не меньше
-`position.scale_min_arc_m`, отношение пути карты к пути колёс обновляет масштаб:
+остаточная дисперсия `var` умножается на `1-gain`. Масштаб — скалярный фильтр Калмана
+(#154, D-084): априорная дисперсия `along_drift_frac²` (разброс масштаба ±1,5 %, ловушки 2 и 17),
+опора — якорь выставки (дисперсия `anchor_std_m²`), затем место последнего замера
+(`stop_std_m²`). Привязка на той же ветке, что опора, с дугой карты от опоры не меньше
+`position.scale_min_arc_m` измеряет масштаб; более короткая дуга не меряет и опору не сдвигает,
+привязка на другой ветке опору сбрасывает (стык веток в карте сдвинут вдоль до ~10 м):
 
 ```text
-ratio = clip((s_stop − s_stop_prev) / (distance − distance_prev), 1 ± scale_max_dev);
-scale += scale_alpha · (ratio − scale).
+ratio = (s_stop − s_ref) / (distance − distance_ref);
+r = (var_ref + stop_std_m²) / (distance − distance_ref)²;
+K = P / (P + r);  scale = clip(scale + K·(ratio − scale), 1 ± scale_max_dev);  P = (1 − K)·P.
 ```
+
+Масштаб меняется только на привязке, где якорь переставляется в текущую точку, поэтому `s`
+на пройденном пути задним числом не прыгает. Стоянка дальше `stop_snap_max_m` от места —
+светофор, кроме потери захвата: если два промаха `y = s_stop − s` подряд одного знака, оба
+объяснимы масштабом в `1 ± scale_max_dev` (`|scale + y/(distance − distance_anchor) − 1|`) и
+второй продолжает прямую первого от якоря (`|y₂ − q·y₁| ≤ relock_sigma·σ`,
+`q = (d₂ − d_a)/(d₁ − d_a)`, `σ² = stop_std_m²·(1 + q²) + var0·(1 − q)²`), на втором промахе
+выполняется привязка, а дисперсия масштаба возвращается к априорной.
 
 Реализуют
 [`Odometry._on_standstill`](../src/tram_odometry_core/tram_odometry_core/pipeline.py),
 [`PathTracker.on_stop`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py)
-и [`PathTracker._update_scale`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py).
+[`PathTracker._update_scale`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py)
+и [`PathTracker._relock`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py).
 Если карта отключена либо ещё нет якоря, [`Odometry._advance`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
 интегрирует прямую по курсу из наибольшей скорости GNSS master в окне:
 
