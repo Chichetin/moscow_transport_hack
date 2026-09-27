@@ -319,4 +319,4 @@ branch,s_m,n_bags
 останавливались (справочно, ядро не читает). Файл строит `tools/pathgraph/build_stops.py` из
 train, лежит рядом с `route.csv` и ставится в `share/tram_odometry/maps/` тем же `glob('maps/*.csv')`.
 Отсутствие файла — не ошибка (мест нет, привязки нет). Ключи `position.stop_*`, `position.scale_*`, `position.speed_scale_prior_m`,
-`position.anchor_std_m`, `position.heading_min_base_m`, `position.heading_max_base_m`, `position.side_speed_mps`, `position.side_min_m`, `position.side_max_m`, `position.side_overrun_m` (`params.yaml`, §3) — часть контракта.
+`position.anchor_std_m`, `position.heading_min_base_m`, `position.heading_max_base_m`, `position.side_speed_mps`, `position.side_min_m`, `position.side_max_m`, `position.side_overrun_m`, `position.height_offset_max_m` (`params.yaml`, §3) — часть контракта.
