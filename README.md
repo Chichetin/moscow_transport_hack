@@ -43,7 +43,7 @@ underlay — и берёт его. Только если его нет, он с�
 ### 2. Запуск
 
 В **каждом** новом терминале сначала перейти в `<ws>` и повторить `source` из шага 1
-(`tram_vehicle_msgs` и нода видны только в шелл-сессии, где выполнен, из `<ws>`,
+(`tram_vehicle_msgs` и нода видны только в сессии, где из `<ws>` выполнен
 `source install/setup.bash`; без этого `ros2 bag play` во втором терминале молча
 проигнорирует все три входных топика с WARN `package 'tram_vehicle_msgs' not found` —
 нода останется жива, но без данных):
@@ -55,7 +55,7 @@ ros2 launch tram_odometry odometry.launch.py
 
 # терминал 2: bag организаторов
 cd <ws> && source /opt/ros/humble/setup.bash && source install/setup.bash
-ros2 bag play <каталог bag>
+ros2 bag play <абсолютный путь к каталогу bag>
 ```
 
 `odometry.launch.py` — единственная точка входа. Параметры — `params_file:=<yaml>`,
