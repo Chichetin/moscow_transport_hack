@@ -15,7 +15,7 @@
 тележек и позиция контроллера; GNSS master fix/vel допускается только в первые
 `gnss.init_window_s` секунд по `header.stamp`. Позиция контроллера проходит проверку
 и задаёт ускорение модели после задержки `drive.response_delay_s`. GNSS rover fix в том же окне
-даёт только курс master → rover для выбора ветки выставки (D-062). Выходы ноды — `/result/velocity` в м/с и `/result/position` в метрах,
+даёт только курс master → rover для выбора ветки выставки (D-062). Выходы ноды — `/result/velocity` в м/с (оценка на `output.velocity_delay_s` = 0,09 с раньше stamp — время эталона судьи, `/result/position` без сдвига, D-095) и `/result/position` в метрах,
 плоская сетка MGRS `37UCB` и высота над эллипсоидом (ядро считает в ENU прогона и переводит
 на выходе, D-083); их заполнение выполняют
 [`velocity_msg` и `position_msg`](../src/tram_odometry/tram_odometry/odometry_node.py).

@@ -80,8 +80,8 @@ ros2 bag play <абсолютный путь к каталогу bag>
 
 | Топик | Тип | Частота | Содержимое |
 |---|---|---|---|
-| `/result/velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | на каждом принятом сообщении тележек и контроллера, ~40 Гц (2 × 10 Гц + 20 Гц); GNSS и отброшенный вход выхода не дают | `velocity` — продольная скорость, **м/с** (вход тележек — км/ч, перевод в ядре) |
-| `/result/position` | `nav_msgs/msg/Odometry` | та же, начиная с первого валидного fix master (до него, в первые ≤ 1 с bag, позиции ещё нет — выходит только скорость); bag без GNSS — с конца окна `gnss.init_window_s`, frame `odom` (D-086) | `pose.pose.position` — x, y — плоская сетка MGRS `37UCB` (UTM 37N − (300 000, 6 100 000)), z — высота над эллипсоидом WGS84, м, frame `map`; `pose.pose.orientation` — курс; `twist.twist.linear.x` — скорость; ковариации заполнены, неоцениваемые компоненты 1e6 |
+| `/result/velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | на каждом принятом сообщении тележек и контроллера, ~40 Гц (2 × 10 Гц + 20 Гц); GNSS и отброшенный вход выхода не дают | `velocity` — продольная скорость, **м/с** (вход тележек — км/ч, перевод в ядре), на момент stamp − 0,09 с (`output.velocity_delay_s`): эталон судьи `/localization/kinematic_state` отстаёт от датчиков на ~0,09 с (D-095) |
+| `/result/position` | `nav_msgs/msg/Odometry` | та же, начиная с первого валидного fix master (до него, в первые ≤ 1 с bag, позиции ещё нет — выходит только скорость); bag без GNSS — с конца окна `gnss.init_window_s`, frame `odom` (D-086) | `pose.pose.position` — x, y — плоская сетка MGRS `37UCB` (UTM 37N − (300 000, 6 100 000)), z — высота над эллипсоидом WGS84, м, frame `map`; `pose.pose.orientation` — курс; `twist.twist.linear.x` — скорость на stamp входа, без сдвига `/result/velocity` (D-095); ковариации заполнены, неоцениваемые компоненты 1e6 |
 | `/result/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 1–10 Гц | флаги проскальзывания, возраст входов и состояние обеих тележек |
 
 `header.stamp` на обоих выходах — время входного сообщения из bag (не wall clock).
@@ -121,7 +121,9 @@ cp .env.example .env                                  # TRAM_DATA_DIR = ката
 .venv/bin/python tools/eval/run_eval.py --split holdout                   # 26 bag отложенных дней
 ```
 
-`tools/eval` подаёт сообщения bag в то же ядро `Odometry.step`, что и нода, в порядке записи,
+`tools/eval` подаёт сообщения bag в то же ядро `Odometry.step`, что и нода, в порядке записи
+(скорость в метриках — `Estimate.speed` без сдвига `output.velocity_delay_s`: эталон eval, GNSS
+`master/vel`, не отстаёт; сдвиг против эталона судьи — `tools/research/judge_speed_delay.py`, D-095),
 обрезает GNSS после окна выставки и сравнивает выход с эталоном из GNSS master всего прогона:
 скорость (RMSE/MAE, bias на разгоне, торможении, стоянке), along-track, cross-track,
 дрейф в конце в % пути, pos3d. Определения — `docs/contracts.md` §4 и `tools/eval/README.md`,

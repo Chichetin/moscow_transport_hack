@@ -97,6 +97,11 @@ class FramesParams:
 
 
 @dataclass(frozen=True)
+class OutputParams:
+    velocity_delay_s: float   # s, >= 0: /result/velocity carries the estimate this much before its stamp (D-095)
+
+
+@dataclass(frozen=True)
 class InputParams:
     wheel_speed_scale: float
     stale_timeout_s: float
@@ -204,6 +209,7 @@ class GnssParams:
 @dataclass(frozen=True)
 class Params:
     frames: FramesParams
+    output: OutputParams
     input: InputParams
     vehicle: VehicleParams
     drive: DriveParams
@@ -312,6 +318,8 @@ def load_params(path) -> Params:
         raise ValueError('input.max_wheel_speed_mps must be positive')
     if not (params.input.max_stamp_jump_s > 0):
         raise ValueError('input.max_stamp_jump_s must be positive')
+    if not (params.output.velocity_delay_s >= 0):
+        raise ValueError('output.velocity_delay_s must be nonnegative')
     _validate_filter(params.filter)
     _validate_slip(params.slip)
     _validate_side(params.position)
