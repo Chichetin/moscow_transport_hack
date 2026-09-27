@@ -26,7 +26,7 @@ PR** с перечнем потребителей в описании. В том
 | `/sensing/gnss/master/fix`, `/rover/fix` | `sensor_msgs/msg/NavSatFix` | вход | 10 Гц | только первые `gnss.init_window_s` с (D-005) |
 | `/sensing/gnss/master/vel` | `geometry_msgs/msg/TwistStamped` | вход | 10 Гц | ENU, только окно выставки |
 | `/result/velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | **выход** | на каждый вход, ~40 Гц | `velocity` — продольная скорость, **м/с**, ≥ 0 |
-| `/result/position` | `nav_msgs/msg/Odometry` | **выход** | на каждый вход | см. ниже |
+| `/result/position` | `nav_msgs/msg/Odometry` | **выход** | на каждый вход, кроме входов до первого валидного fix master внутри окна GNSS (`Odometry.position_due`, #163, D-086) | см. ниже |
 | `/result/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | выход | 1–10 Гц | статус проскальзывания и входов (критерий 3) |
 
 Правила для обоих `/result/*`:
@@ -42,11 +42,11 @@ PR** с перечнем потребителей в описании. В том
 
 | Поле | Значение |
 |---|---|
-| `header.frame_id` | `map` (`frames.map`) — локальная ENU, метры, начало — первая валидная точка GNSS master в окне выставки (**уточнить у организаторов**, `HANDOFF.md`, #23) |
+| `header.frame_id` | `map` (`frames.map`) — **плоская сетка MGRS** по ответу организаторов 27.09 (#155, D-083): `x` = UTM easting зоны `frames.grid_zone` (37N, WGS84) − `frames.grid_origin_e_m` (300 000), `y` = northing − `frames.grid_origin_n_m` (6 100 000), то есть от угла квадрата `37UCB`, без переноса за 100 км (восточная часть маршрута — `x` > 100 000, как в примере организаторов); `z` — высота над эллипсоидом WGS84, м (как `NavSatFix.altitude`). Начало не зависит от прогона. Пример организаторов: lat 55,8088325462547, lon 37,4602768500852 → x 103 501,6309, y 85 876,1201 (`test_geo.py`). Исключение (#162, D-084): без карты и без fix привязки к геодезии нет — `frame_id = odom` (REP-105, локальная система счисления пути, имя — конвенция ROS, не параметр), `Estimate.position_absolute = False` |
 | `child_frame_id` | `base_link` (`frames.base`) |
-| `pose.pose.position` | точка `base_link` — ось передней тележки на уровне касания колеса и рельса (tf организаторов 27.09: master x = −9,873, rover x = +2,563, обе z = 3,0 м; D-077): `x` — восток, `y` — север, `z` — вверх, м. По карте — на `position.base_ahead_m` впереди трека master по дуге и на `position.antenna_height_m` ниже высоты антенн. Исключение: до первого принятого fix (запасная прямая D-021) — точка master, `z = 0` |
-| `pose.pose.orientation` | курс по касательной карты (yaw), кватернион |
-| `pose.covariance` | 6×6 row-major; `[0]`,`[7]` — дисперсии x/y, м²; `[35]` — yaw; неизвестные — `-1` не ставить, ставить большое число |
+| `pose.pose.position` | точка `base_link` — ось передней тележки на уровне касания колеса и рельса (tf организаторов 27.09: master x = −9,873, rover x = +2,563, обе z = 3,0 м; D-077): `x`, `y` — сетка MGRS (восток и север сетки), `z` — высота над эллипсоидом, м. По карте — на `position.base_ahead_m` впереди трека master по дуге и на `position.antenna_height_m` ниже высоты антенн; ядро считает в локальной ENU и переводит на выходе (ENU → ECEF → геодезические → UTM, `position/geo.py`). Исключение: пока карта не приняла fix (их ещё нет или все fix окна дальше `position.fix_gate_m` от карты — bag вне маршрута) — запасная прямая D-021 от первого валидного fix master (lat = lon = 0 не берётся), та же сетка, с картой и без (#163, D-086). До первого валидного fix абсолютной привязки нет: `position_absolute = False`, `x`, `y` — локальные метры от старта. Внутри окна `gnss.init_window_s` нода их **не публикует** (`/result/velocity` — как обычно): fix ещё может прийти, а судья, не смотрящий на `frame_id`, сравнил бы их с сеткой. Если окно закрылось без валидного fix (bag без GNSS), дальше они выходят в `odom` (D-084), чтобы `/result/position` не молчал весь прогон. Решает `Odometry.position_due(est)` (#163, D-086). Начало карты `route.origin` точкой трамвая не бывает никогда |
+| `pose.pose.orientation` | курс по касательной карты (yaw) относительно оси `x` сетки, кватернион: курс ENU повёрнут на сближение меридианов (≈ −1,27° на маршруте, D-083) |
+| `pose.covariance` | 6×6 row-major; `[0]`,`[7]` — дисперсии x/y в осях сетки, м² (поперёк/вдоль пути, повёрнуты вместе с курсом); `[35]` — yaw; неизвестные — `-1` не ставить, ставить большое число |
 | `twist.twist.linear.x` | продольная скорость, м/с (= `/result/velocity`) |
 | `twist.covariance[0]` | дисперсия скорости, (м/с)² |
 
@@ -115,12 +115,14 @@ class Estimate:
     accel: float              # м/с^2, оценка
     accel_model: float        # м/с^2, прогноз модели привода
     distance: float           # м, путь от начала прогона
-    x: float; y: float        # м, frame map
-    z: float                  # м, frame map, ENU up (высота карты + смещение прогона, D-024)
-    yaw: float                # рад, ENU
+    x: float; y: float        # м, сетка MGRS frame map (D-083)
+    z: float                  # м, высота над эллипсоидом WGS84 (карта + смещение прогона, D-024)
+    yaw: float                # рад, от оси x сетки
     pos_cov: tuple[float, float, float]   # var_x, var_y, cov_xy
     slip: SlipState
     gnss_used: bool
+    position_absolute: bool   # True: x, y, z, yaw в сетке MGRS (карта приняла fix или был валидный fix
+                              # master); False: до первого fix — локальные метры: в окне GNSS не публикуются, после окна без fix — в `odom` (§1, D-086)
     filter_diagnostics: FilterDiagnostics | None = None  # NIS нового измерения тележки
 
 @dataclass(frozen=True)
@@ -151,10 +153,10 @@ class Route:
 |---|---|---|
 | `preprocess` | `Preprocessor(params).accept(raw) -> Sample \| None` | `raw` — сырой вход: пара `(topic, ROS-сообщение)` (км/ч, notch как есть; поля сообщения — как в ROS, у bag и rclpy одинаковые); возвращает нормализованный `Sample` или `None` (выброс, NaN, stamp из прошлого сверх допуска, GNSS вне окна); fix `gnss.topic_fix` — `GnssFix(antenna='master')`, fix `/sensing/gnss/rover/fix` — `GnssFix(antenna='rover')` |
 | `dynamics` | `model_accel(notch: int, speed: float, params) -> float` | чистая функция, м/с²; без состояния: интерполяция таблиц D-029 по `speed_grid_mps`, пределы сцепления и мощности, минус сопротивление Дэвиса. Задержка отклика `drive.response_delay_s` — состояние `pipeline` (буфер команд): в модель идёт позиция контроллера на момент `t − delay`. При `drive.use_model` pipeline передаёт `accel_model` детектору и прогнозирует скорость на паузе обеих тележек (`v ≥ 0`); `Estimate.accel_model` — это значение |
-| `slip` | `SlipDetector(params).update(front, rear, accel_model, est) -> SlipState` | `front`/`rear` — последний `WheelSample` или `None` (молчит); `est` — сглаженная скорость фильтра, м/с, до этого обновления (`None`, пока её нет); `accel_model` — м/с². Возвращает доверие 0..1 и флаги «тележке не доверяем» (аномалия или отказ), D-027. Состояние детектора — последний сэмпл каждой тележки и stamp её последних скачков вверх и вниз (`slip.noise_*`, D-054): при расхождении противофазные недавние скачки обеих — доверие 0,5/0,5, синфазные — 0/0 и оба флага. Ещё — текущий повтор значения каждой тележки: `slip.freeze_min_samples` подряд новых stamp с тем же ненулевым значением при изменении скорости по модели больше `slip.freeze_dv_mps` — тележка залипла, она выбывает как молчащая: доверие 0 и флаг (D-080) |
-| `estimator` | `SpeedFilter(params).predict(t, accel_model)`, `.update(sample: WheelSample, trust: float)`, `.state() -> (speed, speed_var, accel)`, `.diagnostics() -> FilterDiagnostics \| None` | монотонное время состояния внутри; новое колесо допускается, если его stamp отстаёт от последнего принятого stamp **колёс** не более чем на `input.stale_timeout_s`, даже когда контроллер опережает оба колеса; более старое колесо отбрасывается. Запоздалое измерение учитывается без отката состояния, с поправкой на возраст; диагностика относится только к новому измерению тележки |
-| `position` | `PathTracker(params, route)`; `.on_fix(lat, lon, alt, status, distance)` — каждый fix master в окне `gnss.init_window_s`; `.on_rover(lat, lon, alt, status)` — каждый fix rover в том же окне (только курс); `.ready -> bool`; `.on_stop(distance) -> bool` — стоянка дольше `position.stop_min_s` после окна GNSS (привязка к месту остановки, D-034); `.speed_scale -> float` — масштаб опубликованной скорости по цепочке привязок (#153, D-082); `.advance(distance, speed=0.0) -> (x, y, z, yaw, pos_cov) \| None` (speed — скорость фильтра, м/с; x, y, z — точка `base_link`, D-077) | frame `map` прогона — ENU первого fix статуса 2 (иначе первого валидного), как эталон `tools/eval`; карта переводится в него один раз через ECEF; якорь — ближайшая точка ближайшей ветки по последнему fix окна; когда есть курс master → rover (база в [`position.heading_min_base_m`, `position.heading_max_base_m`], ловушка 15; rover без GBAS при GBAS-начале курса не даёт), — ближайшая точка ветки, идущей по курсу (при её наличии в `fix_gate_m`); rover-fix меняет уже поставленный якорь, только если тот идёт против курса, а ветка по курсу — другая; дальше только вперёд по дуге `s = s₀ + distance − distance₀` (якорь, остановки и масштаб — в дуге трека master; выход — в точке `s + position.base_ahead_m`, за тупиком — по касательной не дальше `base_ahead_m`, высота минус `position.antenna_height_m`, D-077), конец ветки продолжается на ближайшей ветке не дальше `position.join_m`; тупиковая боковая ветка, отходящая от ветки не по пути по умолчанию, берётся, если в окне [`position.side_min_m`, `position.side_max_m`] после её начала `speed > position.side_speed_mps`, а если путь за её тупиком превысил `position.side_overrun_m` — возврат на путь по умолчанию (D-074); `pos_cov` — `cross_std_m` поперёк, вдоль растёт как `along_drift_frac · путь`; fix окна дальше `position.fix_gate_m` от карты (в ENU карты) — выброс, не участвует ни в начале frame, ни в якоре, ни в высоте; до первого принятого fix `advance` даёт `None`: pipeline публикует прямую D-021 (начало — первый fix, курс — по GNSS vel окна), `z = 0` |
-| `pipeline` | `Odometry(params, route=None).step(raw) -> Estimate \| None` | единственная точка, которую зовут нода и `tools/eval`; `None` — вход отброшен, публиковать нечего. С картой `Estimate.speed` = скорость фильтра × `PathTracker.speed_scale` (D-082); `distance`, положение, `speed_var` и `accel` — без этого масштаба (путь по карте масштабирует свой `_scale`, D-034) |
+| `slip` | `SlipDetector(params).update(front, rear, accel_model, est, state_time=None) -> SlipState`; `.car_speed(t) -> float \| None` | `front`/`rear` — последний `WheelSample` или `None` (молчит); `est` — сглаженная скорость фильтра, м/с, до этого обновления (`None`, пока её нет); `accel_model` — м/с². Возвращает доверие 0..1 и флаги «тележке не доверяем» (аномалия или отказ), D-027. Состояние детектора — последний сэмпл каждой тележки и stamp её последних скачков вверх и вниз (`slip.noise_*`, D-054): при расхождении последние скачки обеих в одну сторону в пределах `filter.pair_window_s` — доверие 0/0 и оба флага; асинхронная или противофазная пара — 0,5/0,5, кроме случая, когда обе тележки лежат по одну сторону прогноза дальше допуска (D-085). Ещё — текущий повтор значения каждой тележки: `slip.freeze_min_samples` подряд новых stamp с тем же ненулевым значением при изменении скорости по модели больше `slip.freeze_dv_mps` — тележка залипла, она выбывает как молчащая: доверие 0 и флаг (D-080). Потеря сцепления вагона (D-085): при тяге обе тележки разгоняются быстрее модели, при торможении обе тормозят сильнее (окно `slip.adhesion_window_s`, пороги `slip.spin_accel_mps2`/`slip.skid_accel_mps2`), тележки разошлись — доверие 0/0 и оба флага до возврата каждой к скорости вагона; `car_speed(t)` — скорость вагона в м/с на `t` (начало окон плюс интеграл модели по времени состояния pipeline, включая входы команд без новых колёс), пока обе тележки вне сцепления, иначе `None`. `state_time` — время состояния pipeline; если колёса отстают от него больше `input.stale_timeout_s`, новое окно сцепления не строится, чтобы не применить позднюю команду к старым stamp; уже обнаруженный юз сохраняет исходную опору через временную дыру колёс. При прямом вызове без `state_time` считается, что колёса на текущей шкале времени. |
+| `estimator` | `SpeedFilter(params).predict(t, accel_model)`, `.update(sample: WheelSample, trust: float)`, `.state() -> (speed, speed_var, accel)`, `.diagnostics() -> FilterDiagnostics \| None`, `.restart(speed)` | монотонное время состояния внутри; новое колесо допускается, если его stamp отстаёт от последнего принятого stamp **колёс** не более чем на `input.stale_timeout_s`, даже когда контроллер опережает оба колеса; более старое колесо отбрасывается. Запоздалое измерение учитывается без отката состояния, с поправкой на возраст; диагностика относится только к новому измерению тележки. `restart(speed)` — вагон заскользил (D-085): скорость состояния = `speed`, смещение ускорения 0 и его начальная дисперсия, дисперсия скорости не меньше `slip.front_rear_threshold_mps²`; до первого колеса не действует. pipeline вызывает его один раз в начале скольжения вагона со `SlipDetector.car_speed(t)` |
+| `position` | `PathTracker(params, route)`; `.on_fix(lat, lon, alt, status, distance)` — каждый fix master в окне `gnss.init_window_s`; `.on_rover(lat, lon, alt, status)` — каждый fix rover в том же окне (только курс); `.ready -> bool`; `.on_stop(distance) -> bool` — стоянка дольше `position.stop_min_s` после окна GNSS (привязка к месту остановки, D-034); `.speed_scale -> float` — масштаб опубликованной скорости по цепочке привязок (#153, D-082); `.advance(distance, speed=0.0) -> (x, y, z, yaw, pos_cov) \| None` (speed — скорость фильтра, м/с; x, y, z — точка `base_link`, D-077, в ENU прогона); `.frame -> (rot, ecef0)` — ENU прогона после первого принятого fix, до него — ENU карты; pipeline переводит позу в сетку `position.geo.pose_to_grid(rot, ecef0, grid, x, y, z, yaw, cov)` (D-083) | внутренняя система `PathTracker` — ENU первого fix статуса 2 (иначе первого валидного), как эталон `tools/eval`; опубликованный `frame_id=map` при `Estimate.position_absolute=True` — сетка MGRS (D-083; без привязки — `odom`, D-084); карта переводится во внутреннюю ENU один раз через ECEF; якорь — ближайшая точка ближайшей ветки по последнему fix окна; когда есть курс master → rover (база в [`position.heading_min_base_m`, `position.heading_max_base_m`], ловушка 15; rover без GBAS при GBAS-начале курса не даёт), — ближайшая точка ветки, идущей по курсу (при её наличии в `fix_gate_m`); rover-fix меняет уже поставленный якорь, только если тот идёт против курса, а ветка по курсу — другая; дальше только вперёд по дуге `s = s₀ + distance − distance₀` (якорь, остановки и масштаб — в дуге трека master; выход — в точке `s + position.base_ahead_m`, за тупиком — по касательной не дальше `base_ahead_m`, высота минус `position.antenna_height_m`, D-077), конец ветки продолжается на ближайшей ветке не дальше `position.join_m`; тупиковая боковая ветка, отходящая от ветки не по пути по умолчанию, берётся, если в окне [`position.side_min_m`, `position.side_max_m`] после её начала `speed > position.side_speed_mps`, а если путь за её тупиком превысил `position.side_overrun_m` — возврат на путь по умолчанию (D-074); `pos_cov` — `cross_std_m` поперёк, вдоль растёт как `along_drift_frac · путь`; fix окна дальше `position.fix_gate_m` от карты (в ENU карты) — выброс, не участвует ни в начале frame, ни в якоре, ни в высоте; до первого принятого fix `advance` даёт `None`: pipeline публикует прямую D-021 (начало — первый fix, курс — по GNSS vel окна), `z = 0` |
+| `pipeline` | `Odometry(params, route=None).step(raw) -> Estimate \| None`; `.position_due(est) -> bool` — публиковать ли `/result/position` (абсолютная позиция или окно GNSS закрылось без fix, §1, D-086) | единственная точка, которую зовут нода и `tools/eval`; `None` — вход отброшен, публиковать нечего. С картой `Estimate.speed` = скорость фильтра × `PathTracker.speed_scale` (D-082); `distance`, положение, `speed_var` и `accel` — без этого масштаба (путь по карте масштабирует свой `_scale`, D-034) |
 
 `params` — `Params` из `types.py`: неизменяемый dataclass, по одному вложенному dataclass на
 секцию `params.yaml` (`params.gnss.init_window_s`, `params.drive.notch_max`), имена полей =
@@ -208,6 +210,18 @@ ROS 2 не выводит их тип и нода не стартует.
 `slip.freeze_dv_mps` — м/с, модуль суммы `accel_model·Δt` за этот повтор больше него — тележка
 залипла. Ровно 0 не залипание (стоянка, мёртвая зона — ловушка 8). Правила применения — §2,
 модуль `slip`.
+
+### Потеря сцепления вагона (D-085)
+
+`slip.adhesion_window_s` — с, окно ускорения тележки. `slip.adhesion_min_accel_mps2` — м/с², модуль
+среднего ускорения модели за окно не меньше него — есть момент (тяга или тормоз).
+`slip.spin_accel_mps2` / `slip.skid_accel_mps2` — м/с², при тяге обе тележки быстрее модели больше
+первого (боксование), при торможении обе медленнее модели больше второго (юз); решение — по паре
+отсчётов в пределах `filter.pair_window_s`, тележки разошлись дальше `slip.front_rear_threshold_mps`.
+`slip.readhesion_accel_mps2` — м/с², рост допуска возврата тележки к скорости вагона со временем
+(только со стороны, противоположной скольжению). Возврат требует невязки в полосе и скорости
+колеса рядом с опорой вагона; таймаута без такого подтверждения нет. Правила применения — §2,
+модули `slip` и `estimator`.
 
 ### Пределы входа тележек (D-056)
 
@@ -264,8 +278,9 @@ stamp, допуск 0,05 с, как у судьи):
 - `ref_point` — точка эталона положения (D-077). `base_link` (по умолчанию) — по tf
   организаторов: на прямой master → rover в 9,873 м от master, если rover-fix того же момента
   (±0,06 с) даёт базу 12,436 ± 0,5 м, иначе — по курсу ближайшей пары в пределах 1 м дуги, иначе — на 9,873 м дуги дальше по треку master; высота —
-  минус 3,0 м. `master` (`--ref-point master`) — сама антенна, как до D-077. Начало frame — fix
-  master в обоих случаях; скорость от точки не зависит.
+  минус 3,0 м. `master` (`--ref-point master`) — сама антенна, как до D-077. Трек строится в ENU
+  от fix master (в обоих случаях) и готовым переводится в сетку MGRS выхода той же функцией ядра
+  (`position.geo`, `frames.grid_*`, D-083); скорость от точки не зависит.
 
 - `speed_*` — м/с; эталон — `hypot(ve, vn)` master/vel. Режимы по эталонному ускорению
   (сглаженному ±0,5 с — только в eval, не в ноде): разгон a > 0,2 м/с², торможение a < −0,2,
@@ -274,6 +289,9 @@ stamp, допуск 0,05 с, как у судьи):
 - `along_*`, `cross_*` — м; ошибка в проекции на карту маршрута: вдоль — разность дуг `s`,
   поперёк — расстояние оценённой точки до полилинии.
 - `pos3d_*` — м, евклидово расстояние x/y/z (так сравнивает судья).
+- `along_*`, `cross_*`, `pos3d_*`, `drift_pct` — только по оценкам с `position_absolute = True`
+  (#162, D-084): до первого fix позиции нет, нода её не публикует (#163, D-086). `speed_*`, `slip_flag_frac`, `n_matched` — по всем
+  оценкам. Число оценок `odom` — в итоговой строке CLI, в `metrics.json` не пишется.
 - Прогон короче 50 м пути — `drift_pct = null` (ловушка 13 `docs/data.md`).
 - Главные метрики для merge (D-012): медианы `speed_rmse`, `along_rmse`, `drift_pct`.
 

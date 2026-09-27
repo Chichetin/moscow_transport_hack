@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tram_odometry_core.position import PathTracker
+from tram_odometry_core.position import PathTracker, geo
 from tram_odometry_core.types import Branch, Route, load_params, load_route
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -45,6 +45,12 @@ def _route():
                  np.linspace(168.0, 178.0, 500))
     b1 = _branch(np.linspace(lat1, lat2, 30), np.linspace(lon1, lon2, 30), np.full(30, 178.0))
     return Route(origin=ORIGIN, branches=(b0, b1))
+
+
+def _grid(lat, lon, alt):
+    """The published frame of the pipeline: MGRS grid of params.yaml (D-083)."""
+    f = PARAMS.frames
+    return geo.to_grid(lat, lon, alt, (f.grid_zone, f.grid_origin_e_m, f.grid_origin_n_m))
 
 
 def _enu_bag(lat, lon, alt, origin):
@@ -213,9 +219,10 @@ def test_pipeline_follows_the_map_after_the_window():
     start = _lla(-1000.0, 0.0, 170.0)
     odo.step(_fix_msg(0.0, start))
     est = _wheels(odo, 0.0, 100.0, 36.0)              # 10 m/s for 100 s: 1 km west
-    fx, fy, _ = _enu_bag(*_lla(-2000.0, 0.0, 172.0), origin=start)
+    fx, fy, _ = _grid(*_lla(-2000.0, 0.0, 172.0))
     assert est.gnss_used and math.hypot(est.x - fx, est.y - fy) < 2.0
-    assert abs(math.remainder(est.yaw - math.pi, 2 * math.pi)) < 0.01
+    wx, wy, _ = _grid(*_lla(-2001.0, 0.0, 172.0))    # due west in the grid: turned by convergence
+    assert abs(math.remainder(est.yaw - math.atan2(wy - fy, wx - fx), 2 * math.pi)) < 0.01
 
 
 def test_pipeline_ignores_gnss_after_the_window():
@@ -226,8 +233,91 @@ def test_pipeline_ignores_gnss_after_the_window():
     _wheels(odo, 0.0, 10.0, 36.0)
     odo.step(_fix_msg(PARAMS.gnss.init_window_s + 5.0, _lla(-1500.0, 0.0, 171.0)))  # after window
     est = _wheels(odo, 10.1, 20.0, 36.0)
-    fx, fy, _ = _enu_bag(*_lla(-1200.0, 0.0, 170.4), origin=start)
+    fx, fy, _ = _grid(*_lla(-1200.0, 0.0, 170.4))
     assert math.hypot(est.x - fx, est.y - fy) < 2.0
+
+
+def test_pipeline_before_the_first_fix_has_no_anchor_even_with_a_map():
+    """No fix yet: where the tram is is unknown, the map's origin is kilometres from a start at
+    the other terminal (#163). The line stays in local metres and is marked not absolute: the
+    node holds it back inside the GNSS window, eval does not score it (D-086)."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    est = _wheels(odo, 0.0, 1.0, 36.0)
+    assert est.position_absolute is False and not odo.position_due(est)
+    assert (est.x, est.y) == pytest.approx((est.distance, 0.0))
+
+
+def test_pipeline_without_gnss_publishes_local_position_after_the_window():
+    """A bag without GNSS (jury_layouts runs one): no fix ever, so after the GNSS window the
+    local line is due in odom -- /result/position must not stay silent (#163, D-086)."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    inside = _wheels(odo, 0.0, PARAMS.gnss.init_window_s - 0.5, 36.0)
+    assert not inside.position_absolute and not odo.position_due(inside)
+    after = _wheels(odo, PARAMS.gnss.init_window_s - 0.4, PARAMS.gnss.init_window_s + 1.0, 36.0)
+    assert not after.position_absolute and odo.position_due(after)
+    from types import SimpleNamespace
+    late = odo.step(('/vehicle/driver_position_cmd', SimpleNamespace(
+        header=_hdr(PARAMS.gnss.init_window_s - 1.0), position=0)))   # stamp rolled back into the window
+    assert late is None or odo.position_due(late)
+
+
+def test_pipeline_with_the_fixes_off_the_map_starts_the_line_at_the_first_fix():
+    """#163: every window fix is farther than fix_gate_m from the map (a bag off the route), so
+    the tracker never aligns. The straight line (D-021) starts at the first valid master fix,
+    published in the grid, not at the map's origin kilometres away."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    off = _lla(-1000.0, 500.0, 170.0)                    # 500 m north of branch 0
+    odo.step(_fix_msg(0.0, off))
+    est = _wheels(odo, 0.0, 0.0, 0.0)
+    fx, fy, fz = _grid(*off)
+    assert not odo._tracker.ready and est.position_absolute is True
+    assert math.hypot(est.x - fx, est.y - fy) < 0.1 and est.z == pytest.approx(fz, abs=0.01)
+
+
+def test_pipeline_with_map_wheels_before_the_fix_then_the_map():
+    """Wheels before any fix: no absolute position; the first fix the map accepts puts every
+    later estimate on the map at the tram, never at the map's origin (#163, e2dcf65f)."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    early = _wheels(odo, 0.0, 0.3, 0.0)
+    start = _lla(-1000.0, 0.0, 170.0)
+    odo.step(_fix_msg(0.4, start))
+    est = _wheels(odo, 0.5, 0.5, 0.0)
+    fx, fy, _ = _grid(*start)
+    assert early.position_absolute is False
+    assert odo._tracker.ready and est.position_absolute
+    assert math.hypot(est.x - fx, est.y - fy) < 12.0          # base_link ahead of master (D-077)
+
+
+def test_pipeline_outlier_first_fix_then_the_map_takes_over():
+    """The first valid fix is an outlier off the map: the line starts there; the next fix the
+    map accepts switches to the map for good (#163)."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    odo.step(_fix_msg(0.0, _lla(-1000.0, 3000.0, 170.0)))    # 3 km off the route
+    line = _wheels(odo, 0.1, 0.1, 0.0)
+    ox, oy, _ = _grid(*_lla(-1000.0, 3000.0, 170.0))
+    assert line.position_absolute and math.hypot(line.x - ox, line.y - oy) < 0.1
+    start = _lla(-1000.0, 0.0, 170.0)
+    odo.step(_fix_msg(0.5, start))
+    est = _wheels(odo, 0.6, 3.0, 0.0)
+    fx, fy, _ = _grid(*start)
+    assert odo._tracker.ready and math.hypot(est.x - fx, est.y - fy) < 12.0
+
+
+def test_pipeline_with_map_ignores_a_zero_lat_lon_fix_as_line_origin():
+    """Trap 10 with the map: lat = lon = 0 never becomes the line's frame (#163)."""
+    from types import SimpleNamespace
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    odo.step(('/sensing/gnss/master/fix', SimpleNamespace(
+        header=_hdr(0.0), latitude=0.0, longitude=0.0, altitude=0.0,
+        status=SimpleNamespace(status=0))))
+    est = _wheels(odo, 0.1, 0.1, 0.0)
+    assert est.position_absolute is False and odo._line_frame is None
 
 
 def test_pipeline_without_route_keeps_the_baseline():
@@ -375,8 +465,10 @@ def test_pipeline_takes_the_heading_from_the_rover_in_the_window_only():
         odo.step(_rover_msg(rover_t, _lla(-1000.0 + 12.4, -3.0)))
         est = _wheels(odo, rover_t, rover_t + 10.0, 36.0)        # 10 m/s for 10 s: 100 m
         assert est.distance > 90.0
-        assert (est.x > 90.0 and est.y < -4.0) == expect_east, rover_t        # eastbound track
-        assert (est.x < -90.0 and est.y > 2.0) != expect_east, rover_t        # westbound track
+        ex, ey, _ = _grid(*_lla(-1000.0 + est.distance, -8.0))    # eastbound track
+        wx, wy, _ = _grid(*_lla(-1000.0 - est.distance, 0.0))     # westbound track
+        assert (math.hypot(est.x - ex, est.y - ey) < 3.0) == expect_east, rover_t
+        assert (math.hypot(est.x - wx, est.y - wy) < 3.0) != expect_east, rover_t
 
 
 def _polyline(points):
@@ -500,9 +592,9 @@ def test_pipeline_publishes_base_link_with_the_offset_of_params():
     start = _lla(-1000.0, 0.0, 170.0)
     odo.step(_fix_msg(0.0, start))
     est = _wheels(odo, 0.0, 100.0, 36.0)                      # 10 m/s for 100 s: 1 km west
-    fx, fy, fz = _enu_bag(*_lla(-2009.873, 0.0, 172.0), origin=start)
+    fx, fy, fz = _grid(*_lla(-2009.873, 0.0, 172.0))
     assert math.hypot(est.x - fx, est.y - fy) < 2.0
-    assert est.z == pytest.approx(fz - 3.0, abs=0.3)
+    assert est.z == pytest.approx(fz - 3.0, abs=0.3)          # ellipsoidal height of base_link
 
 
 def test_base_link_goes_on_past_a_dead_end_by_the_offset_at_most():

@@ -21,7 +21,8 @@ from tram_vehicle_msgs.msg import DriverControllerCommand, VelocitySensor
 from tram_odometry_core.pipeline import Odometry
 from tram_odometry_core.types import load_params, load_route
 
-UNKNOWN_VAR = 1e6      # contract §1: covariance of an unestimated component is large, never -1
+ODOM_FRAME = 'odom'    # REP-105: continuous local frame of dead reckoning (contract §1, #162)
+UNKNOWN_VAR = 1e6     # contract §1: covariance of an unestimated component is large, never -1
 DIAGNOSTIC_PERIOD_NS = 100_000_000  # 10 Hz maximum, measured in bag stamp time
 INPUT_QUEUE = 100      # messages; bag start delivers a burst of up to ~3.7 s (docs/data.md, trap 5)
 VEHICLE_INPUTS = [('/vehicle/front_bogie_velocity', VelocitySensor),
@@ -61,7 +62,9 @@ def velocity_msg(est, stamp, params) -> VelocitySensor:
 def position_msg(est, stamp, params) -> OdometryMsg:
     m = OdometryMsg()
     m.header.stamp = stamp
-    m.header.frame_id = params.frames.map
+    # `map` is the MGRS grid (D-083); local metres before any geodetic anchor (no map, no fix)
+    # go out in `odom`, the REP-105 frame of dead reckoning, not a project parameter (#162)
+    m.header.frame_id = params.frames.map if est.position_absolute else ODOM_FRAME
     m.child_frame_id = params.frames.base
     m.pose.pose.position.x = est.x
     m.pose.pose.position.y = est.y
@@ -170,7 +173,11 @@ class OdometryNode(Node):
                                         throttle_duration_sec=5.0)
                 return
             self.pub_velocity.publish(velocity_msg(est, msg.header.stamp, self.params))
-            self.pub_position.publish(position_msg(est, msg.header.stamp, self.params))
+            if self.odometry.position_due(est):
+                # inside the GNSS window before the first valid fix there is no position yet, not
+                # even a local one: a judge that ignores frame_id would compare it with the grid;
+                # a bag without GNSS gets local odom after the window (#163, D-086)
+                self.pub_position.publish(position_msg(est, msg.header.stamp, self.params))
             if topic in (VEHICLE_INPUTS[0][0], VEHICLE_INPUTS[1][0], VEHICLE_INPUTS[2][0]):
                 self._last_input_ns[topic] = stamp_ns
             if (self._last_diagnostic_ns is None

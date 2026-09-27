@@ -7,7 +7,7 @@ H3  a lost lock is recovered from two misses of one sign growing with the path.
 
 Variants replace PathTracker in memory (a subclass that overrides every method using the scale,
 so 'base' stays the path scale of main c90577f/63762d2 on any core); the core and params.yaml are
-not changed. 'h123' is the candidate of #154 that was NOT taken (D-083: holdout drift_pct +28.5 %);
+not changed. 'h123' is the candidate of #154 that was NOT taken (D-087: holdout drift_pct +28.5 %);
 its core code is branch worktree-154-wheel-scale @ 20e3e1e, where run_eval gives the same numbers
 as 'h123' here bag for bag.
 Per bag and variant: the clean run (metrics of D-012 + along_max), the stress runs scale_up,
