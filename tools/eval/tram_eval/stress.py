@@ -9,10 +9,10 @@ import numpy as np
 from .bag import FRONT, REAR, gnss_window_end, stamp
 
 SCENARIOS = ('outlier', 'gap_1', 'gap_10', 'gap_70', 'spike', 'noise', 'jitter', 'rollback',
-             'gap_both_30', 'scale_up', 'scale_down')
+             'gap_both_30', 'scale_up', 'scale_down', 'freeze')
 DURATION_S = {'outlier': 0.2, 'gap_1': 1.0, 'gap_10': 10.0, 'gap_70': 70.0,
               'spike': 5.0, 'noise': 10.0, 'jitter': 10.0, 'rollback': 10.0,
-              'gap_both_30': 30.0}
+              'gap_both_30': 30.0, 'freeze': 10.0}
 # another tram: wheel scale differs by up to 1.5 % (CLAUDE.md); lasts until the recovery tail
 WHEEL_SCALE = {'scale_up': 1.015, 'scale_down': 0.985}
 MAX_RECOVERY_GAP_S = 0.3
@@ -48,10 +48,13 @@ def perturb(msgs, scenario: str, gnss_window_s: float):
     result = []
     front_n = rear_n = 0
     outlier_done = False
+    held = {}           # freeze: bogie -> (stamp, reading) newest by stamp before the event (#144)
     changed_count = removed_count = 0
     for topic, msg in msgs:
         t = stamp(msg)
         inside = start <= t < end
+        if topic in (FRONT, REAR) and t < start and t > held.get(topic, (-math.inf, None))[0]:
+            held[topic] = (t, msg.velocity)
         if inside and scenario.startswith('gap_') and (
                 topic == FRONT or scenario.startswith('gap_both') and topic == REAR):
             removed_count += 1
@@ -59,11 +62,14 @@ def perturb(msgs, scenario: str, gnss_window_s: float):
         if not inside or topic not in (FRONT, REAR):
             result.append((topic, msg))
             continue
-        if topic == REAR and scenario != 'noise' and scenario not in WHEEL_SCALE:
+        if topic == REAR and scenario not in ('noise', 'freeze') and scenario not in WHEEL_SCALE:
             result.append((topic, msg))
             continue
         new = copy.deepcopy(msg)
-        if scenario in WHEEL_SCALE:
+        if scenario == 'freeze':
+            # both sensors repeat their last reading: they still agree, only the model can tell
+            new.velocity = held.get(topic, (None, new.velocity))[1]
+        elif scenario in WHEEL_SCALE:
             new.velocity *= WHEEL_SCALE[scenario]
         elif topic == FRONT:
             front_n += 1
