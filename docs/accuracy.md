@@ -244,8 +244,10 @@ launch, играет bag в темпе 1,0, пишет входы и `/result/*`
 (`docs/verification/2026-09-27-issue154-h3-holdout.md`, раздел 9). После #172 (D-089) тот же bag на
 `main` `9e70b2b`: задержка p50 / p99 / max 0,555 / 2,547 / 8,451 мс, частота 38,93 Гц, худшее окно
 28 Гц, CPU max 0,130 ядра, RSS пик 64,17 МБ, рост −0,00002 МБ/мин, 6/6 проверок `stand.json`
-(`docs/verification/2026-09-27-main-9e70b2b-holdout-stand.md`). После D-095/D-096 стенд
-отдельно не пересчитан.
+(`docs/verification/2026-09-27-main-9e70b2b-holdout-stand.md`). После D-095/D-096 тот же bag на
+`main` `8626dde`: задержка p50 / p99 / max 0,555 / 2,596 / 9,633 мс, частота 38,93 Гц, худшее окно
+28 Гц, CPU max 0,170 ядра, RSS пик 63,67 МБ, рост −0,016 МБ/мин, 6/6 проверок `stand.json`
+(`bash docker/jury-stand.sh 30618_27e994fc`, `out/stand/30618_27e994fc/stand.json`, прогон 27.09 вечер).
 
 ## 5. Устойчивость
 
