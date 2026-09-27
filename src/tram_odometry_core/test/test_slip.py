@@ -502,3 +502,23 @@ def test_buffered_wheels_do_not_anchor_a_slide_to_later_commands():
                    ws('rear', t, car + 2.6 * extra), accel_now, car,
                    state_time=t + 3.0)
         assert det.car_speed(t + 3.0) is None
+
+
+def test_wheel_gap_during_a_slide_keeps_the_original_car_anchor():
+    det = SlipDetector(P)
+    out, _ = _ramp(det, 15, 3.0, 0.8, 1.2, 2.0)
+    assert (out[-1].front_trust, out[-1].rear_trust) == (0.0, 0.0)
+    anchor_before = det.car_speed(1.4)
+    front, rear = det._last['front'], det._last['rear']
+    for k in range(15, 23):
+        # Commands keep advancing while the wheels say nothing for 0.8 s.
+        s = det.update(front, rear, 0.8, 3.0 + 0.8 * k * DT, state_time=k * DT)
+        assert (s.front_trust, s.rear_trust) == (0.0, 0.0)
+        assert det.car_speed(k * DT) is not None
+    for k in range(23, 31):
+        t = k * DT
+        car = 3.0 + 0.8 * t
+        extra = (k - 5) * DT
+        det.update(ws('front', t, car + 1.2 * extra),
+                   ws('rear', t, car + 2.0 * extra), 0.8, car, state_time=t)
+    assert det.car_speed(3.0) == pytest.approx(anchor_before + 0.8 * 1.6, abs=TOL)

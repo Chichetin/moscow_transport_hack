@@ -91,12 +91,14 @@ class SlipDetector:
         if lagged:
             # The model acceleration belongs to state_time, not to these buffered wheel
             # stamps. A gradual slide inferred from it would restart the filter from a
-            # false car speed, especially when the command changed during the lag.
-            self._car = None
+            # false car speed, especially when the command changed during the lag. An
+            # established slide keeps its original anchor across a transient wheel gap.
             for name in ('front', 'rear'):
                 self._hist[name].clear()
-                self._slide[name] = self._resid[name] = None
-                self._released[name] = -math.inf
+                self._resid[name] = None
+                if self._car is None:
+                    self._slide[name] = None
+                    self._released[name] = -math.inf
 
         live = {n: s for n, s in (('front', front), ('rear', rear))
                 if s is not None and t_now - s.t <= p.input.stale_timeout_s}

@@ -133,3 +133,23 @@ def test_spin_of_both_bogies_does_not_drag_the_speed_up():
     assert any(e.slip.slip_front and e.slip.slip_rear for s, e, car in out if 4.0 <= s < 6.5)
     assert not out[-1][1].slip.slip_front and not out[-1][1].slip.slip_rear
     assert err[round(out[-1][0], 1)] < 0.1
+
+
+def test_wheel_gap_during_spin_does_not_reanchor_on_spinning_wheels():
+    # Controller continues at 10 Hz while both bogies disappear for 0.8 s. A slide
+    # found before the gap must keep its car anchor when the slipping wheels resume.
+    from tram_odometry_core.dynamics import model_accel
+    odo, car, errors = Odometry(PARAMS), 3.0, []
+    for k in range(35):
+        t = T0 + round(k * 0.1, 2)
+        odo.step((CMD, _msg(t, position=8)))
+        slip = max(0, k - 5) * 0.1
+        if not 14 <= k <= 21:
+            odo.step((FRONT, _msg(t, velocity=(car + 1.2 * slip) * 3.6)))
+            odo.step((REAR, _msg(t, velocity=(car + 2.0 * slip) * 3.6)))
+        if k == 12 or k == 21:
+            assert odo._slip.car_speed(t) is not None
+        if k >= 22:
+            errors.append(abs(odo._v - car))
+        car += model_accel(odo._notch_at(t), car, PARAMS) * 0.1
+    assert max(errors) < 0.8
