@@ -9,11 +9,14 @@ Every long bag is one trip in one direction, so the route is two branches:
 0 — westbound (east terminal -> east loop -> west loop), 1 — eastbound (west terminal -> east
 terminal). Per branch: the longest gap-free train pass is the reference; all passes of that
 direction are projected onto it and the reference moves by the median lateral offset over
-passes, a few times. Only train bags (tools/eval/splits.yaml) and GBAS fixes are used.
+passes, a few times. Where the passes since RELAID_SINCE agree on a track more than MAX_SPREAD_M
+away from that median, the track was relaid and their median wins (D-096). Only train bags
+(tools/eval/splits.yaml) and GBAS fixes are used.
 """
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import subprocess
 from concurrent.futures import ProcessPoolExecutor
@@ -56,6 +59,9 @@ SHIFT_MAX_M = 10.0      # m, a piece never farther than this from a branch of it
 DIR_HALF = 10           # samples (~1 s) each side: travel direction of a pass at a fix
 DIR_MIN_M = 2.0         # m, shorter displacement over the window: standing, direction unknown
 OFFSET_SMOOTH_M = 15.0  # m, moving average of the lateral correction along the branch
+RELAID_SINCE = datetime.date(2026, 8, 10)  # UTC day of the first fix: from this day on every
+                        # westbound pass drives a track ~4 m off the one of 27.07 at s ~1000-1750
+                        # of branch 0 (D-096); the older majority must not keep the old track
 
 
 def default_data_dir() -> Path:
@@ -157,9 +163,18 @@ def reference_track(xy: np.ndarray, step: float) -> np.ndarray:
     return _moving_average(poly, max(1, int(round(REF_SMOOTH_M / step))))
 
 
+def _pass_day(t: np.ndarray) -> datetime.date:
+    return datetime.datetime.fromtimestamp(float(t[0]), datetime.timezone.utc).date()
+
+
 def refine_branch(ref: np.ndarray, passes: list[np.ndarray], step: float, gates: tuple,
-                  min_passes: int, smooth_m: float):
-    """Move the reference by the median over passes of their mean lateral offset per bin."""
+                  min_passes: int, smooth_m: float, recent: np.ndarray | None = None):
+    """Move the reference by the median over passes of their mean lateral offset per bin.
+
+    recent: mask of passes on the current track layout; in a bin where at least min_passes of
+    them agree (MAX_SPREAD_M) on an offset more than MAX_SPREAD_M from the median of all passes,
+    and within smooth_m of such a bin, their median (interpolated over bins where they do not
+    agree) is used: the track was relaid, older passes drive a track that is gone."""
     s, poly = resample(ref, step)
     for gate in gates:
         ds = s[1] - s[0]
@@ -175,6 +190,21 @@ def refine_branch(ref: np.ndarray, passes: list[np.ndarray], step: float, gates:
         med = np.full(len(s), np.nan)
         med[good] = np.nanmedian(per_pass[:, good], axis=0)
         good[good] = np.nanmedian(np.abs(per_pass[:, good] - med[good]), axis=0) <= MAX_SPREAD_M
+        if recent is not None:
+            new = per_pass[np.asarray(recent, bool)]
+            agree = np.sum(~np.isnan(new), axis=0) >= min_passes
+            new_med = np.full(len(s), np.nan)
+            new_med[agree] = np.nanmedian(new[:, agree], axis=0)
+            agree[agree] = np.nanmedian(np.abs(new[:, agree] - new_med[agree]), axis=0) <= MAX_SPREAD_M
+            relaid = agree & (np.abs(new_med - med) > MAX_SPREAD_M)
+            if relaid.any():
+                # the zone widened by smooth_m (the turnouts) and without holes: a bin that falls
+                # back to the old median (few recent passes in a 1 m bin at speed) is a spike,
+                # and the moving average turns a spike into steps that zig-zag the branch
+                w = int(round(smooth_m / ds))
+                relaid = np.convolve(relaid, np.ones(2 * w + 1), mode='same') > 0
+                med[relaid] = np.interp(np.flatnonzero(relaid), np.flatnonzero(agree), new_med[agree])
+            good |= relaid
         if not good.any():
             break
         off = np.interp(np.arange(len(s)), np.flatnonzero(good), med[good])
@@ -348,7 +378,8 @@ def main() -> None:
         ref_name, _, ref_xy = max((p for p in passes[b] if reference_ok(p[1], p[2])),
                                   key=lambda p: coverage(p[2]))
         branches.append(refine_branch(reference_track(ref_xy, STEP_M), [xy for _, _, xy in passes[b]],
-                                      STEP_M, GATES_M, MIN_PASSES, OFFSET_SMOOTH_M))
+                                      STEP_M, GATES_M, MIN_PASSES, OFFSET_SMOOTH_M,
+                                      np.array([_pass_day(t) >= RELAID_SINCE for _, t, _ in passes[b]])))
         print(f'branch {b}: {branches[-1][0][-1]:.0f} m, {len(passes[b])} passes, reference {ref_name}')
     usable = [tr for tr in tracks.values() if len(tr[1]) > OUTLIER_WIN]
     branches = add_extra_branches(branches, [(t, xy) for t, xy, _ in usable])
