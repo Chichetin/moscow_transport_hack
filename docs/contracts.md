@@ -26,7 +26,7 @@ PR** с перечнем потребителей в описании. В том
 | `/sensing/gnss/master/fix`, `/rover/fix` | `sensor_msgs/msg/NavSatFix` | вход | 10 Гц | только первые `gnss.init_window_s` с (D-005) |
 | `/sensing/gnss/master/vel` | `geometry_msgs/msg/TwistStamped` | вход | 10 Гц | ENU, только окно выставки |
 | `/result/velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | **выход** | на каждый вход, ~40 Гц | `velocity` — продольная скорость, **м/с**, ≥ 0 |
-| `/result/position` | `nav_msgs/msg/Odometry` | **выход** | на каждый вход | см. ниже |
+| `/result/position` | `nav_msgs/msg/Odometry` | **выход** | на каждый вход, начиная с первого валидного fix master (до него позиции нет: `Estimate.position_absolute = False`, #163, D-086) | см. ниже |
 | `/result/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | выход | 1–10 Гц | статус проскальзывания и входов (критерий 3) |
 
 Правила для обоих `/result/*`:
@@ -44,7 +44,7 @@ PR** с перечнем потребителей в описании. В том
 |---|---|
 | `header.frame_id` | `map` (`frames.map`) — **плоская сетка MGRS** по ответу организаторов 27.09 (#155, D-083): `x` = UTM easting зоны `frames.grid_zone` (37N, WGS84) − `frames.grid_origin_e_m` (300 000), `y` = northing − `frames.grid_origin_n_m` (6 100 000), то есть от угла квадрата `37UCB`, без переноса за 100 км (восточная часть маршрута — `x` > 100 000, как в примере организаторов); `z` — высота над эллипсоидом WGS84, м (как `NavSatFix.altitude`). Начало не зависит от прогона. Пример организаторов: lat 55,8088325462547, lon 37,4602768500852 → x 103 501,6309, y 85 876,1201 (`test_geo.py`). Исключение (#162, D-084): без карты и без fix привязки к геодезии нет — `frame_id = odom` (REP-105, локальная система счисления пути, имя — конвенция ROS, не параметр), `Estimate.position_absolute = False` |
 | `child_frame_id` | `base_link` (`frames.base`) |
-| `pose.pose.position` | точка `base_link` — ось передней тележки на уровне касания колеса и рельса (tf организаторов 27.09: master x = −9,873, rover x = +2,563, обе z = 3,0 м; D-077): `x`, `y` — сетка MGRS (восток и север сетки), `z` — высота над эллипсоидом, м. По карте — на `position.base_ahead_m` впереди трека master по дуге и на `position.antenna_height_m` ниже высоты антенн; ядро считает в локальной ENU и переводит на выходе (ENU → ECEF → геодезические → UTM, `position/geo.py`). Исключение: пока карта не приняла fix (их ещё нет или все fix окна дальше `position.fix_gate_m` от карты — bag вне маршрута) — запасная прямая D-021 от первого валидного fix master (lat = lon = 0 не берётся), та же сетка, с картой и без (#163, D-086). До первого валидного fix абсолютной привязки нет: `x`, `y` локальные от старта, `z = 0`, публикуются в `odom`, а не в `map` (#162, D-084); начало карты `route.origin` точкой трамвая не бывает никогда (D-086) |
+| `pose.pose.position` | точка `base_link` — ось передней тележки на уровне касания колеса и рельса (tf организаторов 27.09: master x = −9,873, rover x = +2,563, обе z = 3,0 м; D-077): `x`, `y` — сетка MGRS (восток и север сетки), `z` — высота над эллипсоидом, м. По карте — на `position.base_ahead_m` впереди трека master по дуге и на `position.antenna_height_m` ниже высоты антенн; ядро считает в локальной ENU и переводит на выходе (ENU → ECEF → геодезические → UTM, `position/geo.py`). Исключение: пока карта не приняла fix (их ещё нет или все fix окна дальше `position.fix_gate_m` от карты — bag вне маршрута) — запасная прямая D-021 от первого валидного fix master (lat = lon = 0 не берётся), та же сетка, с картой и без (#163, D-086). До первого валидного fix абсолютной привязки нет: `position_absolute = False`, `x`, `y` — локальные метры от старта, и нода **не публикует** `/result/position` вовсе (`/result/velocity` — как обычно): судья, не смотрящий на `frame_id`, иначе сравнил бы их с сеткой (#163, D-086; кадр `odom` из D-084 остаётся в `position_msg` как защита, но в сдаче не выходит). Начало карты `route.origin` точкой трамвая не бывает никогда |
 | `pose.pose.orientation` | курс по касательной карты (yaw) относительно оси `x` сетки, кватернион: курс ENU повёрнут на сближение меридианов (≈ −1,27° на маршруте, D-083) |
 | `pose.covariance` | 6×6 row-major; `[0]`,`[7]` — дисперсии x/y в осях сетки, м² (поперёк/вдоль пути, повёрнуты вместе с курсом); `[35]` — yaw; неизвестные — `-1` не ставить, ставить большое число |
 | `twist.twist.linear.x` | продольная скорость, м/с (= `/result/velocity`) |
@@ -122,7 +122,7 @@ class Estimate:
     slip: SlipState
     gnss_used: bool
     position_absolute: bool   # True: x, y, z, yaw в сетке MGRS (карта приняла fix или был валидный fix
-                              # master); False: до первого fix — локальные метры, публикуются в `odom` (§1, #162, #163)
+                              # master); False: до первого fix — локальные метры, нода их не публикует (§1, #162, #163, D-086)
     filter_diagnostics: FilterDiagnostics | None = None  # NIS нового измерения тележки
 
 @dataclass(frozen=True)
@@ -290,7 +290,7 @@ stamp, допуск 0,05 с, как у судьи):
   поперёк — расстояние оценённой точки до полилинии.
 - `pos3d_*` — м, евклидово расстояние x/y/z (так сравнивает судья).
 - `along_*`, `cross_*`, `pos3d_*`, `drift_pct` — только по оценкам с `position_absolute = True`
-  (#162, D-084): локальные метры `odom` не в сетке эталона. `speed_*`, `slip_flag_frac`, `n_matched` — по всем
+  (#162, D-084): до первого fix позиции нет, нода её не публикует (#163, D-086). `speed_*`, `slip_flag_frac`, `n_matched` — по всем
   оценкам. Число оценок `odom` — в итоговой строке CLI, в `metrics.json` не пишется.
 - Прогон короче 50 м пути — `drift_pct = null` (ловушка 13 `docs/data.md`).
 - Главные метрики для merge (D-012): медианы `speed_rmse`, `along_rmse`, `drift_pct`.
