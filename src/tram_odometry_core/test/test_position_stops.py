@@ -168,6 +168,17 @@ def test_lost_lock_is_recovered_by_consistent_misses():
     assert abs(ahead - (3400.0 - START_S)) < 3.0
 
 
+def test_relock_learns_the_scale_as_unknown_again():
+    """Four exact snaps make the scale confident; then the wheels read 1.5 % long (another
+    tram in the stress test) and the lock is lost. The relock must measure the scale with the
+    prior variance again, not with the confidence the lost lock has disproved."""
+    tr = _tracker([(0, s) for s in (1500.0, 2000.0, 2500.0, 3000.0, 4400.0, 4600.0, 4800.0)])
+    assert all(tr.on_stop(d) for d in (500.0, 1000.0, 1500.0, 2000.0))
+    assert tr._scale_var < 0.1 * P.along_drift_frac ** 2
+    assert [tr.on_stop(2000.0 + (s - 3000.0) * WHEEL) for s in (4400.0, 4600.0)] == [False, True]
+    assert tr._scale == pytest.approx(1.0 / WHEEL, abs=1e-3)
+
+
 def test_stops_off_the_places_do_not_fake_a_lock():
     """Two misses on one side that do not grow with the path as a scale error does (the second
     is 8.8 m off the line of the first from the anchor, 2.7 sigma) are signals: s is kept."""
