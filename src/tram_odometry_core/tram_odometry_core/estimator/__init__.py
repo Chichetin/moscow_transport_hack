@@ -1,4 +1,6 @@
 """Causal speed and acceleration-bias filter; wheel input is calibrated SI."""
+from typing import Optional
+
 import numpy as np
 
 from ..types import FilterDiagnostics, Params, WheelSample
@@ -17,6 +19,11 @@ class SpeedFilter:
     the other bogie's last accepted reading (if it is live on the wheel timeline):
     the trust-weighted mean of the pair while moving, the smaller one at rest
     without traction (#105, D-061).
+
+    Without a fresh trusted wheel for longer than `input.stale_timeout_s` (both bogies silent,
+    frozen or out) the bias decays to 0 with `filter.bias_decay_s` (#176, D-090): it was
+    learned for the grade and the table error of the moment before the pause and is not
+    carried over the pause. A wheel rejected by the NIS gate still counts as heard.
     """
 
     def __init__(self, params: Params):
@@ -47,6 +54,8 @@ class SpeedFilter:
         self._pair = {'front': None, 'rear': None}  # last accepted (t, speed m/s, trust)
         self._raw = {'front': None, 'rear': None}   # last fresh (t, speed m/s), any trust
         self._jump_t = {'front': None, 'rear': None}  # stamp of the bogie's last jump
+        self._t_heard = None                          # state time of the last fresh trusted wheel
+        self._t_rest = None                           # state time the speed reached 0; None moving
 
     def rebase_time(self, t: float):
         """Keep the estimate but start a fresh input clock after a confirmed jump."""
@@ -59,6 +68,8 @@ class SpeedFilter:
         self._pair = {'front': None, 'rear': None}
         self._raw = {'front': None, 'rear': None}
         self._jump_t = {'front': None, 'rear': None}
+        self._t_heard = None if self._t_heard is None else t
+        self._t_rest = None if self._t_rest is None else t
         self._diagnostic = None
 
     def predict(self, t: float, accel_model: float):
@@ -70,8 +81,22 @@ class SpeedFilter:
         dt = 0.0 if self._t is None else t - self._t
         self._t = t
         self._model_accel = accel_model
-        self._x[0] = max(0.0, self._x[0] + (accel_model + self._x[1]) * dt)
-        transition = np.array(((1.0, dt), (0.0, 1.0)))
+        # the part of the step past stale_timeout_s without a trusted wheel: the bias is a
+        # Gauss-Markov process there (D-090), a random walk while wheels are heard. It decays
+        # before the speed moves, so the step runs on the acceleration state() reports
+        quiet = (0.0 if self._t_heard is None
+                 else min(dt, t - self._t_heard - self._stale_timeout))
+        decay = float(np.exp(-quiet / self._p.bias_decay_s)) if quiet > 0.0 else 1.0
+        self._x[1] *= decay
+        slope = accel_model + self._x[1]
+        speed = self._x[0] + slope * dt
+        if speed <= 0.0 and self._t_rest is None:
+            # the linear motion stops inside this step; a late wheel is measured up to there
+            self._t_rest = t - dt + (self._x[0] / -slope if slope < 0.0 else 0.0)
+        self._x[0] = max(0.0, speed)
+        if self._x[0] > 0.0:
+            self._t_rest = None
+        transition = np.array(((1.0, dt * decay), (0.0, decay)))
         process_noise = np.array((
             (self._p.q_accel * dt + self._p.q_bias * dt ** 3 / 3.0,
              self._p.q_bias * dt ** 2 / 2.0),
@@ -79,7 +104,9 @@ class SpeedFilter:
         ))
         self._cov = transition @ self._cov @ transition.T + process_noise
 
-    def update(self, sample: WheelSample, trust: float):
+    def update(self, sample: WheelSample, trust: float, partner_trust: Optional[float] = None):
+        """`partner_trust`: the detector's current trust in the other bogie (#176); None keeps
+        the trust the other bogie's last reading was fused with."""
         self._diagnostic = None
         if (sample.bogie not in self._last or not np.isfinite(sample.t)
                 or not np.isfinite(sample.speed) or sample.speed < 0.0
@@ -112,12 +139,19 @@ class SpeedFilter:
             return
         self.predict(sample.t, self._model_accel)
         self._last[sample.bogie] = sample.t
+        self._t_heard = self._t
         self._latest_wheel_t = (sample.t if self._latest_wheel_t is None
                                 else max(self._latest_wheel_t, sample.t))
         age = self._t - sample.t
+        before_rest = self._t_rest is not None and sample.t < self._t_rest
+        if self._t_rest is not None:
+            # the state stands since t_rest: its speed was linear in time only up to there, a
+            # wheel from before is compared with that line, a later one with rest (#176)
+            age = min(age, max(0.0, self._t_rest - sample.t))
         scale = 1.0 - self._scale_delta if sample.bogie == 'front' else 1.0 + self._scale_delta
         own = sample.speed / scale
-        measurement = self._pair_speed(sample, own, trust) + self._model_accel * age
+        measurement = (self._pair_speed(sample, own, trust, partner_trust)
+                       + self._model_accel * age)
         measurement_var = self._p.r_wheel / (trust * scale ** 2) + self._p.q_accel * age
         plausible_departure = (
             self._confirmed_stop_t is not None and sample.speed > 0.0
@@ -129,6 +163,7 @@ class SpeedFilter:
             self._cov[0, 0] = max(self._cov[0, 0], self._p.departure_var_factor * measurement_var)
         if not self._initialized:
             self._x[0] = max(0.0, measurement)
+            self._t_rest = None if self._x[0] > 0.0 else self._t
             self._cov = np.diag((measurement_var, self._p.initial_bias_var))
             self._initialized = True
             self._diagnostic = FilterDiagnostics(sample.t, sample.bogie, 0.0, True)
@@ -165,6 +200,12 @@ class SpeedFilter:
         gain = projected / innovation_var
         self._x += gain * innovation
         self._x[0] = max(0.0, self._x[0])
+        if before_rest:
+            self._x[0] = 0.0    # it corrects the braking line, not the rest after it
+        if self._x[0] > 0.0:
+            self._t_rest = None
+        elif self._t_rest is None:
+            self._t_rest = self._t
         residual = np.eye(2) - np.outer(gain, observation)
         self._cov = (residual @ self._cov @ residual.T
                      + np.outer(gain, gain) * measurement_var)
@@ -178,9 +219,14 @@ class SpeedFilter:
             self._cov[1, 1] = max(self._cov[1, 1], self._p.initial_bias_var)
         self._observe_scale(sample, trust)
 
-    def _pair_speed(self, sample: WheelSample, own: float, trust: float) -> float:
+    def _pair_speed(self, sample: WheelSample, own: float, trust: float,
+                    partner_trust: Optional[float]) -> float:
         """Car speed at `sample.t` from this bogie and the other bogie's last reading."""
         other = self._pair['rear' if sample.bogie == 'front' else 'front']
+        if other is not None and partner_trust is not None:
+            # the trust the partner was fused with compared it with an older reading of this
+            # bogie; the detector's current trust has seen the pair as it is now (#176)
+            other = (other[0], other[1], partner_trust)
         if (not self._initialized or other is None
                 or abs(sample.t - other[0]) > self._stale_timeout):
             return own       # the other bogie is silent: single-bogie mode
@@ -227,6 +273,7 @@ class SpeedFilter:
         if not self._initialized or not np.isfinite(speed):
             return
         self._x = np.array((max(0.0, speed), 0.0))
+        self._t_rest = None if self._x[0] > 0.0 else self._t
         self._cov = np.diag((max(self._cov[0, 0], self._restart_var), self._p.initial_bias_var))
 
     def state(self):

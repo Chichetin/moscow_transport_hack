@@ -1,4 +1,5 @@
 """Behavior of the online speed filter, independently of ROS and the pipeline."""
+import math
 from dataclasses import replace
 from pathlib import Path
 
@@ -36,13 +37,24 @@ def test_predict_integrates_model_and_grows_uncertainty():
 
 
 def test_process_covariance_respects_seconds_and_bias_units():
+    dt = PARAMS.input.stale_timeout_s        # the wheels are still heard: a random-walk bias
     filt = initialized()
-    filt.predict(2.0, 0.0)
+    filt.predict(dt, 0.0)
     expected = (PARAMS.filter.r_wheel
-                + PARAMS.filter.initial_bias_var * 2.0 ** 2
-                + PARAMS.filter.q_accel * 2.0
-                + PARAMS.filter.q_bias * 2.0 ** 3 / 3.0)
+                + PARAMS.filter.initial_bias_var * dt ** 2
+                + PARAMS.filter.q_accel * dt
+                + PARAMS.filter.q_bias * dt ** 3 / 3.0)
     assert filt.state()[1] == pytest.approx(expected)
+
+
+def test_bias_variance_follows_the_decay_on_a_pause():
+    # a Gauss-Markov bias on a pause of the wheels (D-090): P_bb' = decay^2 * P_bb + q_bias * dt
+    filt = initialized()
+    filt.predict(PARAMS.input.stale_timeout_s, 0.0)
+    before = filt._cov[1, 1]
+    filt.predict(PARAMS.input.stale_timeout_s + 1.0, 0.0)
+    decay = math.exp(-1.0 / PARAMS.filter.bias_decay_s)
+    assert filt._cov[1, 1] == pytest.approx(decay ** 2 * before + PARAMS.filter.q_bias * 1.0)
 
 
 def test_zero_trust_rejects_measurement():
@@ -433,3 +445,57 @@ def test_restart_before_the_first_wheel_is_ignored():
     f = SpeedFilter(PARAMS)
     f.restart(5.0)
     assert f.state()[0] == 0.0
+
+
+def test_bias_decays_to_zero_while_no_wheel_is_accepted():
+    # both bogies silent, frozen or out (#176, D-090): the bias learned before the pause (the
+    # grade and the table error of that moment, or noise) is not carried over the pause; past
+    # input.stale_timeout_s without an accepted wheel it decays with filter.bias_decay_s
+    filt = initialized()
+    filt._x[1] = 0.5
+    for k in range(1, 101):
+        filt.predict(k / 10.0 + 0.03, 0.0)            # steps straddle the timeout
+    quiet = 10.03 - PARAMS.input.stale_timeout_s
+    assert filt.state()[2] == pytest.approx(0.5 * math.exp(-quiet / PARAMS.filter.bias_decay_s))
+
+
+def test_bias_is_kept_while_the_wheels_arrive():
+    filt = initialized()
+    filt._x[1] = 0.5
+    filt.predict(PARAMS.input.stale_timeout_s, 0.0)   # a pause not longer than the timeout
+    assert filt.state()[2] == 0.5
+    filt.update(wheel(0.4, 10.2), 1.0)                # an accepted wheel restarts the clock
+    bias = filt.state()[2]
+    filt.predict(0.4 + PARAMS.input.stale_timeout_s, 0.0)
+    assert filt.state()[2] == bias
+
+
+def test_the_mean_weighs_the_partner_by_the_detectors_current_trust():
+    # the rear came first and agreed with the front's older reading (trust 1/1); the front of
+    # the same stamp shows the pair apart and the detector trusts both 0.5 now: the car speed
+    # is the equal mean 10.0, not 2:1 towards the rear by the trust it was accepted with (#176)
+    filt = initialized()
+    filt.update(wheel(0.0, 10.0, 'rear'), 1.0)
+    filt.predict(0.1, 0.0)
+    filt.update(wheel(0.1, 10.6, 'rear'), 1.0)
+    speed, var, _ = filt.state()
+    filt.update(wheel(0.1, 9.4), 0.5, partner_trust=0.5)
+    r = PARAMS.filter.r_wheel / 0.5
+    assert filt.diagnostics().nis == pytest.approx((10.0 - speed) ** 2 / (var + r))
+
+
+def test_a_late_zero_wheel_from_before_the_rest_does_not_start_the_car():
+    # braking at 1 m/s^2 from 2 m/s, the wheels silent: the prediction reaches 0 at t = 2 and
+    # stands there till t = 8. A zero wheel stamped at t = 1.5 is 6.5 s old, but the speed is
+    # linear only up to the rest: measured over the whole age (z = a * 6.5 = -6.5 m/s) the
+    # filter explains it with a bias and drives off from a zero reading (#176)
+    filt = SpeedFilter(PARAMS)
+    filt.predict(0.0, -1.0)
+    filt.update(wheel(0.0, 2.0), 1.0)
+    filt.predict(8.0, -1.0)
+    assert filt.state()[0] == 0.0
+    filt.update(wheel(1.5, 0.0), 1.0)
+    assert filt.diagnostics().accepted
+    assert filt.state()[0] == 0.0
+    filt.predict(8.1, -1.0)
+    assert filt.state()[0] == 0.0
