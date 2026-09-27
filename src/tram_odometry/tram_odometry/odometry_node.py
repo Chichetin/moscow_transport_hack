@@ -29,10 +29,12 @@ ODOM_FRAME = 'odom'    # REP-105: continuous local frame of dead reckoning (cont
 UNKNOWN_VAR = 1e6     # contract §1: covariance of an unestimated component is large, never -1
 DIAGNOSTIC_PERIOD_NS = 100_000_000  # 10 Hz maximum, measured in bag stamp time
 INPUT_QUEUE = 100      # messages; bag start delivers a burst of up to ~3.7 s (docs/data.md, trap 5)
-VEHICLE_INPUTS = [('/vehicle/front_bogie_velocity', VelocitySensor),
-                  ('/vehicle/rear_bogie_velocity', VelocitySensor)]
+# input ages in diagnostics: front, rear, controller (the last stays 'unknown' without its type)
+VEHICLE_TOPICS = ('/vehicle/front_bogie_velocity', '/vehicle/rear_bogie_velocity',
+                  '/vehicle/driver_position_cmd')
+VEHICLE_INPUTS = [(VEHICLE_TOPICS[0], VelocitySensor), (VEHICLE_TOPICS[1], VelocitySensor)]
 if DriverControllerCommand is not None:  # without the type ros2 bag play drops the topic anyway
-    VEHICLE_INPUTS.append(('/vehicle/driver_position_cmd', DriverControllerCommand))
+    VEHICLE_INPUTS.append((VEHICLE_TOPICS[2], DriverControllerCommand))
 # contract §1 input; tools/eval feeds it too (bag.py: GNSS), so the core sees the same stream
 # and its t0 (start of the GNSS window, D-005) is the same in the node and in eval (D-028)
 ROVER_FIX_TOPIC = '/sensing/gnss/rover/fix'
@@ -183,13 +185,13 @@ class OdometryNode(Node):
                 # even a local one: a judge that ignores frame_id would compare it with the grid;
                 # a bag without GNSS gets local odom after the window (#163, D-086)
                 self.pub_position.publish(position_msg(est, msg.header.stamp, self.params))
-            if topic in (VEHICLE_INPUTS[0][0], VEHICLE_INPUTS[1][0], VEHICLE_INPUTS[2][0]):
+            if topic in VEHICLE_TOPICS:
                 self._last_input_ns[topic] = stamp_ns
             if (self._last_diagnostic_ns is None
                     or stamp_ns - self._last_diagnostic_ns >= DIAGNOSTIC_PERIOD_NS):
                 ages = tuple('unknown' if self._last_input_ns.get(key) is None else
                              max(0, stamp_ns - self._last_input_ns[key]) / 1_000_000_000
-                             for key, _ in VEHICLE_INPUTS)
+                             for key in VEHICLE_TOPICS)
                 self.pub_diagnostics.publish(diagnostics_msg(est, msg.header.stamp,
                                                               self.params, ages))
                 self._last_diagnostic_ns = stamp_ns

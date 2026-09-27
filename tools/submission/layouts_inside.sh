@@ -107,8 +107,10 @@ run_bag() { # run_bag <каталог workspace> <bag> <ключ в отчёте
     info="$(ros2 bag info "/tmp/rec_$key" 2>/dev/null)"
     vel="$(printf '%s\n' "$info" | grep 'Topic: /result/velocity' | grep -oE 'Count: [0-9]+' | grep -oE '[0-9]+')"
     pos="$(printf '%s\n' "$info" | grep 'Topic: /result/position' | grep -oE 'Count: [0-9]+' | grep -oE '[0-9]+')"
-    note="нода жива: $alive; /result/velocity: ${vel:-0}; /result/position: ${pos:-0}"
-    if [ "$alive" = yes ] && [ "${vel:-0}" -gt 0 ] && [ "${pos:-0}" -gt 0 ]; then
+    # исключение ядра нода ловит и живёт дальше, но вход пропущен — это поломка (#184)
+    errs="$(grep -cE 'input skipped|Traceback' "$LOGS/run.$key.node.log")"
+    note="нода жива: $alive; /result/velocity: ${vel:-0}; /result/position: ${pos:-0}; ошибок в логе ноды: $errs"
+    if [ "$alive" = yes ] && [ "${vel:-0}" -gt 0 ] && [ "${pos:-0}" -gt 0 ] && [ "$errs" -eq 0 ]; then
       # проверка читает и входной топик контроллера: типы из README-раскладки (полный пакет)
       if checked="$(source /tmp/readme/ws/install/setup.bash &&
                     python3 /repo/tools/submission/check_recording.py "/bags/$b" "/tmp/rec_$key" 2>&1)"; then

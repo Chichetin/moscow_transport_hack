@@ -64,6 +64,19 @@ def test_node_imports_without_controller_message(monkeypatch):
         assert on.DriverControllerCommand is None
         assert on.VEHICLE_INPUTS == [('/vehicle/front_bogie_velocity', VelocitySensor),
                                      ('/vehicle/rear_bogie_velocity', VelocitySensor)]
+        rclpy.init()
+        n = on.OdometryNode(params_file=str(PARAMS_FILE))
+        try:
+            sent = []
+            monkeypatch.setattr(n.pub_diagnostics, 'publish', sent.append)
+            n.on_input('/vehicle/front_bogie_velocity', _wheel())
+            n.on_input('/vehicle/rear_bogie_velocity', _wheel())
+            assert n.errors == 0
+            inputs = {v.key: v.value for v in sent[0].status[1].values}
+            assert inputs['cmd_age_s'] == 'unknown' and inputs['front_age_s'] == '0.0'
+        finally:
+            n.destroy_node()
+            rclpy.shutdown()
     finally:
         monkeypatch.undo()
         importlib.reload(on)
