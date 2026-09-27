@@ -6,9 +6,12 @@ sensors: on their check bag 30618_88aea4d9 our speed v(t) against ref(t + d) has
 RMSE at d = 0.09 s, and so does their own GNSS master/vel. At the input stamp t the node
 therefore publishes the speed estimate of t - output.velocity_delay_s, linear between the
 estimates already made: past values only (online), the stamp stays the input's (D-015).
+
+RunGate tells the node when a new bag is played into it without a restart (#200, D-098).
 """
 import math
 from bisect import bisect_left, bisect_right
+from collections import deque
 
 # s of history kept behind the newest stamp beyond the delay: an input of another topic may
 # come with an older stamp (docs/data.md, traps 5-6) and still finds its delayed value here
@@ -16,6 +19,12 @@ HISTORY_MARGIN_S = 1.0
 # samples at most, whatever the stamps do (a repeated stamp never ages out): O(1) memory per
 # message; delay + margin (~1.1 s) of every input (~60 Hz) is ~70 samples
 MAX_SAMPLES = 256
+# vehicle inputs on a new stamp-to-wall offset that make it a new bag: one is a stamp glitch
+# (D-043), both bogies at ~10 Hz give three within ~0.15 s of a real new bag
+RUN_CONFIRM_SAMPLES = 3
+# inputs held for a new bag until it is confirmed: GNSS (3 topics, ~10 Hz each) may come ~1 s
+# before its first bogie; O(1) memory per message
+RUN_PENDING_MAX = 256
 
 
 class DelayLine:
@@ -60,3 +69,41 @@ class DelayLine:
         w = (q - ts[i - 1]) / (ts[i] - ts[i - 1])   # in [0, 1): ts[i] > q >= ts[i - 1]
         # exact at w = 0 and between equal values; never below 0 between nonnegative ones
         return vs[i - 1] + w * (vs[i] - vs[i - 1])
+
+
+class RunGate:
+    """Which run -- which bag -- an input belongs to, for one node fed bag after bag (#200, D-098).
+
+    `ros2 bag play` replays at the recorded pace, so within one bag `stamp - wall clock` stays
+    put up to the input lag (docs/data.md, traps 5-6: bursts late by up to 3.7 s), across a
+    silence of every stream too; the next bag has another offset. An input within `max_jump_s`
+    of the current offset belongs to the current run. One off it is held: a new bag starts only
+    once RUN_CONFIRM_SAMPLES vehicle inputs share a new offset, so neither GNSS (never after
+    its window, D-005) nor one glitched stamp can open a run; the held inputs of that offset,
+    GNSS that came before the bogies included, go to the new run first. Inputs on the offset of
+    the run just left are what was still queued from the old bag and are dropped.
+    """
+
+    def __init__(self, max_jump_s: float):
+        self.max_jump_s = max_jump_s    # s, input.max_stamp_jump_s: farther is another clock
+        self.offset = None              # s, stamp - wall of the latest input of the current run
+        self.retired = None             # s, the same of the run before it
+        self._held = deque(maxlen=RUN_PENDING_MAX)  # (offset s, vehicle, item)
+
+    def place(self, vehicle: bool, stamp_s: float, wall_s: float, item):
+        """Place `item` (stamp `stamp_s`, received at monotonic `wall_s`): ('run', [item]) --
+        step the current run; ('new', items) -- start a new run and step it with `items`, in
+        arrival order; ('hold', []) or ('drop', []) -- nothing to step now."""
+        offset = stamp_s - wall_s
+        if self.offset is None or abs(offset - self.offset) <= self.max_jump_s:
+            self.offset = offset
+            return 'run', [item]
+        if self.retired is not None and abs(offset - self.retired) <= self.max_jump_s:
+            return 'drop', []
+        self._held.append((offset, vehicle, item))
+        same = [h for h in self._held if abs(h[0] - offset) <= self.max_jump_s]
+        if not vehicle or sum(h[1] for h in same) < RUN_CONFIRM_SAMPLES:
+            return 'hold', []
+        self.retired, self.offset = self.offset, offset
+        self._held.clear()
+        return 'new', [h[2] for h in same]

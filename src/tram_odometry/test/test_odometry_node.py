@@ -658,3 +658,20 @@ def test_gnss_after_window_changes_no_published_bit(node, monkeypatch):
     for i, ((kf, mf), (kc, mc)) in enumerate(zip(full, cut)):
         assert (kf, mf) == (kc, mc), f'message {i} ({kf}) at {mf.header.stamp}: {mf} != {mc}'
     assert len(full) == len(cut)
+
+
+def test_next_bag_into_the_same_node_gets_a_fresh_core(node):
+    """#200: a second bag played into a running node starts from a fresh core; a glitched stamp
+    of one bogie does not."""
+    def wheel(sec):
+        m = _wheel()
+        m.header.stamp = Time(sec=sec, nanosec=0)
+        return m
+
+    node.on_input('/vehicle/front_bogie_velocity', wheel(STAMP.sec))
+    first = node.odometry
+    node.on_input('/vehicle/front_bogie_velocity', wheel(STAMP.sec + 3600))
+    assert node.odometry is first
+    for _ in range(2):
+        node.on_input('/vehicle/rear_bogie_velocity', wheel(STAMP.sec + 3600))
+    assert node.odometry is not first and node.errors == 0
