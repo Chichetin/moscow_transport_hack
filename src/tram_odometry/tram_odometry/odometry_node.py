@@ -3,7 +3,8 @@
 Thin by design (D-001): the raw input of Odometry.step is the (topic, message) pair as
 received, exactly what tools/eval passes (tools/eval/tram_eval/bag.py: to_raw); parsing, units
 and stamps are the core's job. One publication per accepted input; header.stamp is that
-input's stamp (D-015).
+input's stamp (D-015); /result/velocity carries the estimate output.velocity_delay_s before
+it, the time base of the judge's reference (D-095).
 """
 import math
 import os
@@ -22,6 +23,7 @@ try:  # the organizers' judge image ships tram_vehicle_msgs with VelocitySensor 
 except ImportError:
     DriverControllerCommand = None
 
+from tram_odometry_core.output import DelayLine
 from tram_odometry_core.pipeline import Odometry
 from tram_odometry_core.types import load_params, load_route
 
@@ -58,11 +60,11 @@ def to_raw(topic: str, msg):
     return topic, msg
 
 
-def velocity_msg(est, stamp, params) -> VelocitySensor:
+def velocity_msg(speed, stamp, params) -> VelocitySensor:
     m = VelocitySensor()
     m.header.stamp = stamp
     m.header.frame_id = params.frames.base
-    m.velocity = est.speed
+    m.velocity = speed
     return m
 
 
@@ -151,6 +153,8 @@ class OdometryNode(Node):
         self.params = load_params(path or default_params_file())
         route = load_route(route_file(self.params)) if self.params.position.use_map else None
         self.odometry = Odometry(self.params, route=route)
+        self.velocity_delay = DelayLine(self.params.output.velocity_delay_s,
+                                        self.params.input.max_stamp_jump_s)
         self.errors = 0
         self.pub_velocity = self.create_publisher(VelocitySensor, '/result/velocity', 10)
         self.pub_position = self.create_publisher(OdometryMsg, '/result/position', 10)
@@ -179,7 +183,10 @@ class OdometryNode(Node):
                 self.get_logger().error(f'{topic} non-finite estimate not published',
                                         throttle_duration_sec=5.0)
                 return
-            self.pub_velocity.publish(velocity_msg(est, msg.header.stamp, self.params))
+            # the speed of output.velocity_delay_s before the stamp: the judge's reference lags
+            # the sensors by that much (D-095); /result/position keeps est.speed and est.t
+            speed = self.velocity_delay.push(est.t, est.speed)
+            self.pub_velocity.publish(velocity_msg(speed, msg.header.stamp, self.params))
             if self.odometry.position_due(est):
                 # inside the GNSS window before the first valid fix there is no position yet, not
                 # even a local one: a judge that ignores frame_id would compare it with the grid;

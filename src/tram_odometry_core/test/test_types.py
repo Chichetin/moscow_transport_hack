@@ -198,6 +198,18 @@ def test_load_params_rejects_invalid_adhesion_setting(tmp_path, key, bad):
         T.load_params(f)
 
 
+@pytest.mark.parametrize('bad', [-0.01, -1.0])   # inf is a TypeError of the loader already
+def test_load_params_rejects_negative_velocity_delay(tmp_path, bad):
+    f = _write(tmp_path, lambda r: r['output'].update(velocity_delay_s=bad))
+    with pytest.raises(ValueError, match='velocity_delay_s'):
+        T.load_params(f)
+
+
+def test_load_params_accepts_zero_velocity_delay(tmp_path):
+    f = _write(tmp_path, lambda r: r['output'].update(velocity_delay_s=0.0))
+    assert T.load_params(f).output.velocity_delay_s == 0.0
+
+
 @pytest.mark.parametrize('literal,loads', [('1.0e-9', True), ('1e-9', False)])
 def test_stop_snap_switch_is_written_with_a_dot(tmp_path, literal, loads):
     """The switch of the stop snap in docs/pitch/qa.md (question 4): stop_snap_max_m: 0 with

@@ -15,6 +15,7 @@
 │   │   ├── tram_odometry_core/
 │   │   │   ├── types.py                  # КОНТРАКТ: dataclass-типы, Params, load_params
 │   │   │   ├── pipeline.py               # Odometry.step(raw) -> Estimate: сборка модулей
+│   │   │   ├── output.py                 # DelayLine: /result/velocity на output.velocity_delay_s раньше stamp (D-095)
 │   │   │   ├── preprocess/               # единицы, stamp, дыры, выбросы, молчащий датчик
 │   │   │   ├── dynamics/                 # модель привода и продольной динамики
 │   │   │   ├── estimator/                # EKF скорости, масштабы колёс
