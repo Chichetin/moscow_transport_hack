@@ -173,6 +173,19 @@ def test_height_follows_the_map_with_the_run_offset():
     assert z1 == pytest.approx(fz, abs=0.05)
 
 
+def test_height_offset_beyond_the_limit_is_a_gnss_glitch_not_the_run():
+    """#169: a window height 20 m off the map is a glitch of the fix (status 0 jumps by tens of
+    metres), not the run's offset: the map height is kept, as with no offset at all."""
+    limit = PARAMS.position.height_offset_max_m
+    glitch, exact = PathTracker(PARAMS, _route()), PathTracker(PARAMS, _route())
+    glitch.on_fix(*_lla(-1000.0, 0.0, 170.0 + limit + 10.0), 0, distance=0.0)
+    exact.on_fix(*_lla(-1000.0, 0.0, 170.0), 0, distance=0.0)
+    assert glitch._dz_median == 0.0
+    near = PathTracker(PARAMS, _route())                          # within the limit: kept
+    near.on_fix(*_lla(-1000.0, 0.0, 170.0 + limit - 1.0), 0, distance=0.0)
+    assert near._dz_median == pytest.approx(limit - 1.0, abs=0.05)
+
+
 def test_origin_moves_to_the_first_gbas_fix():
     tr = PathTracker(PARAMS, _route())
     tr.on_fix(*_lla(-1000.0, 3.0), 0, distance=0.0)            # plain fix, 3 m off the track
