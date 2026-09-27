@@ -254,8 +254,8 @@ def test_pipeline_without_gnss_publishes_local_position_after_the_window():
     from tram_odometry_core.pipeline import Odometry
     odo = Odometry(PARAMS, route=_route())
     inside = _wheels(odo, 0.0, PARAMS.gnss.init_window_s - 0.5, 36.0)
-    after = _wheels(odo, PARAMS.gnss.init_window_s - 0.4, PARAMS.gnss.init_window_s + 1.0, 36.0)
     assert not inside.position_absolute and not odo.position_due(inside)
+    after = _wheels(odo, PARAMS.gnss.init_window_s - 0.4, PARAMS.gnss.init_window_s + 1.0, 36.0)
     assert not after.position_absolute and odo.position_due(after)
     from types import SimpleNamespace
     late = odo.step(('/vehicle/driver_position_cmd', SimpleNamespace(
