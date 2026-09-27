@@ -19,7 +19,7 @@ def test_filter_noise_parameters_are_finite_and_present():
 
 NEW_KEYS = ['bias_release_speed_mps', 'pair_window_s', 'departure_slack_mps',
             'departure_var_factor', 'scale_min_trust', 'scale_min_speed_mps',
-            'scale_max_diff_mps', 'scale_max_rel', 'scale_gain']
+            'scale_max_diff_mps', 'scale_max_rel', 'scale_gain', 'bias_decay_s']
 
 
 @pytest.mark.parametrize('key', ['q_bias', 'initial_bias_var', 'nis_gate'] + NEW_KEYS)
@@ -36,6 +36,7 @@ def test_filter_parameter_is_required(tmp_path, key):
     ('departure_var_factor', 0.5), ('scale_min_trust', 0.0), ('scale_min_trust', 1.5),
     ('scale_min_speed_mps', 0.0), ('scale_max_diff_mps', 0.0), ('scale_max_rel', 0.0),
     ('scale_max_rel', 1.0), ('scale_gain', 0.0), ('scale_gain', 1.5),
+    ('bias_decay_s', 0.0), ('bias_decay_s', -1.0),
 ])
 def test_filter_rejects_invalid_covariance_or_gate(tmp_path, key, value):
     path = _write(tmp_path, lambda p: p['filter'].__setitem__(key, value))

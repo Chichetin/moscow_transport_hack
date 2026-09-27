@@ -147,7 +147,8 @@ class Odometry:
         self._sliding = car is not None
         if sample is not None:
             trust = st.front_trust if sample.bogie == 'front' else st.rear_trust
-            self._filter.update(sample, trust)
+            partner = st.rear_trust if sample.bogie == 'front' else st.front_trust
+            self._filter.update(sample, trust, partner)
         self._v, _, accel = self._filter.state()
         self._track_zero(v_before, t_before, now, accel)
         if sample is not None and self._filter.diagnostics() is not None:

@@ -148,6 +148,7 @@ class FilterParams:
     scale_max_diff_mps: float
     scale_max_rel: float
     scale_gain: float
+    bias_decay_s: float
 
 
 @dataclass(frozen=True)
@@ -363,7 +364,7 @@ def _validate_filter(filt: FilterParams) -> None:
     if filt.q_bias < 0.0:
         raise ValueError('filter.q_bias must be nonnegative')
     for name in ('bias_release_speed_mps', 'pair_window_s', 'scale_min_speed_mps',
-                 'scale_max_diff_mps'):
+                 'scale_max_diff_mps', 'bias_decay_s'):
         if getattr(filt, name) <= 0.0:
             raise ValueError(f'filter.{name} must be positive')
     if filt.departure_slack_mps < 0.0:

@@ -63,3 +63,26 @@ def test_antiphase_noise_while_cruising_follows_the_mean_of_the_bogies():
     out = _noise_run(36.0)
     errors = [abs(e.speed - 10.0) for t, e in out if 5.0 <= t]
     assert max(errors) < 0.3
+
+
+def test_the_filter_gets_the_detectors_current_trust_in_the_other_bogie():
+    # the detector judges both bogies on every input; the other bogie's trust it had when that
+    # bogie was fused is stale (#176): the pipeline passes the current one
+    odo, seen, n = Odometry(PARAMS), [], 0
+    update = odo._filter.update
+
+    def spy(sample, trust, partner_trust=None):
+        st = odo._slip_state
+        seen.append((partner_trust, st.rear_trust if sample.bogie == 'front' else st.front_trust))
+        return update(sample, trust, partner_trust)
+    odo._filter.update = spy
+    for k in range(200):
+        t = T0 + 0.1 * k
+        n += 1
+        f = 36.0 + 3.0 * math.sin(2 * math.pi * n / 10)
+        r = 36.0 + 3.0 * math.sin(2 * math.pi * n / 10 + math.pi)
+        for topic, msg in ((CMD, _msg(t, position=0)), (REAR, _msg(t + 0.01, velocity=r)),
+                           (FRONT, _msg(t + 0.01, velocity=f))):
+            odo.step((topic, msg))
+    assert seen and all(passed == current for passed, current in seen)
+    assert any(current == 0.5 for _, current in seen)    # antiphase noise: the case that matters

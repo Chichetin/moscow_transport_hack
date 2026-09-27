@@ -271,6 +271,9 @@ def test_late_wheel_after_the_state_braked_to_zero_on_prediction():
     v0, _, accel = odo._filter.state()
     assert accel < 0.0
     assert odo.step((CMD, _cmd(t + 8.0, -15))).speed == 0.0
+    # the 8 s step ran on the acceleration after it: the bias decays on the pause (D-094)
+    accel = odo._filter.state()[2]
+    assert accel < 0.0
     t_cross = t + v0 / -accel
     est = odo.step((FRONT, _wheel(t_cross - 1.0, 0.0)))
     assert est.speed == pytest.approx(-accel, abs=0.1)

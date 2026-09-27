@@ -244,11 +244,14 @@ def _fix_msg(t, lla, status=2):
 
 
 def _wheels(odo, t0, t1, kmh, dt=0.1):
+    """Both bogies at `kmh`. A moving reading dithers by 0.001 km/h: honest sensors are noisy
+    floats, and one exactly repeated for tens of seconds is a frozen sensor (#144, D-080)."""
     from types import SimpleNamespace
     est, n = None, 0
     while t0 + n * dt <= t1 + 1e-9:
+        v = kmh + (1e-3 if kmh and n % 2 else 0.0)
         for topic in ('/vehicle/front_bogie_velocity', '/vehicle/rear_bogie_velocity'):
-            est = odo.step((topic, SimpleNamespace(header=_hdr(t0 + n * dt), velocity=kmh))) or est
+            est = odo.step((topic, SimpleNamespace(header=_hdr(t0 + n * dt), velocity=v))) or est
         n += 1
     return est
 
