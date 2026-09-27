@@ -343,6 +343,25 @@ def test_late_gnss_rejects_reported_large_covariance():
     assert (eb.x, eb.y, eb.speed) == pytest.approx((ea.x, ea.y, ea.speed))
 
 
+def test_late_fix_older_than_max_age_is_not_fused():
+    from types import SimpleNamespace
+    from tram_odometry_core.pipeline import Odometry
+    p = replace(PARAMS, gnss=replace(PARAMS.gnss, correction_enabled=True,
+                                     correction_min_interval_s=1.0))
+    a, b = Odometry(PARAMS, _route()), Odometry(p, _route())
+    for odo in (a, b):
+        odo.step(_fix_msg(0.0, _lla(-1000.0, 0.0, 170.0)))
+        _wheels(odo, 0.0, 10.0, 36.0)
+    b.step(_fix_msg(10.0, _lla(-1110.0, 0.0, 170.2)))
+    estimates = []
+    for odo in (a, b):
+        for topic in ('/vehicle/front_bogie_velocity', '/vehicle/rear_bogie_velocity'):
+            estimates.append(odo.step((topic, SimpleNamespace(header=_hdr(10.6), velocity=36.0))))
+    ea, eb = estimates[1], estimates[3]
+    assert (eb.x, eb.y, eb.speed) == pytest.approx((ea.x, ea.y, ea.speed))
+    assert b._last_correction_t is None
+
+
 def test_late_fix_on_adjacent_parallel_track_cannot_change_branch():
     lines = []
     for north in (0.0, 3.0):
@@ -384,6 +403,41 @@ def test_lagging_vehicle_stamp_cannot_publish_after_later_fix_is_fused():
     stale = odo.step(('/vehicle/driver_position_cmd',
                       SimpleNamespace(header=_hdr(9.9), position=0)))
     assert stale is None
+
+
+def test_late_fix_waits_for_both_wheel_streams_before_fusion():
+    from types import SimpleNamespace
+    from tram_odometry_core.pipeline import Odometry
+    p = replace(PARAMS, gnss=replace(PARAMS.gnss, correction_enabled=True,
+                                     correction_min_interval_s=1.0))
+    odo = Odometry(p, _route())
+    odo.step(_fix_msg(0.0, _lla(-1000.0, 0.0, 170.0)))
+    _wheels(odo, 0.0, 10.0, 36.0)
+    odo.step(_fix_msg(10.05, _lla(-1110.5, 0.0, 170.2)))
+    topic = '/vehicle/front_bogie_velocity'
+    front = odo.step((topic, SimpleNamespace(header=_hdr(10.1), velocity=36.0)))
+    assert front is not None and odo._last_correction_t is None
+    topic = '/vehicle/rear_bogie_velocity'
+    rear = odo.step((topic, SimpleNamespace(header=_hdr(10.1), velocity=36.0)))
+    assert rear is not None and odo._last_correction_t == pytest.approx(10.05)
+
+
+def test_confirmed_clock_reset_clears_old_gnss_epoch():
+    from types import SimpleNamespace
+    from tram_odometry_core.pipeline import Odometry
+    p = replace(PARAMS, gnss=replace(PARAMS.gnss, correction_enabled=True,
+                                     correction_min_interval_s=1.0))
+    odo = Odometry(p, _route())
+    odo.step(_fix_msg(0.0, _lla(-1000.0, 0.0, 170.0)))
+    _wheels(odo, 0.0, 20.4, 36.0)
+    odo.step(_fix_msg(20.4, _lla(-1210.0, 0.0, 170.4)))
+    _wheels(odo, 20.5, 20.6, 36.0)
+    assert odo._last_correction_t == pytest.approx(20.4)
+    topic = '/vehicle/front_bogie_velocity'
+    odo.step((topic, SimpleNamespace(header=_hdr(0.0), velocity=36.0)))
+    resynced = odo.step((topic, SimpleNamespace(header=_hdr(0.1), velocity=36.0)))
+    assert resynced is not None and odo._t == pytest.approx(0.1)
+    assert odo._last_correction_t is None
 
 
 def test_pipeline_before_the_first_fix_has_no_anchor_even_with_a_map():

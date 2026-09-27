@@ -79,12 +79,18 @@ class Odometry:
         try:
             sample = self._preprocess.accept(raw)
             self._t0 = self._preprocess.t0
-            if (isinstance(sample, (WheelSample, CommandSample))
-                    and self._last_correction_t is not None
-                    and sample.t < self._last_correction_t):
-                # A buffered vehicle message stamped before an already fused fix must not
-                # publish a position containing that later absolute observation.
-                return None
+            if isinstance(sample, (WheelSample, CommandSample)):
+                if (self._t is not None
+                        and self._t - sample.t > self.params.input.max_stamp_jump_s):
+                    # Preprocessor has accepted a clock resync (#77, D-043). The old fix
+                    # stamp belongs to the previous clock epoch and must not block it.
+                    self._last_correction_t = None
+                    self._correction_pending = None
+                elif (self._last_correction_t is not None
+                      and sample.t < self._last_correction_t):
+                    # A merely buffered input must not publish a position containing a
+                    # later GNSS observation. A real clock reset takes the branch above.
+                    return None
             if isinstance(sample, WheelSample):
                 self._wheel[sample.bogie] = sample
                 return self._advance(sample.t, sample=sample, wheel_arrived=True)
@@ -174,8 +180,14 @@ class Odometry:
         fix = self._correction_pending
         if fix is None or fix.t > now or fix.t > output_t:
             return                         # a future measurement cannot affect this output
-        self._correction_pending = None
         g = self.params.gnss
+        if now - fix.t <= g.correction_max_age_s and (
+                any(w is None or w.t < fix.t for w in self._wheel.values())
+                or (self._cmd and self._cmd[-1][0] < fix.t)):
+            # Wait until every active vehicle stream has crossed the fix stamp. Otherwise
+            # an ordinary buffered wheel/controller input would be rejected after fusion.
+            return
+        self._correction_pending = None
         if (now - fix.t > g.correction_max_age_s or fix.status < g.correction_min_status
                 or (fix.horizontal_std_m is not None
                     and fix.horizontal_std_m > g.correction_max_std_m)
@@ -256,7 +268,11 @@ class Odometry:
         if (self._t0 is not None
                 and sample.t > self._t0 + self.params.gnss.init_window_s):
             if self.params.gnss.correction_enabled and sample.antenna == 'master':
-                self._correction_pending = sample
+                g = self.params.gnss
+                if (sample.status >= g.correction_min_status
+                        and (sample.horizontal_std_m is None
+                             or sample.horizontal_std_m <= g.correction_max_std_m)):
+                    self._correction_pending = sample
             return
         if sample.antenna == 'rover':
             # heading only (trap 15): never the origin of the frame or the anchor

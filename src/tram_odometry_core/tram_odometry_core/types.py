@@ -76,7 +76,7 @@ class Estimate:
     distance: float           # m, path since the start of the run
     x: float                  # m, MGRS grid if absolute, local odom otherwise
     y: float                  # m, same frame as x
-    z: float                  # m, WGS84 ellipsoidal height if absolute, 0 otherwise
+    z: float                  # m, map/GNSS altitude with antenna TF offset; datum unverified
     yaw: float                # rad, heading from the frame's x axis
     pos_cov: Tuple[float, float, float]   # var_x, var_y, cov_xy in that frame
     slip: SlipState
