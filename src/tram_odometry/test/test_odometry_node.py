@@ -194,8 +194,10 @@ def test_real_core_ignores_gnss_after_window_through_the_node(node, monkeypatch)
     w2 = _wheel(36.0)
     w2.header.stamp = _stamp(late, 50_000_000)
     node.on_input('/vehicle/front_bogie_velocity', w2)
-    q = sent[-1][1].pose.pose.orientation
-    assert sent[-1][0] == 'p' and q.z == 0.0 and q.w == 1.0    # yaw stayed 0: GNSS not used
+    q, q0 = sent[-1][1].pose.pose.orientation, sent[1][1].pose.pose.orientation
+    # yaw stayed that of the start (ENU east turned into the MGRS grid, D-083): GNSS not used
+    assert sent[-1][0] == 'p' and (q.z, q.w) == pytest.approx((q0.z, q0.w), abs=1e-6)
+    assert abs(math.atan2(2 * q.w * q.z, 1 - 2 * q.z ** 2)) < 0.05    # not north (1.57)
     assert len(sent) == 4                                       # GNSS inputs publish nothing
 
 

@@ -23,28 +23,12 @@ from typing import Optional, Tuple
 import numpy as np
 
 from ..types import Params, Route
+from .geo import ecef as _ecef
+from .geo import enu_rotation as _enu_rotation
 
-WGS84_A = 6378137.0          # m
-WGS84_E2 = 6.69437999014e-3
 STATUS_FIX = 0               # sensor_msgs/NavSatStatus: a position is present
 STATUS_GBAS_FIX = 2          # preferred by the reference of tools/eval when the run has it
 JOIN_MAX_TURN_RAD = 2.0 * math.pi / 3.0   # a branch never continues onto a track going back
-
-
-def _ecef(lat: float, lon: float, alt: float) -> np.ndarray:
-    la, lo = math.radians(lat), math.radians(lon)
-    n = WGS84_A / math.sqrt(1.0 - WGS84_E2 * math.sin(la) ** 2)
-    return np.array([(n + alt) * math.cos(la) * math.cos(lo),
-                     (n + alt) * math.cos(la) * math.sin(lo),
-                     (n * (1.0 - WGS84_E2) + alt) * math.sin(la)])
-
-
-def _enu_rotation(lat: float, lon: float) -> np.ndarray:
-    """Rows: east, north, up unit vectors in ECEF."""
-    la, lo = math.radians(lat), math.radians(lon)
-    return np.array([[-math.sin(lo), math.cos(lo), 0.0],
-                     [-math.sin(la) * math.cos(lo), -math.sin(la) * math.sin(lo), math.cos(la)],
-                     [math.cos(la) * math.cos(lo), math.cos(la) * math.sin(lo), math.sin(la)]])
 
 
 class PathTracker:
@@ -79,6 +63,14 @@ class PathTracker:
     @property
     def ready(self) -> bool:
         return self._anchor is not None
+
+    @property
+    def frame(self):
+        """(ENU rotation rows, ECEF origin) of the frame of `advance`: the run frame once a fix
+        is accepted, else the map's own ENU; the pipeline turns it into the output grid."""
+        if self._rot is None:
+            return self._map_rot, self._map_ecef0
+        return self._rot, self._ecef0
 
     def _join(self, k: int):
         """(branch, s) where branch k continues after its end, or None for a dead end."""
