@@ -4,18 +4,27 @@ import math
 
 import pytest
 
-from test_position import (ORIGIN, PARAMS, ROOT, _enu_bag, _fix_msg, _grid, _lla, _route, _wheels)
+from test_position import (ORIGIN, PARAMS, ROOT, _depot_route, _enu_bag, _fix_msg, _grid, _lla,
+                           _route, _wheels)
 from tram_odometry_core.pipeline import Odometry
 from tram_odometry_core.position import PathTracker
 from tram_odometry_core.types import Route, load_route
 
 P = PARAMS.position
 START_S = 1000.0                                  # the anchor sits 1 km along branch 0
+WHEEL = 1.015                                     # wheels read 1.5 % long: another tram (trap 17)
 
 
-def _tracker(stops):
+class _Main(PathTracker):
+    """PathTracker of main before #154: a stop past the snap gate is always a signal."""
+
+    def _relock(self, innovation, distance, ambiguous):
+        return False
+
+
+def _tracker(stops, params=PARAMS, cls=PathTracker):
     r = _route()
-    tr = PathTracker(PARAMS, Route(origin=r.origin, branches=r.branches, stops=tuple(stops)))
+    tr = cls(params, Route(origin=r.origin, branches=r.branches, stops=tuple(stops)))
     tr.on_fix(*_lla(-START_S, 0.0, 170.0), 2, distance=0.0)
     return tr
 
@@ -228,3 +237,241 @@ def test_speed_scale_ignores_a_stop_at_a_shorter_path():
     sums = (tr._chain_arc, tr._chain_wheel)
     assert tr.on_stop(600.0)                           # the same place 3 m of path earlier
     assert (tr._chain_arc, tr._chain_wheel) == sums
+
+
+# --- relock of a lost lock (#154, H3) ---------------------------------------------------------
+
+def _position(**changes):
+    return dataclasses.replace(PARAMS, position=dataclasses.replace(P, **changes))
+
+
+def test_lost_lock_is_recovered_by_two_misses_on_one_line():
+    """#154: no place for 1.4 km and wheels 1.5 % long: the misses grow 21 -> 24 m, past
+    stop_snap_max_m, and on main the lock was lost for good (the error only grows). Two misses
+    on one side on the line of a scale error from the anchor relock onto the place."""
+    places = [2400.0, 2600.0, 2800.0, 3000.0, 3200.0]
+    tr = _tracker([(0, s) for s in places])
+    origin = _anchor_xy(tr)
+    assert [tr.on_stop((s - START_S) * WHEEL) for s in places] == [False, True, True, True, True]
+    assert tr._last_snap[1] == 3200.0
+    assert abs(_arc(tr, 2200.0 * WHEEL, origin) - 2200.0) < 3.0
+
+
+def test_relock_is_a_snap_for_the_path_scale_but_not_for_the_speed_chain():
+    """The relock is an ordinary snap for the EMA of the path scale (pair: the last snap -> the
+    relock place). The speed chain of #153 (D-082) skips that pair: the lost stretch may hold
+    a wheel gap or the relock may be false. The chain goes on from the relock place."""
+    tr = _tracker([(0, s) for s in (1500.0, 2000.0, 2500.0, 3000.0, 4400.0, 4600.0, 4800.0)])
+    assert all(tr.on_stop(d) for d in (500.0, 1000.0, 1500.0, 2000.0))   # exact: 1500 m / 1500 m
+    assert tr._scale == 1.0
+    at = [2000.0 + (s - 3000.0) * WHEEL for s in (4400.0, 4600.0, 4800.0)]
+    assert [tr.on_stop(d) for d in at] == [False, True, True]            # relock at 4600
+    assert tr._scale == pytest.approx(1.0 + P.scale_alpha * (1600.0 / (at[1] - 2000.0) - 1.0))
+    prior = P.speed_scale_prior_m
+    assert tr.speed_scale == pytest.approx((1700.0 + prior) / (1500.0 + at[2] - at[1] + prior))
+
+
+def test_stops_off_the_line_of_a_scale_error_are_signals():
+    """Two misses on one side that do not grow with the path as a scale error does (the second
+    is 8.8 m off the line of the first from the anchor, 2.7 sigma) are signals: s is kept."""
+    tr = _tracker([(0, 2400.0), (0, 2700.0)])
+    origin = _anchor_xy(tr)
+    at = [_arc(tr, d, origin) for d in (1370.0, 1655.0)]
+    assert not tr.on_stop(1370.0)                              # 30 m short of 2400
+    assert not tr.on_stop(1655.0)                              # 45 m short of 2700
+    assert [_arc(tr, d, origin) for d in (1370.0, 1655.0)] == pytest.approx(at)
+    assert tr._last_snap is None and tr._scale == 1.0
+
+
+def test_relock_sigma_is_the_width_of_the_line():
+    """The same two stops relock with relock_sigma = 3: the gate is sigmas of the residual."""
+    tr = _tracker([(0, 2400.0), (0, 2700.0)], _position(relock_sigma=3.0))
+    assert not tr.on_stop(1370.0)
+    assert tr.on_stop(1655.0)
+    assert tr._last_snap == (0, 2700.0, 1655.0)
+
+
+def test_a_miss_no_wheel_scale_explains_is_a_signal():
+    """25 m and 50 m short 100 and 200 m after the anchor lie on one line, but would need a
+    scale 25 % off: past scale_max_dev, so they are signals."""
+    tr = _tracker([(0, 1125.0), (0, 1250.0)])
+    assert not tr.on_stop(100.0)
+    assert not tr.on_stop(200.0)
+
+
+@pytest.mark.parametrize('signal_between, relocked', [(False, True), (True, False)])
+def test_a_signal_between_two_misses_drops_the_first(signal_between, relocked):
+    """A stop 180 m from every place (a signal no wheel scale explains) between two misses on
+    one line: the misses are not consecutive, so no relock."""
+    tr = _tracker([(0, 2400.0), (0, 2800.0)])
+    stops = (1421.0, 1620.0, 1827.0) if signal_between else (1421.0, 1827.0)
+    assert [tr.on_stop(d) for d in stops] == [False] * (len(stops) - 1) + [relocked]
+
+
+@pytest.mark.parametrize('place, relocked', [(3800.0, True), (3770.0, True), (3867.0, False)])
+def test_line_of_two_misses_from_a_loose_anchor(place, relocked):
+    """With a loose anchor (100 m) the line of the first miss (21 m short) is wide: the
+    anchor error a enters both misses, (1 - q) a is left of it. A second miss on the line (42 m
+    short) or 30 m off it relocks; one 25 m past the place fits the line too, but a scale
+    error puts both misses on one side: no relock."""
+    tr = _tracker([(0, 2400.0), (0, place)], _position(anchor_std_m=100.0))
+    assert not tr.on_stop(1421.0)                              # 21 m short of 2400
+    assert tr.on_stop(2842.0) is relocked                      # q = 2
+
+
+@pytest.mark.parametrize('sign, relocked', [(-1.0, False), (1.0, True)])
+def test_a_miss_is_explained_from_the_scale_already_learnt(sign, relocked):
+    """At a scale of 0.98 misses of -2 % of the path need a scale of 0.96, past scale_max_dev
+    (signals); misses of +2 % need 1.00 (a relock)."""
+    stops = (1500.0, 1800.0)
+    tr = _tracker([(0, START_S + (0.98 + sign * 0.02) * d) for d in stops])
+    tr._scale = 0.98
+    assert [tr.on_stop(d) for d in stops] == [False, relocked]
+
+
+def test_a_miss_at_the_anchor_itself_is_a_signal():
+    tr = _tracker([(0, 1100.0)])
+    assert not tr.on_stop(0.0)                                 # 100 m off, no path to scale
+
+
+def test_a_snap_drops_the_pending_miss():
+    """A miss, a snap, a miss: the first miss belongs to the old anchor. With places this
+    loose (stop_std_m 50 m) the line of it would take the last miss."""
+    tr = _tracker([(0, 2400.0), (0, 2600.0), (0, 3990.0)], _position(stop_std_m=50.0))
+    assert [tr.on_stop(d) for d in (1421.0, 1615.0, 3015.0)] == [False, True, False]
+
+
+def test_a_second_stop_at_the_same_path_is_not_a_second_miss():
+    tr = _tracker([(0, 2400.0)])
+    assert [tr.on_stop(1421.0), tr.on_stop(1421.0)] == [False, False]
+
+
+@pytest.mark.parametrize('from_anchor', [1000.0, 1400.0, 2000.0, 3000.0])
+@pytest.mark.parametrize('queue', [25.0, 30.0, 40.0])
+@pytest.mark.parametrize('creep', [0.3, 0.5, 2.0, 5.0])
+def test_a_creep_in_a_queue_is_one_standstill(from_anchor, queue, creep):
+    """Reviewer of #160: exact wheels, a queue `queue` m short of a place and a creep of
+    `creep` m in it (the pipeline sees two standstills). Both misses are one place - s apart by
+    the creep, q = 1 + creep / path: the residual y - q y1 is about the creep, inside 2 sigma
+    (5.7 m) of the line, and 6853330 relocked onto the place in the queue (on_stop
+    [F, T, F, F, F], +28.9 m at 1.4 km). A second stop closer than stop_snap_max_m of path to the
+    pending miss is the same standstill: the stops, the anchor, the path scale and the speed
+    scale are those of main; with both stops past the gate the place and the next ones snap
+    exactly."""
+    places = [START_S + from_anchor + k * 500.0 for k in range(3)]
+    tr = _tracker([(0, s) for s in places])
+    main = _tracker([(0, s) for s in places], cls=_Main)
+    stops = [from_anchor - queue, from_anchor - queue + creep] + [s - START_S for s in places]
+    got = [tr.on_stop(d) for d in stops]
+    assert got == [main.on_stop(d) for d in stops]
+    assert (tr._anchor, tr._scale, tr.speed_scale) == (main._anchor, main._scale, main.speed_scale)
+    if queue - creep > P.stop_snap_max_m:
+        assert got == [False, False, True, True, True]
+        assert tr._state(stops[-1])[1] == pytest.approx(places[-1], abs=0.01)
+
+
+def test_a_creep_in_a_queue_keeps_the_first_miss():
+    """Wheels 1.5 % long: 21 m past the place of 2400, a creep of 10 m (31 m past it, off the
+    line of the first miss), then 24 m past 2600: on the line of the first miss, not of the
+    creep. The creep is the same standstill and keeps the first miss: relock at 2600."""
+    tr = _tracker([(0, 2400.0), (0, 2600.0)])
+    assert [tr.on_stop(d) for d in (1421.0, 1431.0, 1624.0)] == [False, False, True]
+    assert tr._last_snap == (0, 2600.0, 1624.0)
+
+
+def test_a_creep_past_the_scale_bound_keeps_the_first_miss():
+    """Wheels 2.9 % long: 29 m past the place of 2000 (2.8 % of the path), a creep of 5 m in
+    the same standstill to 34 m past it (3.3 %: no wheel scale explains it) and 34.8 m past
+    2200 on the line of the first miss. The creep is not a signal: the first miss stays."""
+    tr = _tracker([(0, 2000.0), (0, 2200.0)])
+    assert [tr.on_stop(d) for d in (1029.0, 1034.0, 1234.8)] == [False, False, True]
+
+
+@pytest.mark.parametrize('creep, relocked', [(19.9, False), (20.0, True)])
+def test_the_same_standstill_is_closer_than_the_snap_gate(creep, relocked):
+    """The bound is stop_snap_max_m of path. With loose places (stop_std_m 10 m, 2 sigma about
+    28 m) a creep of 20 m from 45 m to 25 m short of the place fits the line of the first miss:
+    at 20 m it is another stop and relocks, closer it is the same standstill."""
+    tr = _tracker([(0, 3000.0)], _position(stop_std_m=10.0))
+    assert [tr.on_stop(1955.0), tr.on_stop(1955.0 + creep)] == [False, relocked]
+
+
+def test_a_true_scale_error_still_relocks_past_a_queue():
+    """Wheels 1.5 % long and a queue with a creep of 0.5 m before the first missed place: the
+    creep changes nothing, the next place on the line relocks and the rest snap."""
+    places = [2400.0, 2600.0, 2800.0, 3000.0]
+    tr = _tracker([(0, s) for s in places])
+    origin = _anchor_xy(tr)
+    stops = [1421.0, 1421.5] + [(s - START_S) * WHEEL for s in places[1:]]
+    assert [tr.on_stop(d) for d in stops] == [False, False, True, True, True]
+    assert abs(_arc(tr, 2000.0 * WHEEL, origin) - 2000.0) < 3.0
+
+
+@pytest.mark.parametrize('wheel', [0.975, 0.985, 1.015, 1.025])
+@pytest.mark.parametrize('creep', [0.3, 0.5, 2.0, 5.0])
+def test_a_true_scale_error_is_recovered_whatever_the_creep_at_the_first_miss(wheel, creep):
+    """Wheels 1.5-2.5 % off another tram's (trap 17), no place for 1.4 km: the tram stands at
+    the place of 2400 (a miss of 21-35 m), creeps `creep` m and stands again, then at 2600,
+    2800, 3000. The branch gets the lock back, and the creep, one standstill with the miss, does
+    not stop it. main does not (30-50 m off at 3000), unless the creep brings short wheels back
+    into the snap gate at the second standstill."""
+    places = [2400.0, 2600.0, 2800.0, 3000.0]
+    true = [places[0] - START_S, places[0] - START_S + creep] + [s - START_S for s in places[1:]]
+    errors = []
+    for cls in (PathTracker, _Main):
+        tr = _tracker([(0, s) for s in places], cls=cls)
+        origin = _anchor_xy(tr)
+        for d in true:
+            tr.on_stop(d * wheel)
+        errors.append(abs(_arc(tr, true[-1] * wheel, origin) - true[-1]))
+    assert errors[0] < 3.0
+    if abs(true[0] - wheel * true[1]) > P.stop_snap_max_m:
+        assert errors[1] > 29.0
+
+
+@pytest.mark.parametrize('ambiguous_at', [1627.04, 1640.0])
+def test_an_ambiguous_place_is_skipped_and_keeps_the_first_miss(ambiguous_at):
+    """D-047: a miss at two places 3 m apart (on the line of the first miss or off it) neither
+    relocks nor replaces the first miss; the next miss on its line relocks."""
+    tr = _tracker([(0, 2400.0), (0, 2600.0), (0, 2603.0), (0, 2800.0)])
+    assert [tr.on_stop(d) for d in (1421.0, ambiguous_at, 1827.0)] == [False, False, True]
+    assert tr._last_snap == (0, 2800.0, 1827.0)
+
+
+def _depot(stops):
+    """The depot route of test_position with stop places; a miss is anything past 1 m, so a
+    scale error of 1-3 % gives one on these short branches."""
+    tr = PathTracker(_position(stop_snap_max_m=1.0),
+                     Route(origin=ORIGIN, branches=_depot_route().branches, stops=tuple(stops)))
+    tr.on_fix(*_lla(0.0, 0.0), 2, distance=0.0)
+    return tr
+
+
+def test_a_side_switch_drops_the_pending_miss():
+    """A miss 1.2 m short at 45 m, then the switch onto the side track at 70 m, then a miss 2 m
+    short 100 m down the side track: the first miss belongs to the old anchor, no relock."""
+    tr = _depot([(0, 46.2), (3, 132.0)])
+    assert not tr.on_stop(45.0)
+    tr.advance(70.0, 7.0)                                      # onto the side track
+    assert tr._anchor[0] == 3
+    assert not tr.on_stop(170.0)
+
+
+def test_undoing_a_side_switch_drops_the_pending_miss():
+    """A miss on the side track, then the switch is undone (the tram ran past its dead end):
+    the miss belongs to the undone anchor. A miss on the line of it from the restored anchor
+    (branch 2 behind the loop) must not relock."""
+    tr = _depot([(3, 132.0), (2, 12.94)])
+    tr.advance(70.0, 7.0)                                      # onto the side track
+    assert not tr.on_stop(170.0)                               # 2 m short of 132
+    side_len = tr._s[3][-1]
+    tr.advance(40.0 + side_len + 31.0, 3.0)                    # past its dead end: undone
+    assert tr._anchor[0] == 0
+    assert not tr.on_stop(250.0)                               # 2.94 m short of 12.94 on branch 2
+
+
+def test_a_new_anchor_drops_the_pending_miss():
+    tr = _tracker([(0, 2400.0), (0, 3800.0)])
+    assert not tr.on_stop(1421.0)                              # 21 m short of 2400
+    tr.on_fix(*_lla(-2400.0, 0.0, 170.0), 2, distance=1421.0)  # a fix of the window re-anchors
+    assert not tr.on_stop(2842.0)                              # 21 m short of 3800 from there

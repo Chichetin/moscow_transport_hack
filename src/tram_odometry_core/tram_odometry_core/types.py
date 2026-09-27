@@ -191,6 +191,7 @@ class PositionParams:
     scale_max_dev: float
     scale_min_arc_m: float
     speed_scale_prior_m: float
+    relock_sigma: float
 
 
 @dataclass(frozen=True)
@@ -315,6 +316,8 @@ def load_params(path) -> Params:
     _validate_slip(params.slip)
     _validate_side(params.position)
     _validate_base_link(params.position)
+    if not (math.isfinite(params.position.relock_sigma) and params.position.relock_sigma > 0):
+        raise ValueError('position.relock_sigma must be positive and finite')
     return params
 
 

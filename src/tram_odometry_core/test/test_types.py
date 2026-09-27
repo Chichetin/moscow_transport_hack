@@ -1,4 +1,5 @@
 import dataclasses
+import math
 from pathlib import Path
 
 import pytest
@@ -158,6 +159,28 @@ def test_load_params_rejects_invalid_speed_scale_prior(tmp_path, bad):
     f = _write(tmp_path, lambda r: r['position'].update(speed_scale_prior_m=bad))
     with pytest.raises(ValueError, match='speed_scale_prior_m'):
         T.load_params(f)
+
+
+@pytest.mark.parametrize('bad', [0.0, -1.0])
+def test_load_params_rejects_invalid_relock_sigma(tmp_path, bad):
+    f = _write(tmp_path, lambda r: r['position'].update(relock_sigma=bad))
+    with pytest.raises(ValueError, match='relock_sigma'):
+        T.load_params(f)
+
+
+@pytest.mark.parametrize('bad', [math.inf, math.nan])
+def test_relock_sigma_must_be_finite(tmp_path, bad, monkeypatch):
+    """inf would accept any pair of misses as a line. The loader already refuses a non-finite
+    float (TypeError); the check of the key refuses it on its own too."""
+    f = _write(tmp_path, lambda r: r['position'].update(relock_sigma=bad))
+    with pytest.raises(TypeError, match='relock_sigma'):
+        T.load_params(f)
+    params = T.load_params(PARAMS_YAML)
+    bad_params = dataclasses.replace(
+        params, position=dataclasses.replace(params.position, relock_sigma=bad))
+    monkeypatch.setattr(T, '_build', lambda cls, raw, path: bad_params)
+    with pytest.raises(ValueError, match='relock_sigma'):
+        T.load_params(PARAMS_YAML)
 
 
 @pytest.mark.parametrize('key,bad', [
