@@ -173,17 +173,31 @@ def test_height_follows_the_map_with_the_run_offset():
     assert z1 == pytest.approx(fz, abs=0.05)
 
 
+def _published_z(fix_alts):
+    """Output z (grid, D-083) of a standing tram after master fixes at these heights."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    for i, alt in enumerate(fix_alts):
+        odo.step(_fix_msg(0.1 * i, _lla(-1000.0, 0.0, alt)))
+    return _wheels(odo, 0.1 * len(fix_alts), 0.1 * len(fix_alts), 0.0).z
+
+
 def test_height_offset_beyond_the_limit_is_a_gnss_glitch_not_the_run():
-    """#169: a window height 20 m off the map is a glitch of the fix (status 0 jumps by tens of
-    metres), not the run's offset: the map height is kept, as with no offset at all."""
+    """#169: a window height tens of metres off the map is a glitch of the fix (status 0 jumps),
+    not the run's offset: the published z stays at the map height, as with no offset at all;
+    within the limit the offset is the run's and is kept."""
     limit = PARAMS.position.height_offset_max_m
-    glitch, exact = PathTracker(PARAMS, _route()), PathTracker(PARAMS, _route())
-    glitch.on_fix(*_lla(-1000.0, 0.0, 170.0 + limit + 10.0), 0, distance=0.0)
-    exact.on_fix(*_lla(-1000.0, 0.0, 170.0), 0, distance=0.0)
-    assert glitch._dz_median == 0.0
-    near = PathTracker(PARAMS, _route())                          # within the limit: kept
-    near.on_fix(*_lla(-1000.0, 0.0, 170.0 + limit - 1.0), 0, distance=0.0)
-    assert near._dz_median == pytest.approx(limit - 1.0, abs=0.05)
+    on_map = _published_z([170.0])                              # the map height there: dz = 0
+    assert _published_z([170.0 + limit + 10.0]) == pytest.approx(on_map, abs=0.05)
+    assert _published_z([170.0 + limit - 1.0]) == pytest.approx(on_map + limit - 1.0, abs=0.05)
+
+
+def test_height_offset_glitch_taking_the_window_median_falls_back_to_the_map():
+    """defd0170: good heights first, then a jump for most of the window -- the median crosses
+    the limit and the map height is kept (#169)."""
+    limit = PARAMS.position.height_offset_max_m
+    on_map = _published_z([170.0])
+    assert _published_z([170.0] * 2 + [170.0 - limit - 2.0] * 5) == pytest.approx(on_map, abs=0.05)
 
 
 def test_origin_moves_to_the_first_gbas_fix():
@@ -705,7 +719,7 @@ def test_base_link_goes_back_with_master_when_the_side_switch_is_undone():
     assert back[:2] == pytest.approx(default[:2], abs=1e-6)
 
 
-@pytest.mark.parametrize('key, value', [('base_ahead_m', -1.0), ('scale_max_dev', 1.0)])
+@pytest.mark.parametrize('key, value', [('base_ahead_m', -1.0), ('scale_max_dev', 1.0), ('height_offset_max_m', 0.0)])
 def test_load_params_rejects_bad_base_link_keys(tmp_path, key, value):
     import re
     text = (ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml').read_text(encoding='utf-8')
