@@ -1,17 +1,14 @@
 """DelayLine: /result/velocity as the estimate output.velocity_delay_s before its stamp (D-095)."""
 import math
 import random
-from pathlib import Path
 
 import pytest
 
 from tram_odometry_core.output import HISTORY_MARGIN_S, MAX_SAMPLES, DelayLine
-from tram_odometry_core.types import load_params
 
-ROOT = Path(__file__).resolve().parents[3]
-PARAMS = load_params(ROOT / 'src' / 'tram_odometry' / 'config' / 'params.yaml')
-DELAY = PARAMS.output.velocity_delay_s
-JUMP = PARAMS.input.max_stamp_jump_s
+# literals, not params.yaml: the rollback of D-095 (output.velocity_delay_s: 0) keeps these green
+DELAY = 0.09          # s, the lag of the judge's reference on its bag (D-095)
+JUMP = 10.0           # s, as input.max_stamp_jump_s
 T0 = 1756195560.0     # s, a bag stamp: float seconds of this size keep ~0.24 us
 TOL = 1e-4            # m/s: 0.24 us of a 0.05 s bracket is ~5e-6 of the step between samples
 DT = 0.05             # s, one bogie at 10 Hz plus the other: ~20 Hz of estimates
@@ -19,10 +16,6 @@ DT = 0.05             # s, one bogie at 10 Hz plus the other: ~20 Hz of estimate
 
 def _line(delay=DELAY):
     return DelayLine(delay, JUMP)
-
-
-def test_params_carry_the_delay_measured_on_the_judge_bag():
-    assert DELAY == pytest.approx(0.09)
 
 
 def test_zero_delay_passes_every_value_through_untouched():

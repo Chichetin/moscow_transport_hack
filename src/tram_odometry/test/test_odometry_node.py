@@ -183,31 +183,40 @@ def _wheel_at(stamp):
     return m
 
 
-def test_velocity_goes_out_delayed_position_speed_does_not(node, monkeypatch):
+def _node_with_delay(tmp_path, delay):
+    """A node on params.yaml with output.velocity_delay_s = delay: the tests do not depend on the
+    shipped value, so its rollback to 0 (D-095) keeps them green."""
+    raw = yaml.safe_load(PARAMS_FILE.read_text(encoding='utf-8'))
+    raw['/**']['ros__parameters']['output']['velocity_delay_s'] = delay
+    f = tmp_path / 'p.yaml'
+    f.write_text(yaml.safe_dump(raw), encoding='utf-8')
+    return on.OdometryNode(params_file=str(f))
+
+
+def test_velocity_goes_out_delayed_position_speed_does_not(node, monkeypatch, tmp_path):
     """D-095: /result/velocity is the estimate output.velocity_delay_s before its stamp (the
     judge's reference lags the sensors by that much); /result/position keeps est.speed; both
     keep the input stamp."""
-    delay = node.params.output.velocity_delay_s
-    assert delay > 0
-    ramp = _ramp(40)
-    sent = _feed(node, ramp, monkeypatch)
-    vel = [m for k, m in sent if k == 'v']
-    pos = [m for k, m in sent if k == 'p']
-    assert len(vel) == len(pos) == len(ramp) and node.errors == 0
-    for (stamp, est), v, p in zip(ramp, vel, pos):
-        assert v.header.stamp == stamp and p.header.stamp == stamp
-        assert p.twist.twist.linear.x == est.speed
-        since = est.t - ramp[0][1].t
-        want = 2.0 * (since - delay) if since >= delay else 0.0   # before: the first estimate
-        assert v.velocity == pytest.approx(want, abs=1e-4)
+    delay = 0.09
+    n = _node_with_delay(tmp_path, delay)
+    try:
+        ramp = _ramp(40)
+        sent = _feed(n, ramp, monkeypatch)
+        vel = [m for k, m in sent if k == 'v']
+        pos = [m for k, m in sent if k == 'p']
+        assert len(vel) == len(pos) == len(ramp) and n.errors == 0
+        for (stamp, est), v, p in zip(ramp, vel, pos):
+            assert v.header.stamp == stamp and p.header.stamp == stamp
+            assert p.twist.twist.linear.x == est.speed
+            since = est.t - ramp[0][1].t
+            want = 2.0 * (since - delay) if since >= delay else 0.0   # before: the first estimate
+            assert v.velocity == pytest.approx(want, abs=1e-4)
+    finally:
+        n.destroy_node()
 
 
 def test_zero_velocity_delay_publishes_the_estimate_as_is(node, monkeypatch, tmp_path):
-    raw = yaml.safe_load(PARAMS_FILE.read_text(encoding='utf-8'))
-    raw['/**']['ros__parameters']['output']['velocity_delay_s'] = 0.0
-    f = tmp_path / 'p.yaml'
-    f.write_text(yaml.safe_dump(raw), encoding='utf-8')
-    n = on.OdometryNode(params_file=str(f))
+    n = _node_with_delay(tmp_path, 0.0)
     try:
         ramp = _ramp(20)
         ramp = ramp[5:] + ramp[:5]                    # stamps out of order as well

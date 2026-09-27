@@ -3,9 +3,12 @@
     .venv/bin/python tools/research/judge_speed_delay.py [<bag with /localization/kinematic_state>]
     .venv/bin/python tools/research/judge_speed_delay.py --holdout
 
-The first form runs the core as tools/eval does (all inputs, and without the controller as in
-the judge's image, D-093), passes the speed through DelayLine as the node does and pairs it with
-the reference like coord/judge_cmp.py: nearest reference stamp within 0.05 s (the judge's slop).
+The first form feeds the bag in record order to the core as the node does (all inputs, and
+without the controller as in the judge's image, D-093), passes the speed through DelayLine and
+pairs outputs with the reference like the judge: message_filters ApproximateTimeSynchronizer of
+Humble (per-topic queue keyed by stamp, 100 deep, the nearest unpaired stamp strictly within
+0.05 s, both messages consumed), outputs arriving at their input's record time + 1 ms. With no
+delay this reproduces the judge's own run (docs/verification/2026-09-27-judge-checker.md).
 `--holdout` gives the cost of the delay against the tools/eval reference (GNSS master vel, which
 does not lag): median speed metrics of the holdout without and with the delay.
 """
@@ -28,54 +31,76 @@ from tram_odometry_core.types import load_params  # noqa: E402
 
 PARAMS = load_params(REPO / 'src' / 'tram_odometry' / 'config' / 'params.yaml')
 JUDGE_BAG = ('organizers', 'check-code', 'bags', '30618_88aea4d9')   # next to dataset/data
-CMD = '/vehicle/driver_position_cmd'
-SLOP_S = 0.05      # the judge's ApproximateTimeSynchronizer slop
+REF = '/localization/kinematic_state'
+SLOP_NS = 50_000_000     # the judge's sync tolerance
+QUEUE = 100              # the judge's synchronizer queue size
+LATENCY_NS = 1_000_000   # an output arrives this long after its input's record time
+DELAYS = (0.0, 0.03, 0.06, 0.08, 0.09, 0.10, 0.12, 0.15)
 
 
-def delayed(t, v, delay):
-    line = DelayLine(delay, PARAMS.input.max_stamp_jump_s)
-    return np.array([line.push(float(a), float(b)) for a, b in zip(t, v)])
+def _ns(msg):
+    return msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+
+
+def ats_pairs(refs, results):
+    """(result, reference) value pairs of the judge's synchronizer; both lists hold
+    (arrival_ns, stamp_ns, value) and are merged by arrival."""
+    stream = sorted([(a, 0, k, s, v) for k, (a, s, v) in enumerate(refs)]
+                    + [(a, 1, k, s, v) for k, (a, s, v) in enumerate(results)],
+                    key=lambda x: (x[0], x[1], x[2]))
+    queues, pairs = ({}, {}), []
+    for _, qi, _, s, v in stream:
+        mine, other = queues[qi], queues[1 - qi]
+        mine[s] = v
+        while len(mine) > QUEUE:
+            del mine[min(mine)]
+        best = min(other, key=lambda o: abs(o - s), default=None)
+        if best is None or not abs(best - s) < SLOP_NS:
+            continue
+        pairs.append((v, other[best]) if qi == 1 else (other[best], v))
+        del mine[s]
+        del other[best]
+    return pairs
 
 
 def judge(path: Path) -> None:
-    rt, rv, rp = [], [], []
+    events = []
     with AnyReader([path], default_typestore=bagmod.typestore()) as r:
-        con = [c for c in r.connections if c.topic == '/localization/kinematic_state']
-        for c, _, raw in r.messages(connections=con):
-            m = r.deserialize(raw, c.msgtype)
-            rt.append(bagmod.stamp(m))
-            rv.append(m.twist.twist.linear.x)
-            rp.append((m.pose.pose.position.x, m.pose.pose.position.y))
-    rt, rv, rp = np.array(rt), np.array(rv), np.array(rp)
-    msgs = bagmod.read_bag(path)
-    window_end = bagmod.gnss_window_end(msgs, bagmod.default_gnss_window())
-    for mode, feed in (('all inputs', msgs), ('no controller', [x for x in msgs if x[0] != CMD])):
-        est, crash, _ = bagmod.run_pipeline(feed, bagmod.default_odometry(), window_end)
-        est, _ = bagmod.finite_only(est)
-        i = np.clip(np.searchsorted(rt, est.t), 1, len(rt) - 1)
-        j = np.where(np.abs(rt[i - 1] - est.t) < np.abs(rt[i] - est.t), i - 1, i)
-        ok = np.abs(rt[j] - est.t) <= SLOP_S
+        con = [c for c in r.connections if c.topic in bagmod.INPUTS + bagmod.GNSS + (REF,)]
+        for c, record_ns, raw in r.messages(connections=con):
+            events.append((record_ns, c.topic, r.deserialize(raw, c.msgtype)))
+    ref_v = [(a, _ns(m), m.twist.twist.linear.x) for a, t, m in events if t == REF]
+    ref_p = [(a, _ns(m), (m.pose.pose.position.x, m.pose.pose.position.y))
+             for a, t, m in events if t == REF]
+    for mode, skip in (('all inputs', ()), ('no controller', (bagmod.CMD,))):
+        odometry, outs = bagmod.default_odometry(), []
+        for record_ns, topic, m in events:
+            if topic == REF or topic in skip or _ns(m) <= 0:
+                continue
+            est = odometry.step((topic, m))
+            if est is not None and all(map(math.isfinite, (est.t, est.speed, est.x, est.y))):
+                outs.append((record_ns + LATENCY_NS, _ns(m), est))
 
-        def rmse_max(v, sel=ok):
-            e = v[sel] - rv[j[sel]]
-            return math.sqrt(np.mean(e ** 2)), float(np.abs(e).max())
+        def speed_error(delay):
+            line = DelayLine(delay, PARAMS.input.max_stamp_jump_s)
+            res = [(a, s, line.push(e.t, e.speed)) for a, s, e in outs]
+            return np.array([v - r for v, r in ats_pairs(ref_v, res)])
 
-        vd = delayed(est.t, est.speed, PARAMS.output.velocity_delay_s)
-        (r0, m0), (r1, m1) = rmse_max(est.speed), rmse_max(vd)
-        print(f'[{mode}] crashed={crash is not None} pairs={int(ok.sum())}: speed RMSE {r0:.4f} -> '
-              f'{r1:.4f} m/s, max {m0:.3f} -> {m1:.3f} (delay {PARAMS.output.velocity_delay_s} s)')
-        sweep = [f'{d:.2f}:{rmse_max(delayed(est.t, est.speed, d))[0]:.4f}'
-                 for d in (0.0, 0.03, 0.06, 0.08, 0.09, 0.10, 0.12, 0.15)]
-        print(f'[{mode}] delay:RMSE ' + ' '.join(sweep))
-        n4 = len(est.t) // 4
-        quarters = [np.arange(len(est.t)) // n4 == k for k in range(4)]
+        base, dl = speed_error(0.0), speed_error(PARAMS.output.velocity_delay_s)
+        rmse = lambda e: math.sqrt(np.mean(e ** 2))   # noqa: E731
+        print(f'[{mode}] pairs={len(dl)}: speed RMSE {rmse(base):.4f} -> {rmse(dl):.4f} m/s, max '
+              f'{np.abs(base).max():.3f} -> {np.abs(dl).max():.3f} '
+              f'(delay {PARAMS.output.velocity_delay_s} s)')
+        print(f'[{mode}] delay:RMSE ' + ' '.join(f'{d:.2f}:{rmse(speed_error(d)):.4f}' for d in DELAYS))
         print(f'[{mode}] quarters: ' + ' '.join(
-            f'{rmse_max(est.speed, ok & q)[0]:.4f}->{rmse_max(vd, ok & q)[0]:.4f}' for q in quarters))
-        on_grid = ok & est.absolute
-        for d in (0.0, PARAMS.output.velocity_delay_s):   # the position is NOT delayed (D-095)
-            px, py = delayed(est.t, est.pos[:, 0], d), delayed(est.t, est.pos[:, 1], d)
-            e = np.hypot(px - rp[j, 0], py - rp[j, 1])[on_grid]
-            print(f'[{mode}] position delayed by {d:.2f} s: 2D RMSE {math.sqrt(np.mean(e ** 2)):.3f} m')
+            f'{rmse(a):.4f}->{rmse(b):.4f}'
+            for a, b in zip(np.array_split(base, 4), np.array_split(dl, 4))))
+        on_grid = [(a, s, e) for a, s, e in outs if e.position_absolute]
+        for delay in (0.0, PARAMS.output.velocity_delay_s):   # the position is NOT delayed
+            lx, ly = (DelayLine(delay, PARAMS.input.max_stamp_jump_s) for _ in range(2))
+            res = [(a, s, (lx.push(e.t, e.x), ly.push(e.t, e.y))) for a, s, e in on_grid]
+            e2 = np.array([math.hypot(v[0] - r[0], v[1] - r[1]) for v, r in ats_pairs(ref_p, res)])
+            print(f'[{mode}] position delayed by {delay:.2f} s: 2D RMSE {rmse(e2):.3f} m')
 
 
 class Delayed:
