@@ -1,4 +1,6 @@
-"""Why does position not recover under wheel scale x1.015? Log PathTracker.on_stop outcomes."""
+"""Why does position not recover under wheel scale x1.015? Log PathTracker.on_stop outcomes.
+
+Since #154 (D-088) a stop past stop_snap_max_m may relock: it counts as snapped, not as far."""
 from pathlib import Path
 import json, sys
 from concurrent.futures import ProcessPoolExecutor

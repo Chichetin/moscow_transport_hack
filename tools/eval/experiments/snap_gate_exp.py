@@ -1,4 +1,9 @@
-"""Experiment: stop-snap gate grows with along-track sigma: min(cap, max(20, k*sigma)). Train only."""
+"""Experiment: stop-snap gate grows with along-track sigma: min(cap, max(20, k*sigma)). Train only.
+
+The gate replaces position.stop_snap_max_m for the whole on_stop, so since #153 and #154 it also
+widens the one-stretch tolerance of the speed-scale chain (_accumulate_chain) and the creep window
+of a pending miss (_relock, D-088), and a stop past the gate may relock. The numbers of #141 hold
+on 9259ba0 only."""
 from pathlib import Path
 import dataclasses, math, sys, types
 from concurrent.futures import ProcessPoolExecutor
