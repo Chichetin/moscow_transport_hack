@@ -131,6 +131,19 @@ def test_continues_onto_the_next_branch_after_the_end():
     assert abs(math.remainder(yaw + math.pi / 2, 2 * math.pi)) < 0.05
 
 
+def test_position_follows_arc_of_a_map_with_s_rounded_to_millimetres():
+    # route.csv holds s to 3 decimals: a true step of 0.9998 m reads 1.000 at the start, and
+    # s[i] falls behind i * (s[1] - s[0]) by up to 1 m over 5 km (branch 1 of the map: 0.99 m)
+    i = np.arange(5001)
+    x = i * 0.9998
+    route = Route(origin=ORIGIN, branches=(Branch(s=np.round(x, 3), x=x, y=np.zeros_like(x),
+                                                  z=np.zeros_like(x)),))
+    tr = PathTracker(PARAMS, route)
+    tr.on_fix(*_lla(0.0, 0.0), 2, distance=0.0)
+    for s in np.arange(4990.0, 4999.0, 0.1):
+        assert tr.advance(s)[0] == pytest.approx(s, abs=0.01)
+
+
 def test_stops_at_a_dead_end():
     tr = PathTracker(PARAMS, _route())
     tr.on_fix(*_lla(-5000.0, -250.0), 2, distance=0.0)
