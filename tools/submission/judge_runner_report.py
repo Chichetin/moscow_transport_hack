@@ -122,14 +122,26 @@ def scenario(run_dir: Path, row: list[str], sources: dict) -> dict:
     if src and out['n_map']:
         out['err2d_median_m'], out['err2d_max_m'] = (round(v, 2) for v in error_2d(pos, Path(src)))
     fails, warnings = [], []
-    for key in ('play_exit', 'check_recording_exit', 'ready_exit', 'record_ready_exit'):
-        if key in codes and codes[key] != '0':
+    if mode not in ('protocol', 'late'):
+        fails.append(f'неизвестный mode {mode}')
+    if expect not in ('map', 'odom'):
+        fails.append(f'неизвестный expect {expect}')
+    required = ('ready_exit', 'play_exit', 'record_exit', 'node_exit',
+                'check_recording_exit')
+    if mode == 'protocol':
+        required += ('record_ready_exit',)
+    for key in required:
+        if key not in codes:
+            fails.append(f'нет {key}')
+        elif codes[key] != '0':
             fails.append(f'{key}={codes[key]}')
     if 'node exited before stop' in alive:
         fails.append(f'нода умерла до остановки, launch exit {codes.get("node_exit")}, '
                      f'child exit {out["node_child_exit"]}')
-    elif 'node running' in alive and out['node_child_exit'] not in (None, 0):
-        warnings.append(f'odometry_node exit {out["node_child_exit"]} после SIGINT runner')
+    if out['node_child_exit'] not in (None, 0):
+        fails.append(f'odometry_node exit {out["node_child_exit"]} после SIGINT runner')
+    if 'record exited before stop' in alive:
+        fails.append('record exited before stop')
     if errors:
         fails.append(errors.replace('\n', '; '))
     if not vel or not pos:

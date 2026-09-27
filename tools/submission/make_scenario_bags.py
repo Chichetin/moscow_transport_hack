@@ -2,10 +2,10 @@
 
     .venv/bin/python tools/submission/make_scenario_bags.py SOURCE_BAG OUT_DIR NAME VARIANT [SECONDS]
 
-VARIANT (the input header.stamp decides, not the record time, docs/data.md traps 5-6):
+VARIANT (header.stamp decides the GNSS window; bag play delivers in record order):
   crop        the first SECONDS of the bag (record time), every topic kept
-  gnss_first  crop, and vehicle inputs stamped before the first master fix dropped: GNSS
-              reaches the node before the first wheel
+  gnss_first  crop; drop vehicle inputs whose header precedes the first master fix or
+              whose record position precedes it: GNSS reaches the node before vehicle inputs
   no_gnss     crop without any /sensing/gnss/* topic: the node must publish odom, never an old anchor
   short_gnss  crop, /sensing/gnss/* only up to first vehicle header + 5 s (D-005)
 
@@ -42,11 +42,13 @@ def rows_to_drop(rows, variant: str, ts) -> set[int]:
     if variant == 'no_gnss':
         return {rid for rid, topic, _, _ in rows if topic.startswith('/sensing/gnss/')}
     if variant == 'gnss_first':
-        first_fix = next((header_s(ts, d, k) for _, topic, k, d in rows if topic == MASTER_FIX), None)
+        first_fix = next(((i, header_s(ts, d, k)) for i, (_, topic, k, d) in enumerate(rows)
+                          if topic == MASTER_FIX), None)
         if first_fix is None:
             raise ValueError('no master fix in the cut: GNSS cannot come first')
-        return {rid for rid, topic, k, d in rows
-                if topic in INPUTS and header_s(ts, d, k) < first_fix}
+        fix_index, fix_stamp = first_fix
+        return {rid for i, (rid, topic, k, d) in enumerate(rows)
+                if topic in INPUTS and (i < fix_index or header_s(ts, d, k) < fix_stamp)}
     if variant == 'short_gnss':
         first = next((header_s(ts, d, k) for _, topic, k, d in rows if topic in INPUTS), None)
         if first is None:

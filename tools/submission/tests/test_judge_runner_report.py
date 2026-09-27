@@ -65,10 +65,48 @@ def test_node_dead_before_stop_fails(tmp_path, monkeypatch):
     assert r['status'] == 'fail'
 
 
-@pytest.mark.parametrize('key', ['play_exit', 'check_recording_exit', 'ready_exit'])
+@pytest.mark.parametrize('key', ['ready_exit', 'record_ready_exit', 'play_exit',
+                                 'record_exit', 'node_exit', 'check_recording_exit'])
 def test_nonzero_exit_fails(tmp_path, monkeypatch, key):
     run = make(tmp_path, monkeypatch, [('map', 200)], exit_tsv=OK_EXIT.replace(f'{key}\t0', f'{key}\t1'))
     r = rep.scenario(run, ['s', 'bag', 'protocol', '0', 'map'], {})
+    assert r['status'] == 'fail'
+    assert f'{key}=1' in r['fails']
+
+
+@pytest.mark.parametrize('mode,key', [
+    *[('protocol', key) for key in ('ready_exit', 'record_ready_exit', 'play_exit',
+                                  'record_exit', 'node_exit', 'check_recording_exit')],
+    *[('late', key) for key in ('ready_exit', 'play_exit', 'record_exit',
+                              'node_exit', 'check_recording_exit')],
+])
+def test_missing_required_exit_fails(tmp_path, monkeypatch, mode, key):
+    run = make(tmp_path, monkeypatch, [('map', 200)],
+               exit_tsv=OK_EXIT.replace(f'{key}\t0\n', ''))
+    r = rep.scenario(run, ['s', 'bag', mode, '0', 'map'], {})
+    assert r['status'] == 'fail'
+    assert f'нет {key}' in r['fails']
+
+
+def test_late_mode_does_not_require_record_ready_exit(tmp_path, monkeypatch):
+    run = make(tmp_path, monkeypatch, [('odom', 200)],
+               exit_tsv=OK_EXIT.replace('record_ready_exit\t0\n', ''))
+    r = rep.scenario(run, ['s', 'bag', 'late', '8', 'odom'], {})
+    assert r['status'] == 'ok', r['fails']
+
+
+def test_early_recorder_exit_zero_fails(tmp_path, monkeypatch):
+    run = make(tmp_path, monkeypatch, [('map', 200)],
+               alive='node running\nrecord exited before stop\n')
+    r = rep.scenario(run, ['s', 'bag', 'protocol', '0', 'map'], {})
+    assert r['status'] == 'fail'
+    assert any('record exited before stop' in f for f in r['fails'])
+
+
+@pytest.mark.parametrize('mode,expect', [('invalid', 'map'), ('protocol', 'invalid')])
+def test_unknown_mode_or_expect_fails(tmp_path, monkeypatch, mode, expect):
+    run = make(tmp_path, monkeypatch, [('map', 200)])
+    r = rep.scenario(run, ['s', 'bag', mode, '0', expect], {})
     assert r['status'] == 'fail'
 
 
@@ -140,21 +178,21 @@ def test_protocol_requires_velocity_from_start(tmp_path, monkeypatch):
     assert any('покрытие /result/velocity: начало' in f for f in r['fails'])
 
 
-def test_child_exit_after_runner_sigint_is_warning(tmp_path, monkeypatch, capsys):
+def test_child_exit_after_runner_sigint_fails(tmp_path, monkeypatch, capsys):
     log = '[odometry_node-1] process has died [pid 12, exit code 1, cmd /tmp/odometry_node]\n'
     run = make(tmp_path, monkeypatch, [('map', 200)], node_log=log)
     r = rep.scenario(run, ['s', 'bag', 'protocol', '0', 'map'], {})
-    assert r['status'] == 'ok', r['fails']
+    assert r['status'] == 'fail'
     assert r['node_child_exit'] == 1
-    assert r['warnings'] == ['odometry_node exit 1 после SIGINT runner']
+    assert any('odometry_node exit 1' in f for f in r['fails'])
     plan = run / 'plan.tsv'
     plan.write_text('s\tbag\tprotocol\t0\tmap\n')
     sources = run / 'sources.json'
     sources.write_text('{}')
-    assert rep.main(['report', str(run), str(plan), str(sources)]) == 0
+    assert rep.main(['report', str(run), str(plan), str(sources)]) == 1
     printed = capsys.readouterr().out
     assert 'child exit' in printed
-    assert '  ! s: odometry_node exit 1 после SIGINT runner' in printed
+    assert '  - s: odometry_node exit 1 после SIGINT runner' in printed
     assert json.loads((run / 'report.json').read_text())[0]['node_child_exit'] == 1
 
 

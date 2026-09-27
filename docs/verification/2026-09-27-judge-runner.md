@@ -28,18 +28,19 @@ bash tools/submission/judge_runner.sh            # A=30618_0e41eac3, B=30618_688
 5. `check_recording.py`: типы `/result/*` и stamp выхода = stamp входа.
 
 Exit codes не подменяются: отчёт показывает отдельно код `ros2 launch` и код дочерней
-`odometry_node` из `node.log`. Нода, умершая до остановки, ненулевой exit play/ready/check,
-живой чужой процесс ноды, частота ниже 10 Гц, неполное покрытие входного bag выходами
-или frame не по ожиданию дают `fail`. Ненулевой код дочерней ноды после SIGINT runner
-показывается как warning. Эти условия покрыты тестами `tools/submission/tests/test_judge_runner_report.py`.
+`odometry_node` из `node.log`. Отсутствующий или ненулевой код обязательного этапа,
+ранняя смерть ноды или записи, ненулевой код дочерней ноды после SIGINT, живой чужой
+процесс ноды, частота ниже 10 Гц, неполное покрытие входного bag выходами или frame
+не по ожиданию дают `fail`. Эти условия покрыты тестами `tools/submission/tests/test_judge_runner_report.py`.
 
-Сценарные bag — первые 90 с записи train bag (`make_scenario_bags.py`). Выбор сценария
-зависит от `header.stamp`, а не от времени записи:
+Сценарные bag — первые 90 с записи train bag (`make_scenario_bags.py`). Окно GNSS
+зависит от `header.stamp`; `gnss_first` учитывает также порядок записи, в котором
+`bag play` доставляет сообщения:
 
 | bag | из | что изменено |
 |---|---|---|
 | `a_crop`, `b_crop` | A, B | только обрезка |
-| `a_gnss_first` | A | удалены входы тележек и контроллера со stamp раньше первого master fix (41 сообщение) |
+| `a_gnss_first` | A | удалены входы тележек и контроллера со stamp раньше первого master fix либо записанные до него |
 | `b_no_gnss` | B | удалены все топики `/sensing/gnss/*` |
 | `a_short_gnss` | A | GNSS только до первого vehicle header + 5 с (37 master fix) |
 

@@ -150,6 +150,28 @@ def test_gnss_first_drops_vehicle_before_first_fix(ts):
     assert msb.rows_to_drop(r, 'gnss_first', ts) == {0, 1, 3}
 
 
+def test_gnss_first_drops_earlier_record_order_even_with_later_header(ts):
+    r = rows(ts, [(FRONT, 100.3), (FIX, 100.2), (FRONT, 100.4)])
+    assert msb.rows_to_drop(r, 'gnss_first', ts) == {0}
+
+
+def test_gnss_first_bag_delivers_fix_before_vehicle(tmp_path, ts):
+    source = tmp_path / 'source'
+    start = 8_000_000_000
+    make_synthetic_bag(source, ts, [
+        (FRONT, 100.3, start),
+        (FIX, 100.2, start + 100_000_000),
+        (FRONT, 100.4, start + 200_000_000),
+    ])
+    target = tmp_path / 'gnss_first'
+    msb.make_bag(source, target, 'gnss_first', 2.0)
+    with sqlite3.connect(target / DB_NAME) as con:
+        topics = [topic for (topic,) in con.execute(
+            'SELECT t.name FROM messages m JOIN topics t ON t.id = m.topic_id '
+            'ORDER BY m.timestamp, m.id')]
+    assert topics == [FIX, FRONT]
+
+
 def test_short_gnss_keeps_window_inclusive(ts):
     r = rows(ts, [(FIX, 99.0), (FRONT, 100.0), (ROVER_VEL, 105.0),
                   (VEL, 105.5), (FIX, 110.0), (ROVER_VEL, 110.5)])
