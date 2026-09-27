@@ -192,6 +192,20 @@ def _window_fix(node, stamp=STAMP):
     node.on_input('/sensing/gnss/master/fix', fix)
 
 
+def test_real_core_without_gnss_publishes_odom_after_the_window(node, monkeypatch):
+    """A bag without GNSS (jury_layouts plays one): no fix ever. Inside the GNSS window only the
+    speed goes out; after it the local line goes out in odom, /result/position is never silent
+    for the whole run (#163, D-086)."""
+    frames = []
+    monkeypatch.setattr(node.pub_position, 'publish', lambda m: frames.append(m.header.frame_id))
+    node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
+    assert frames == []
+    later = _wheel(36.0)
+    later.header.stamp = _stamp(STAMP.sec + int(node.params.gnss.init_window_s) + 1, STAMP.nanosec)
+    node.on_input('/vehicle/front_bogie_velocity', later)
+    assert frames == ['odom'] and node.errors == 0
+
+
 def test_real_core_with_map_publishes_only_speed_before_the_first_fix(node, monkeypatch):
     """#163: with the map, before any master fix only the map's origin is known, not where the
     tram is: the speed goes out, the position does not; the first fix starts it."""

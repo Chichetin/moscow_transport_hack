@@ -61,6 +61,14 @@ class Odometry:
         self._t_zero: Optional[float] = -math.inf
         self._a_zero = 0.0                    # m/s^2, <= 0
 
+    def position_due(self, est: Estimate) -> bool:
+        """Whether the node publishes /result/position for `est` (#163, D-086): an absolute
+        position always; a local one only once the GNSS window closed without a valid master fix
+        (a bag without GNSS: odom, D-084), never inside the window, where a fix is still coming."""
+        if est.position_absolute:
+            return True
+        return self._t0 is not None and est.t - self._t0 > self.params.gnss.init_window_s
+
     def step(self, raw: Any) -> Optional[Estimate]:
         """Consume one raw input; None means the input was dropped, nothing to publish."""
         try:
@@ -198,7 +206,8 @@ class Odometry:
         # the output is the flat MGRS grid (D-083): the ENU pose of the map, else the straight
         # line (D-021) from the first valid master fix -- also with a map that rejected every fix
         # of the window (a bag off the route, #163); before any fix there is no anchor at all:
-        # local metres, published in odom (#162), never the map's origin kilometres away
+        # local metres, never the map's origin kilometres away; the node holds them back while
+        # the GNSS window is open and publishes them in odom after it (position_due, D-086)
         frame = self._line_frame
         if self._tracker is not None:
             on_map = self._tracker.advance(self._distance, self._v)

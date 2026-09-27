@@ -240,11 +240,23 @@ def test_pipeline_ignores_gnss_after_the_window():
 def test_pipeline_before_the_first_fix_has_no_anchor_even_with_a_map():
     """No fix yet: where the tram is is unknown, the map's origin is kilometres from a start at
     the other terminal (#163). The line stays in local metres and is marked not absolute: the
-    node publishes it in odom (#162), eval does not score it."""
+    node holds it back inside the GNSS window, eval does not score it (D-086)."""
     from tram_odometry_core.pipeline import Odometry
-    est = _wheels(Odometry(PARAMS, route=_route()), 0.0, 1.0, 36.0)
-    assert est.position_absolute is False
+    odo = Odometry(PARAMS, route=_route())
+    est = _wheels(odo, 0.0, 1.0, 36.0)
+    assert est.position_absolute is False and not odo.position_due(est)
     assert (est.x, est.y) == pytest.approx((est.distance, 0.0))
+
+
+def test_pipeline_without_gnss_publishes_local_position_after_the_window():
+    """A bag without GNSS (jury_layouts runs one): no fix ever, so after the GNSS window the
+    local line is due in odom -- /result/position must not stay silent (#163, D-086)."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    inside = _wheels(odo, 0.0, PARAMS.gnss.init_window_s - 0.5, 36.0)
+    after = _wheels(odo, PARAMS.gnss.init_window_s - 0.4, PARAMS.gnss.init_window_s + 1.0, 36.0)
+    assert not inside.position_absolute and not odo.position_due(inside)
+    assert not after.position_absolute and odo.position_due(after)
 
 
 def test_pipeline_with_the_fixes_off_the_map_starts_the_line_at_the_first_fix():
