@@ -7,7 +7,7 @@
 # Сценарии (один контейнер, подряд): A и B со свежей нодой; A с GNSS до первой тележки;
 # B без GNSS после bag с GNSS (только odom, без старого якоря); A с GNSS 5 с и нодой через
 # LATE_S после bag play — ожидаемый отрицательный результат: вся позиция в odom.
-# Отчёт: $TRAM_OUT_DIR/submission/judge-runner-<commit>/ (логи, exit codes, report.json).
+# Отчёт: $TRAM_OUT_DIR/submission/judge-runner-<commit>-<YYYYmmddTHHMMSS>/ (логи, exit codes, report.json).
 set -euo pipefail
 A="${1:-30618_0e41eac3}"; B="${2:-30618_68847170}"
 CUT_S="${CUT_S:-90}"       # с записи на сценарий
@@ -23,7 +23,8 @@ for b in "$A" "$B"; do [ -d "$DATA/$b" ] || { echo "Нет bag: $DATA/$b" >&2; e
 COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
 DIRTY="$(git -C "$ROOT" status --porcelain --untracked-files=no | wc -l | tr -d ' ')"
 [ "$DIRTY" = 0 ] || echo "ВНИМАНИЕ: $DIRTY незакоммиченных изменений не проверяются — проверяется $COMMIT"
-RUN="$OUT/submission/judge-runner-$COMMIT"; rm -rf "$RUN"; mkdir -p "$RUN/bags"
+RUN="$OUT/submission/judge-runner-$COMMIT-$(date +%Y%m%dT%H%M%S)"
+mkdir -p "$OUT/submission"; mkdir "$RUN"; mkdir "$RUN/bags"
 
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/repo" && git -C "$ROOT" archive HEAD | tar -x -C "$TMP/repo"
@@ -52,8 +53,11 @@ docker run --rm --network=none --cpus=2 --memory=512m --memory-swap=512m \
 CONTAINER=${PIPESTATUS[0]}
 set -e
 echo "container_exit $CONTAINER" >> "$RUN/run.txt"
-[ "$CONTAINER" = 0 ] || { echo "КОНТЕЙНЕР ВЫШЕЛ С КОДОМ $CONTAINER, лог: $RUN/container.log" >&2; exit 1; }
-"$PY" "$SCEN/judge_runner_report.py" "$RUN" "$RUN/plan.tsv" "$RUN/sources.json" | tee "$RUN/report.md"
+[ "$CONTAINER" = 0 ] || echo "КОНТЕЙНЕР ВЫШЕЛ С КОДОМ $CONTAINER, лог: $RUN/container.log" >&2
+set +e
+"$PY" "$SCEN/judge_runner_report.py" "$RUN" "$RUN/plan.tsv" "$RUN/sources.json" 2>&1 | tee "$RUN/report.md"
 REPORT=${PIPESTATUS[0]}
+set -e
 echo "report_exit $REPORT" >> "$RUN/run.txt"; echo "Отчёт: $RUN"
-exit "$REPORT"
+if [ "$CONTAINER" != 0 ] || [ "$REPORT" != 0 ]; then exit 1; fi
+exit 0

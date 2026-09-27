@@ -14,7 +14,7 @@ bash tools/submission/judge_runner.sh            # A=30618_0e41eac3, B=30618_688
 
 Код берётся из `git archive HEAD`. Образ `tram-odom:jury`: `--cpus=2 --memory=512m --network=none`,
 не root, один контейнер на все сценарии. Отчёт с логами, `exit.tsv`, `times.tsv`, записью
-`/result/*` и `report.json` лежит в `out/submission/judge-runner-<commit>/`. Код выхода 0 означает,
+`/result/*` и `report.json` лежит в `out/submission/judge-runner-<commit>-<YYYYmmddTHHMMSS>/`. Код выхода 0 означает,
 что каждый сценарий совпал с ожиданием.
 
 Протокол одного сценария (`judge_runner_inside.sh`):
@@ -27,9 +27,11 @@ bash tools/submission/judge_runner.sh            # A=30618_0e41eac3, B=30618_688
    Не завершились за 15 с — SIGKILL и строка в `errors.txt`.
 5. `check_recording.py`: типы `/result/*` и stamp выхода = stamp входа.
 
-Exit codes не подменяются. Нода, умершая до остановки, ненулевой exit play/ready/check, живой
-чужой процесс ноды, частота ниже 10 Гц или frame не по ожиданию дают `fail`. Каждое из этих
-условий покрыто тестом `tools/submission/tests/test_judge_runner_report.py`.
+Exit codes не подменяются: отчёт показывает отдельно код `ros2 launch` и код дочерней
+`odometry_node` из `node.log`. Нода, умершая до остановки, ненулевой exit play/ready/check,
+живой чужой процесс ноды, частота ниже 10 Гц, неполное покрытие входного bag выходами
+или frame не по ожиданию дают `fail`. Ненулевой код дочерней ноды после SIGINT runner
+показывается как warning. Эти условия покрыты тестами `tools/submission/tests/test_judge_runner_report.py`.
 
 Сценарные bag — первые 90 с записи train bag (`make_scenario_bags.py`). Выбор сценария
 зависит от `header.stamp`, а не от времени записи:
@@ -38,7 +40,7 @@ Exit codes не подменяются. Нода, умершая до остан
 |---|---|---|
 | `a_crop`, `b_crop` | A, B | только обрезка |
 | `a_gnss_first` | A | удалены входы тележек и контроллера со stamp раньше первого master fix (41 сообщение) |
-| `b_no_gnss` | B | удалены все GNSS-топики |
+| `b_no_gnss` | B | удалены все топики `/sensing/gnss/*` |
 | `a_short_gnss` | A | GNSS только до первого vehicle header + 5 с (37 master fix) |
 
 ## Результат на `41717ee` (`src/` = `main` `fccfba9`)
@@ -52,6 +54,10 @@ Exit codes не подменяются. Нода, умершая до остан
 | `gnss_first`: GNSS до первой тележки | map | ok | 3666 / 0 | map | 40,8 / 40,8 | 1,11 | 0,72 / 1,69 | 0 / 0 / 0 |
 | `no_gnss_after_gnss`: B без GNSS после bag с GNSS | odom | ok | 0 / 3521 | odom | 39,8 / 41,3 | 1,13 | — | 0 / 0 / 0 |
 | `late_short_gnss`: `bag play`, нода через 8 с, GNSS 5 с | odom (отрицательный) | ok | 0 / 3045 | odom | 39,8 / 39,8 | 0,84 | — | 0 / 0 / 0 |
+
+Известное: `odometry_node` на SIGINT завершается с `ExternalShutdownException`, exit 1
+(во всех 5 сценариях прогона `41717ee`, `node.log`) — дефект остановки ноды, не runner;
+runner показывает его как warning.
 
 `launch → ready` — от `ros2 launch` до готовности подписок ноды и записи. Сами входные подписки
 ноды готовы через 0,35 с (`seq1_a/ready.log`). Ошибка 2D посчитана к эталону `tools/eval`

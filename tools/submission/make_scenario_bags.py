@@ -6,8 +6,8 @@ VARIANT (the input header.stamp decides, not the record time, docs/data.md traps
   crop        the first SECONDS of the bag (record time), every topic kept
   gnss_first  crop, and vehicle inputs stamped before the first master fix dropped: GNSS
               reaches the node before the first wheel
-  no_gnss     crop without any GNSS topic: the node must publish odom, never an old anchor
-  short_gnss  crop, GNSS only up to first vehicle header + 5 s (the allowed window, D-005)
+  no_gnss     crop without any /sensing/gnss/* topic: the node must publish odom, never an old anchor
+  short_gnss  crop, /sensing/gnss/* only up to first vehicle header + 5 s (D-005)
 
 Rows are deleted from a copy; metadata.yaml counts are rewritten so ros2 bag play agrees.
 A development tool: rosbags is not needed by the ROS node at runtime.
@@ -40,7 +40,7 @@ def rows_to_drop(rows, variant: str, ts) -> set[int]:
     if variant == 'crop':
         return set()
     if variant == 'no_gnss':
-        return {rid for rid, topic, _, _ in rows if topic in GNSS}
+        return {rid for rid, topic, _, _ in rows if topic.startswith('/sensing/gnss/')}
     if variant == 'gnss_first':
         first_fix = next((header_s(ts, d, k) for _, topic, k, d in rows if topic == MASTER_FIX), None)
         if first_fix is None:
@@ -52,7 +52,7 @@ def rows_to_drop(rows, variant: str, ts) -> set[int]:
         if first is None:
             raise ValueError('no vehicle input in the cut')
         return {rid for rid, topic, k, d in rows
-                if topic in GNSS and header_s(ts, d, k) > first + SHORT_GNSS_S}
+                if topic.startswith('/sensing/gnss/') and header_s(ts, d, k) > first + SHORT_GNSS_S}
     raise ValueError(f'unknown variant {variant!r}, one of {VARIANTS}')
 
 

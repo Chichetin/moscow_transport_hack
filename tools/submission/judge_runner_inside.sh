@@ -57,7 +57,7 @@ run() { # run <name> <bag> <mode> <delay_s>
     printf 'node_launch\t%s\n' "$(now)" >> "$dir/times.tsv"
     python3 /runner/wait_ready.py "$READY_TIMEOUT_S" $INPUTS > "$dir/ready.log" 2>&1
     printf 'ready_exit\t%s\n' "$?" >> "$dir/exit.tsv"
-    python3 /runner/wait_ready.py "$READY_TIMEOUT_S" /result/velocity /result/position \
+    python3 /runner/wait_ready.py "$READY_TIMEOUT_S" $RESULTS \
       > "$dir/record_ready.log" 2>&1
     printf 'record_ready_exit\t%s\n' "$?" >> "$dir/exit.tsv"
     printf 'ready\t%s\n' "$(now)" >> "$dir/times.tsv"

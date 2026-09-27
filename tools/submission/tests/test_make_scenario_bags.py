@@ -11,9 +11,10 @@ import make_scenario_bags as msb  # noqa: E402
 
 FIX, VEL, FRONT = '/sensing/gnss/master/fix', '/sensing/gnss/master/vel', '/vehicle/front_bogie_velocity'
 REAR, CMD = '/vehicle/rear_bogie_velocity', '/vehicle/driver_position_cmd'
-ROVER_FIX = '/sensing/gnss/rover/fix'
+ROVER_FIX, ROVER_VEL = '/sensing/gnss/rover/fix', '/sensing/gnss/rover/vel'
 TYPES = {FIX: 'sensor_msgs/msg/NavSatFix', ROVER_FIX: 'sensor_msgs/msg/NavSatFix',
-         VEL: 'geometry_msgs/msg/TwistStamped', FRONT: 'tram_vehicle_msgs/msg/VelocitySensor',
+         VEL: 'geometry_msgs/msg/TwistStamped', ROVER_VEL: 'geometry_msgs/msg/TwistStamped',
+         FRONT: 'tram_vehicle_msgs/msg/VelocitySensor',
          REAR: 'tram_vehicle_msgs/msg/VelocitySensor',
          CMD: 'tram_vehicle_msgs/msg/DriverControllerCommand'}
 DB_NAME = 'synthetic_0.db3'
@@ -55,7 +56,7 @@ def rows(ts, spec):
 def make_synthetic_bag(path, ts, specs):
     """Write a minimal rosbag2 Humble SQLite bag from (topic, header time, record time) rows."""
     path.mkdir(parents=True)
-    topics = msb.INPUTS + msb.GNSS
+    topics = msb.INPUTS + msb.GNSS + (ROVER_VEL,)
     topic_ids = {topic: i + 1 for i, topic in enumerate(topics)}
     qos_profiles = ''
     db_path = path / DB_NAME
@@ -150,13 +151,14 @@ def test_gnss_first_drops_vehicle_before_first_fix(ts):
 
 
 def test_short_gnss_keeps_window_inclusive(ts):
-    r = rows(ts, [(FIX, 99.0), (FRONT, 100.0), (FIX, 105.0), (VEL, 105.5), (FIX, 110.0)])
-    assert msb.rows_to_drop(r, 'short_gnss', ts) == {3, 4}
+    r = rows(ts, [(FIX, 99.0), (FRONT, 100.0), (ROVER_VEL, 105.0),
+                  (VEL, 105.5), (FIX, 110.0), (ROVER_VEL, 110.5)])
+    assert msb.rows_to_drop(r, 'short_gnss', ts) == {3, 4, 5}
 
 
 def test_no_gnss_and_crop(ts):
-    r = rows(ts, [(FIX, 99.0), (FRONT, 100.0), (VEL, 101.0)])
-    assert msb.rows_to_drop(r, 'no_gnss', ts) == {0, 2}
+    r = rows(ts, [(FIX, 99.0), (FRONT, 100.0), (VEL, 101.0), (ROVER_VEL, 102.0)])
+    assert msb.rows_to_drop(r, 'no_gnss', ts) == {0, 2, 3}
     assert msb.rows_to_drop(r, 'crop', ts) == set()
 
 
@@ -186,7 +188,7 @@ def test_make_bag_crop_trims_by_record_time_and_rewrites_metadata(tmp_path, ts):
                           start + 2_000_000_000]
     assert all(timestamp <= start + 2_000_000_000 for timestamp in timestamps)
     expected_counts = {topic: int(topic in (FRONT, FIX, REAR, VEL))
-                       for topic in msb.INPUTS + msb.GNSS}
+                       for topic in msb.INPUTS + msb.GNSS + (ROVER_VEL,)}
     assert counts == expected_counts
 
     metadata = read_metadata(target)
@@ -209,6 +211,7 @@ def test_make_bag_no_gnss_removes_gnss_rows_and_keeps_vehicle_metadata(tmp_path,
         (FIX, 50.0, start),
         (FRONT, 50.1, start + 100_000_000),
         (ROVER_FIX, 50.2, start + 200_000_000),
+        (ROVER_VEL, 50.25, start + 250_000_000),
         (REAR, 50.3, start + 300_000_000),
         (VEL, 50.4, start + 400_000_000),
         (CMD, 50.5, start + 500_000_000),
@@ -218,19 +221,19 @@ def test_make_bag_no_gnss_removes_gnss_rows_and_keeps_vehicle_metadata(tmp_path,
     returned_counts = msb.make_bag(source, target, 'no_gnss', 10.0)
 
     counts, _, _, _ = bag_database_summary(target / DB_NAME)
-    assert all(counts[topic] == 0 for topic in msb.GNSS)
+    assert all(counts[topic] == 0 for topic in msb.GNSS + (ROVER_VEL,))
     assert all(counts[topic] > 0 for topic in msb.INPUTS)
     with sqlite3.connect(target / DB_NAME) as con:
         remaining_topics = {topic for (topic,) in con.execute(
             'SELECT DISTINCT t.name FROM topics t JOIN messages m ON m.topic_id = t.id'
         )}
-    assert remaining_topics.isdisjoint(msb.GNSS)
+    assert remaining_topics.isdisjoint(msb.GNSS + (ROVER_VEL,))
     assert all(returned_counts[topic] == 0 for topic in msb.GNSS)
     assert all(returned_counts[topic] > 0 for topic in msb.INPUTS)
 
     metadata_counts = {entry['topic_metadata']['name']: entry['message_count']
                        for entry in read_metadata(target)['topics_with_message_count']}
-    assert all(metadata_counts[topic] == 0 for topic in msb.GNSS)
+    assert all(metadata_counts[topic] == 0 for topic in msb.GNSS + (ROVER_VEL,))
     assert all(metadata_counts[topic] > 0 for topic in msb.INPUTS)
 
 
