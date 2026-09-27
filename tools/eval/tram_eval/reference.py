@@ -8,12 +8,20 @@ organizers' tf: the master antenna is 9.873 m behind base_link (the front bogie 
 rover 2.563 m ahead of it, both 3.0 m above it (rail level). With a rover fix of the same moment
 base_link is on the line master -> rover; without one it is where master will be 9.873 m of arc
 later (the tram is rigid and runs forward on its track). `point='master'` keeps the antenna.
+
+`grid=(zone, e0, n0)` (what `bag.py` passes, from `frames.grid_*` of params.yaml) turns the
+finished track into the flat MGRS grid of /result/position (D-082) with the core's own
+conversion (`tram_odometry_core.position.geo`); without it the track stays in ENU of `origin`.
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
+
+CORE = Path(__file__).resolve().parents[3] / 'src' / 'tram_odometry_core'
 
 # WGS84
 A_WGS84 = 6378137.0
@@ -56,6 +64,22 @@ def geodetic_to_enu(lat_deg, lon_deg, alt_m, origin):
     n = -sl * co * d[..., 0] - sl * so * d[..., 1] + cl * d[..., 2]
     u = cl * co * d[..., 0] + cl * so * d[..., 1] + sl * d[..., 2]
     return np.stack([e, n, u], axis=-1)
+
+
+def core_geo():
+    """tram_odometry_core.position.geo: the same conversion as the published estimate."""
+    if str(CORE) not in sys.path:
+        sys.path.insert(0, str(CORE))
+    from tram_odometry_core.position import geo
+    return geo
+
+
+def enu_to_grid(pos: np.ndarray, origin, grid) -> np.ndarray:
+    """(N, 3) ENU of `origin` (lat, lon, alt) -> (N, 3) MGRS grid x, y and ellipsoidal height."""
+    geo = core_geo()
+    rot, ecef0 = geo.enu_rotation(*origin[:2]), geo.ecef(*origin)
+    return np.array([geo.enu_to_grid(rot, ecef0, grid, *p) for p in np.asarray(pos, float)],
+                    float).reshape(-1, 3)
 
 
 def rolling_median(v: np.ndarray, window: int) -> np.ndarray:
@@ -161,9 +185,9 @@ def track_ahead(pos: np.ndarray, pos_s: np.ndarray, ahead: float, heading=None) 
 
 @dataclass
 class Reference:
-    origin: tuple[float, float, float] | None   # lat, lon, alt of the frame `map` origin
+    origin: tuple[float, float, float] | None   # lat, lon, alt of the ENU the track is built in
     pos_t: np.ndarray       # (N,) s, header.stamp of master fix, sorted
-    pos: np.ndarray         # (N, 3) m, ENU
+    pos: np.ndarray         # (N, 3) m, MGRS grid with `grid` (D-082), else ENU of `origin`
     pos_s: np.ndarray       # (N,) m, arc of each point along the reference track, non-decreasing
     poly: np.ndarray        # (M, 2) m, track for projection (the fixes; decimated without vel)
     poly_s: np.ndarray      # (M,) m, arc of the vertices, non-decreasing
@@ -172,7 +196,7 @@ class Reference:
 
 
 def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float, point: str = 'master',
-                    rover_t=(), rover_llas=()) -> Reference:
+                    rover_t=(), rover_llas=(), grid=None) -> Reference:
     """fix_llas: (N, 4) lat, lon, alt, status; vel_en: (K, 2) ENU east/north m/s.
 
     point: 'master' — the antenna; 'base_link' — the front bogie pivot at rail level by the
@@ -246,6 +270,14 @@ def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float, point: st
             ahead[use] = pos[use] + BASE_AHEAD_M * u[use]
         pos = ahead
         pos[:, 2] -= ANTENNA_HEIGHT_M
+        if len(vel_t) >= 2:
+            poly = pos[:, :2]
+        else:
+            poly, poly_s, pos_s = arc_polyline(pos[:, :2])
+    if grid is not None and len(pos):
+        # the output frame (D-082); the arc stays the Doppler one or is taken in the grid
+        # (scale 1 - 3e-4: along compares arcs on the same polyline either way)
+        pos = enu_to_grid(pos, origin, grid)
         if len(vel_t) >= 2:
             poly = pos[:, :2]
         else:

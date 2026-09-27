@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from tram_odometry_core.position import PathTracker
+from tram_odometry_core.position import PathTracker, geo
 from tram_odometry_core.types import Branch, Route, load_params, load_route
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -45,6 +45,12 @@ def _route():
                  np.linspace(168.0, 178.0, 500))
     b1 = _branch(np.linspace(lat1, lat2, 30), np.linspace(lon1, lon2, 30), np.full(30, 178.0))
     return Route(origin=ORIGIN, branches=(b0, b1))
+
+
+def _grid(lat, lon, alt):
+    """The published frame of the pipeline: MGRS grid of params.yaml (D-082)."""
+    f = PARAMS.frames
+    return geo.to_grid(lat, lon, alt, (f.grid_zone, f.grid_origin_e_m, f.grid_origin_n_m))
 
 
 def _enu_bag(lat, lon, alt, origin):
@@ -213,9 +219,10 @@ def test_pipeline_follows_the_map_after_the_window():
     start = _lla(-1000.0, 0.0, 170.0)
     odo.step(_fix_msg(0.0, start))
     est = _wheels(odo, 0.0, 100.0, 36.0)              # 10 m/s for 100 s: 1 km west
-    fx, fy, _ = _enu_bag(*_lla(-2000.0, 0.0, 172.0), origin=start)
+    fx, fy, _ = _grid(*_lla(-2000.0, 0.0, 172.0))
     assert est.gnss_used and math.hypot(est.x - fx, est.y - fy) < 2.0
-    assert abs(math.remainder(est.yaw - math.pi, 2 * math.pi)) < 0.01
+    wx, wy, _ = _grid(*_lla(-2001.0, 0.0, 172.0))    # due west in the grid: turned by convergence
+    assert abs(math.remainder(est.yaw - math.atan2(wy - fy, wx - fx), 2 * math.pi)) < 0.01
 
 
 def test_pipeline_ignores_gnss_after_the_window():
@@ -226,8 +233,18 @@ def test_pipeline_ignores_gnss_after_the_window():
     _wheels(odo, 0.0, 10.0, 36.0)
     odo.step(_fix_msg(PARAMS.gnss.init_window_s + 5.0, _lla(-1500.0, 0.0, 171.0)))  # after window
     est = _wheels(odo, 10.1, 20.0, 36.0)
-    fx, fy, _ = _enu_bag(*_lla(-1200.0, 0.0, 170.4), origin=start)
+    fx, fy, _ = _grid(*_lla(-1200.0, 0.0, 170.4))
     assert math.hypot(est.x - fx, est.y - fy) < 2.0
+
+
+def test_pipeline_before_the_first_fix_starts_at_the_map_origin_in_the_grid():
+    """No fix yet: the straight line (D-021) runs from the map's own origin and is published in
+    the grid like the rest (D-082), never as local metres near 0."""
+    from tram_odometry_core.pipeline import Odometry
+    est = _wheels(Odometry(PARAMS, route=_route()), 0.0, 1.0, 36.0)
+    fx, fy, fz = _grid(*_lla(est.distance, 0.0))              # yaw 0: east
+    assert math.hypot(est.x - fx, est.y - fy) < 0.1 and est.z == pytest.approx(fz, abs=0.01)
+    assert est.x > 1e4 and est.y > 1e4
 
 
 def test_pipeline_without_route_keeps_the_baseline():
@@ -375,8 +392,10 @@ def test_pipeline_takes_the_heading_from_the_rover_in_the_window_only():
         odo.step(_rover_msg(rover_t, _lla(-1000.0 + 12.4, -3.0)))
         est = _wheels(odo, rover_t, rover_t + 10.0, 36.0)        # 10 m/s for 10 s: 100 m
         assert est.distance > 90.0
-        assert (est.x > 90.0 and est.y < -4.0) == expect_east, rover_t        # eastbound track
-        assert (est.x < -90.0 and est.y > 2.0) != expect_east, rover_t        # westbound track
+        ex, ey, _ = _grid(*_lla(-1000.0 + est.distance, -8.0))    # eastbound track
+        wx, wy, _ = _grid(*_lla(-1000.0 - est.distance, 0.0))     # westbound track
+        assert (math.hypot(est.x - ex, est.y - ey) < 3.0) == expect_east, rover_t
+        assert (math.hypot(est.x - wx, est.y - wy) < 3.0) != expect_east, rover_t
 
 
 def _polyline(points):
@@ -500,9 +519,9 @@ def test_pipeline_publishes_base_link_with_the_offset_of_params():
     start = _lla(-1000.0, 0.0, 170.0)
     odo.step(_fix_msg(0.0, start))
     est = _wheels(odo, 0.0, 100.0, 36.0)                      # 10 m/s for 100 s: 1 km west
-    fx, fy, fz = _enu_bag(*_lla(-2009.873, 0.0, 172.0), origin=start)
+    fx, fy, fz = _grid(*_lla(-2009.873, 0.0, 172.0))
     assert math.hypot(est.x - fx, est.y - fy) < 2.0
-    assert est.z == pytest.approx(fz - 3.0, abs=0.3)
+    assert est.z == pytest.approx(fz - 3.0, abs=0.3)          # ellipsoidal height of base_link
 
 
 def test_base_link_goes_on_past_a_dead_end_by_the_offset_at_most():

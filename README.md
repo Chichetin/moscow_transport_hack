@@ -65,13 +65,15 @@ ros2 bag play <каталог bag>                            # терминал
 | Топик | Тип | Частота | Содержимое |
 |---|---|---|---|
 | `/result/velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | на каждом принятом сообщении тележек и контроллера, ~40 Гц (2 × 10 Гц + 20 Гц); GNSS и отброшенный вход выхода не дают | `velocity` — продольная скорость, **м/с** (вход тележек — км/ч, перевод в ядре) |
-| `/result/position` | `nav_msgs/msg/Odometry` | та же | `pose.pose.position` — x (восток), y (север), z (вверх), м, frame `map`; `pose.pose.orientation` — курс; `twist.twist.linear.x` — скорость; ковариации заполнены, неоцениваемые компоненты 1e6 |
+| `/result/position` | `nav_msgs/msg/Odometry` | та же | `pose.pose.position` — x, y — плоская сетка MGRS `37UCB` (UTM 37N − (300 000, 6 100 000)), z — высота над эллипсоидом WGS84, м, frame `map`; `pose.pose.orientation` — курс; `twist.twist.linear.x` — скорость; ковариации заполнены, неоцениваемые компоненты 1e6 |
 | `/result/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 1–10 Гц | флаги проскальзывания, возраст входов и состояние обеих тележек |
 
 `header.stamp` на обоих выходах — время входного сообщения из bag (не wall clock).
 `frame_id`: у `/result/velocity` — `base_link`, у `/result/position` — `map` с
-`child_frame_id` = `base_link`. Начало frame `map` — первый
-GNSS-fix master статуса 2 в окне выставки (иначе первый валидный), оси ENU, как у эталона.
+`child_frame_id` = `base_link`. Frame `map` — плоская сетка MGRS, как в примере организаторов
+(lat 55,8088325462547, lon 37,4602768500852 → x 103 501,6309, y 85 876,1201): начало не зависит
+от прогона, курс — от оси `x` сетки (D-082). Ядро считает в локальной ENU от первого fix master
+и переводит на выходе (`position/geo.py`).
 `pose.pose.position` — точка `base_link` по tf организаторов: ось передней тележки на уровне
 касания колеса и рельса, 9,873 м впереди антенны master и 3,0 м ниже антенн
 (`position.base_ahead_m`, `position.antenna_height_m`; D-077). Выход в точке самой антенны

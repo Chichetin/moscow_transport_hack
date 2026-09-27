@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from tram_odometry_core.pipeline import Odometry
+from tram_odometry_core.position import geo
 from tram_odometry_core.types import load_params
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -15,6 +16,14 @@ CMD = '/vehicle/driver_position_cmd'
 MASTER_FIX = '/sensing/gnss/master/fix'
 MASTER_VEL = '/sensing/gnss/master/vel'
 KMH_36 = 36.0  # = 10 m/s
+FIX_LLA = (55.7, 37.6, 150.0)   # the master fix of gnss_fix
+GRID = (PARAMS.frames.grid_zone, PARAMS.frames.grid_origin_e_m, PARAMS.frames.grid_origin_n_m)
+
+
+def line_pose(e, n, yaw):
+    """Grid pose (D-082) of the straight line (D-021) at ENU (e, n) of the first fix."""
+    rot, e0 = geo.enu_rotation(*FIX_LLA[:2]), geo.ecef(*FIX_LLA)
+    return geo.pose_to_grid(rot, e0, GRID, e, n, 0.0, yaw, (0.0, 0.0, 0.0))[:4]
 
 
 def _hdr(t):
@@ -31,8 +40,8 @@ def cmd(t, notch):
 
 
 def gnss_fix(t, status=0):
-    return MASTER_FIX, SimpleNamespace(header=_hdr(t), latitude=55.7, longitude=37.6,
-                                       altitude=150.0, status=SimpleNamespace(status=status))
+    return MASTER_FIX, SimpleNamespace(header=_hdr(t), latitude=FIX_LLA[0], longitude=FIX_LLA[1],
+                                       altitude=FIX_LLA[2], status=SimpleNamespace(status=status))
 
 
 def gnss_vel(t, ve, vn):
@@ -66,9 +75,37 @@ def test_uniform_motion_distance_is_v_times_t():
     init_east(odo)
     est = drive(odo, 1.0, 11.0, KMH_36)
     assert est.distance == pytest.approx(100.0, abs=1.5)
-    assert est.x == pytest.approx(est.distance, abs=1e-6)
-    assert est.y == pytest.approx(0.0, abs=1e-6)
+    x, y, z, yaw = line_pose(est.distance, 0.0, 0.0)
+    assert (est.x, est.y, est.z) == pytest.approx((x, y, z), abs=1e-6)
+    assert est.yaw == pytest.approx(yaw, abs=1e-9)
     assert est.gnss_used
+
+
+def test_straight_line_is_published_in_the_grid_from_the_first_fix():
+    """Without a map the line starts at the first valid master fix (D-021) and is published
+    in the MGRS grid (D-082): at the fix it is the fix itself, far from any local 0."""
+    odo = Odometry(PARAMS)
+    drive(odo, 0.0, 1.0, KMH_36)                     # 10 m before the fix: not part of the line
+    odo.step(gnss_fix(1.0))
+    est = odo.step(cmd(1.0, 0))                      # same stamp: no travel since the fix
+    x, y, z = geo.to_grid(*FIX_LLA, GRID)
+    assert (est.x, est.y, est.z) == pytest.approx((x, y, z), abs=1e-3)
+    assert x > 1e4 and y > 1e4
+
+
+def test_no_fix_without_map_keeps_the_local_line():
+    """Known limit (D-082): no map and no fix -> no absolute anchor, the line stays local."""
+    est = drive(Odometry(PARAMS), 0.0, 1.0, KMH_36)
+    assert (est.x, est.y) == pytest.approx((est.distance, 0.0))
+
+
+def test_fix_at_lat_lon_zero_is_not_the_line_origin():
+    odo = Odometry(PARAMS)
+    odo.step((MASTER_FIX, SimpleNamespace(header=_hdr(0.0), latitude=0.0, longitude=0.0,
+                                          altitude=0.0, status=SimpleNamespace(status=0))))
+    odo.step(gnss_fix(0.5))
+    est = odo.step(cmd(0.5, 0))
+    assert (est.x, est.y) == pytest.approx(geo.to_grid(*FIX_LLA, GRID)[:2], abs=1e-3)
 
 
 def test_heading_from_gnss_velocity_north():
@@ -76,9 +113,9 @@ def test_heading_from_gnss_velocity_north():
     odo.step(gnss_fix(0.0))
     odo.step(gnss_vel(0.0, 0.0, 8.0))
     est = drive(odo, 1.0, 5.0, KMH_36)
-    assert est.yaw == pytest.approx(math.pi / 2)
-    assert est.x == pytest.approx(0.0, abs=1e-6)
-    assert est.y == pytest.approx(est.distance)
+    x, y, _, yaw = line_pose(0.0, est.distance, math.pi / 2)
+    assert est.yaw == pytest.approx(yaw, abs=1e-9)
+    assert (est.x, est.y) == pytest.approx((x, y), abs=1e-6)
 
 
 def test_silent_bogie_speed_from_the_other_one():

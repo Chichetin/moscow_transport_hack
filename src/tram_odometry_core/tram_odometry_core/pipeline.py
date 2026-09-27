@@ -11,7 +11,8 @@ from typing import Any, Optional
 
 from .dynamics import model_accel
 from .estimator import SpeedFilter
-from .position import PathTracker
+from .position import PathTracker, pose_to_grid
+from .position.geo import ecef, enu_rotation
 from .preprocess import Preprocessor
 from .slip import SlipDetector
 from .types import CommandSample, Estimate, GnssFix, GnssVel, Params, SlipState, WheelSample
@@ -44,6 +45,11 @@ class Odometry:
         self._distance = 0.0
         self._x = self._y = 0.0
         self._yaw = 0.0
+        f = params.frames
+        self._grid = (f.grid_zone, f.grid_origin_e_m, f.grid_origin_n_m)   # output frame (D-082)
+        # ENU frame of the straight line (x, y) without a map: the first valid master fix, where
+        # the line restarts from 0; None before it (no absolute position is known then)
+        self._line_frame = None
         self._gnss_used = False
         self._fix_ok = False                  # valid master fix seen in the window
         self._vel_best = 0.0                  # fastest GNSS speed seen in the window
@@ -180,10 +186,15 @@ class Odometry:
         else:
             speed = -self._a_zero * (self._t_zero - t)
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
-        x, y, z, yaw, pos_cov = self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0)
-        on_map = self._tracker.advance(self._distance, self._v) if self._tracker is not None else None
-        if on_map is not None:
-            x, y, z, yaw, pos_cov = on_map
+        pose = (self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0))
+        # the output is the flat MGRS grid (D-082): the ENU pose of the map, or of the straight
+        # line (D-021) in the map's own ENU before the first fix, goes through geodetic -> UTM
+        frame = self._line_frame
+        if self._tracker is not None:
+            on_map = self._tracker.advance(self._distance, self._v)
+            pose = pose if on_map is None else on_map
+            frame = self._tracker.frame
+        x, y, z, yaw, pos_cov = pose if frame is None else pose_to_grid(*frame, self._grid, *pose)
         return Estimate(
             t=t, speed=speed, speed_var=var, accel=accel, accel_model=self._accel_model,
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
@@ -197,8 +208,14 @@ class Odometry:
             if self._tracker is not None:
                 self._tracker.on_rover(sample.lat, sample.lon, sample.alt, sample.status)
             return
-        # the origin of frame `map` is the first valid fix, so the start is (0, 0)
+        # the origin of the straight line is the first valid fix, so the start is (0, 0)
         if sample.status >= 0:
+            if (self._tracker is None and self._line_frame is None
+                    and all(math.isfinite(v) for v in (sample.lat, sample.lon, sample.alt))
+                    and abs(sample.lat) + abs(sample.lon) > 0.0):   # lat = lon = 0: trap 10
+                self._line_frame = (enu_rotation(sample.lat, sample.lon),
+                                    ecef(sample.lat, sample.lon, sample.alt))
+                self._x = self._y = 0.0
             self._fix_ok = True
             if self._tracker is not None:
                 self._tracker.on_fix(sample.lat, sample.lon, sample.alt,

@@ -4,6 +4,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from tram_eval import bag
+from tram_eval.reference import core_geo
 from tram_eval.bag import CMD, FRONT, MASTER_FIX, MASTER_VEL, REAR, ROVER_FIX, evaluate_bag, run_pipeline
 
 LAT0, LON0 = 55.75, 37.60
@@ -39,8 +40,19 @@ def drive(duration=60.0, speed=10.0):
     return msgs
 
 
+GEO = core_geo()
+FRAME = (GEO.enu_rotation(LAT0, LON0), GEO.ecef(LAT0, LON0, 150.0), bag.output_grid())
+
+
+def grid_xyz(x_east):
+    """The published frame (D-082): ENU (x_east, 0, 0) of the first fix -> MGRS grid."""
+    return GEO.enu_to_grid(*FRAME, x_east, 0.0, 0.0)
+
+
 class DeadReckoning:
-    """Test double of pipeline.Odometry: wheel mean / 3.6 integrated east from x = 0."""
+    """Test double of pipeline.Odometry: wheel mean / 3.6 integrated east from the first fix,
+    published in the grid like the pipeline; `ahead` m further east."""
+    ahead = 0.0
 
     def __init__(self, crash_at=None, stamp_offset=0.0):
         self.seen, self.x, self.t, self.v = [], 0.0, None, 0.0
@@ -57,7 +69,8 @@ class DeadReckoning:
         if self.t is not None and t > self.t:
             self.x += self.v * (t - self.t)
         self.t = t if self.t is None else max(self.t, t)
-        return NS(t=t + self.stamp_offset, speed=self.v, x=self.x, y=0.0,
+        x, y, z = grid_xyz(self.x + self.ahead)
+        return NS(t=t + self.stamp_offset, speed=self.v, x=x, y=y, z=z,
                   slip=NS(slip_front=False, slip_rear=topic == REAR))
 
 

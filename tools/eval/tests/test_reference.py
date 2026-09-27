@@ -200,3 +200,38 @@ def test_plain_rover_fix_is_not_paired_with_a_gbas_master_track():
     ref = build_reference(t, llas, t, np.tile([10.0, 0.0], (100, 1)), window_end=5.0,
                           point='base_link', rover_t=rt, rover_llas=rl)
     assert np.abs(ref.pos[:, 1]).max() < 0.01                  # the plain fix did not turn base_link
+
+
+# the grid of /result/position (D-082): the reference goes through the core's conversion
+
+GRID = (37, 300000.0, 6100000.0)
+
+
+def test_grid_reference_is_the_fix_itself_in_the_grid():
+    from tram_eval.reference import core_geo
+    geo = core_geo()
+    t, llas = fixes_east(100)
+    ref = build_reference(t, llas, t, np.tile([10.0, 0.0], (100, 1)), window_end=5.0, grid=GRID)
+    for i in (0, 50, 99):
+        assert ref.pos[i] == pytest.approx(geo.to_grid(*llas[i, :3], GRID), abs=1e-3)
+    assert ref.poly == pytest.approx(ref.pos[:, :2])
+    assert ref.pos_s[-1] == pytest.approx(99.0, abs=0.01)     # arc: the Doppler one, unchanged
+
+
+def test_grid_reference_keeps_the_geometry_of_the_enu_one():
+    """Only the frame changes: the same base_link track, distances within the UTM scale."""
+    t, llas = fixes_east(100)
+    rt, rl = _rover_of(t, llas, dt=0.02)
+    kw = dict(window_end=5.0, point='base_link', rover_t=rt, rover_llas=rl)
+    enu = build_reference(t, llas, t, np.tile([10.0, 0.0], (100, 1)), **kw)
+    grid = build_reference(t, llas, t, np.tile([10.0, 0.0], (100, 1)), grid=GRID, **kw)
+    d_enu = np.hypot(*np.diff(enu.pos[:, :2], axis=0).T)
+    d_grid = np.hypot(*np.diff(grid.pos[:, :2], axis=0).T)
+    assert d_grid == pytest.approx(d_enu * 0.99969, rel=5e-5)
+    assert grid.pos[:, 2] == pytest.approx(ALT0 - 3.0, abs=0.01)   # ellipsoidal height of base_link
+    assert grid.pos_s == pytest.approx(enu.pos_s)
+
+
+def test_no_fixes_in_the_grid_is_empty():
+    ref = build_reference([], np.zeros((0, 4)), [], np.zeros((0, 2)), window_end=5.0, grid=GRID)
+    assert len(ref.pos) == 0 and ref.origin is None
