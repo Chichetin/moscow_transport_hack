@@ -179,6 +179,18 @@ def test_relock_learns_the_scale_as_unknown_again():
     assert tr._scale == pytest.approx(1.0 / WHEEL, abs=1e-3)
 
 
+def test_relock_pair_stays_out_of_the_speed_chain():
+    """The pair of snaps across a lost lock does not enter the speed chain of #153 (D-082): the
+    lost stretch may hold a wheel gap or the relock may be false (3 of 16 relocks in the train
+    stress gap_both_30). The chain goes on from the relock place."""
+    tr = _tracker([(0, s) for s in (1500.0, 2000.0, 2500.0, 3000.0, 4400.0, 4600.0, 4800.0)])
+    assert all(tr.on_stop(d) for d in (500.0, 1000.0, 1500.0, 2000.0))   # chain: 1500 m / 1500 m
+    at = [2000.0 + (s - 3000.0) * WHEEL for s in (4400.0, 4600.0, 4800.0)]
+    assert [tr.on_stop(d) for d in at] == [False, True, True]            # relock at 4600
+    prior = P.speed_scale_prior_m
+    assert tr.speed_scale == pytest.approx((1700.0 + prior) / (1500.0 + at[2] - at[1] + prior))
+
+
 def test_stops_off_the_places_do_not_fake_a_lock():
     """Two misses on one side that do not grow with the path as a scale error does (the second
     is 8.8 m off the line of the first from the anchor, 2.7 sigma) are signals: s is kept."""

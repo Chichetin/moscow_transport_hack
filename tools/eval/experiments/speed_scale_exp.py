@@ -1,4 +1,8 @@
-"""Experiment: publish speed multiplied by the online path scale of PathTracker (D-034)."""
+"""Experiment: publish speed multiplied by the online path scale of PathTracker (D-034).
+
+After #153/#154 this script does not reproduce D-076 (a): Estimate.speed already carries the
+speed scale of the stop chain (D-082) and the path scale is a Kalman state (D-083); the
+numbers of D-076 (a) hold on ef47f9a only."""
 from pathlib import Path
 import dataclasses, math, sys
 from concurrent.futures import ProcessPoolExecutor

@@ -53,7 +53,7 @@ VARIANTS = {
     'h123_pos': dict(H12, recover=True, rec_scale='pos'),
     'h123_k3': dict(H12, recover=True, rec_scale='kf', rec_k=3.0),
     'h123_p15': dict(H12, prior=0.015, recover=True, rec_scale='kf'),
-    'h123_nochain': dict(H12, recover=True, rec_scale='kf', chain_relock=False),
+    'h123_chain': dict(H12, recover=True, rec_scale='kf', chain_relock=True),
 }
 
 
@@ -172,8 +172,8 @@ class Tracker(PathTracker):
                 off, d_ref, v, kr = self._ref
                 self._ref = (off - walked, d_ref, v, kr)
         # the speed chain of #153 (main since 63762d2) takes the pair of consecutive snaps;
-        # chain_relock=False keeps the pair that ends at a relock out of it
-        if hasattr(self, '_accumulate_chain') and (not relock or self.cfg.get('chain_relock', True)):
+        # the pair that ends at a relock stays out of it (as in the core) unless chain_relock
+        if hasattr(self, '_accumulate_chain') and (not relock or self.cfg.get('chain_relock')):
             self._accumulate_chain(k, place, distance)
         self._undo = None
         self._last_snap = (k, place, distance)

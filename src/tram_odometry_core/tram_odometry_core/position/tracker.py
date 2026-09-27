@@ -341,7 +341,8 @@ class PathTracker:
         # map uncertainty cannot distinguish close candidates (D-047)
         ambiguous = len(places) > 1 and (float(np.partition(distances, 1)[1]) - distances[nearest]
                                          <= 2.0 * self.p.stop_std_m)
-        if distances[nearest] > self.p.stop_snap_max_m:
+        relock = distances[nearest] > self.p.stop_snap_max_m
+        if relock:
             if not self._relock(place - s, distance, ambiguous):
                 return False                  # not at a stop place: a signal, keep s
             # the lock was lost, so the scale is not known after all: the arc measures it anew
@@ -352,7 +353,8 @@ class PathTracker:
         gain = var / (var + self.p.stop_std_m ** 2)
         walked = self._scale * (distance - self._anchor[2]) + gain * (place - s)   # old -> new anchor
         updated = over <= 0.0 and self._update_scale(k, place - s, distance)
-        self._accumulate_chain(k, place, distance)
+        if not relock:     # the pair across a lost lock may hold a wheel gap or a false relock
+            self._accumulate_chain(k, place, distance)
         self._anchor = (k, s + gain * (place - s), distance)
         self._undo = None
         self._var0 = (1.0 - gain) * var
