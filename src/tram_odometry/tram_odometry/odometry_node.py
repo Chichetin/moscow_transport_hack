@@ -16,7 +16,11 @@ from nav_msgs.msg import Odometry as OdometryMsg
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import NavSatFix
-from tram_vehicle_msgs.msg import DriverControllerCommand, VelocitySensor
+from tram_vehicle_msgs.msg import VelocitySensor
+try:  # the organizers' judge image ships tram_vehicle_msgs with VelocitySensor only (#184)
+    from tram_vehicle_msgs.msg import DriverControllerCommand
+except ImportError:
+    DriverControllerCommand = None
 
 from tram_odometry_core.pipeline import Odometry
 from tram_odometry_core.types import load_params, load_route
@@ -26,8 +30,9 @@ UNKNOWN_VAR = 1e6     # contract §1: covariance of an unestimated component is 
 DIAGNOSTIC_PERIOD_NS = 100_000_000  # 10 Hz maximum, measured in bag stamp time
 INPUT_QUEUE = 100      # messages; bag start delivers a burst of up to ~3.7 s (docs/data.md, trap 5)
 VEHICLE_INPUTS = [('/vehicle/front_bogie_velocity', VelocitySensor),
-                  ('/vehicle/rear_bogie_velocity', VelocitySensor),
-                  ('/vehicle/driver_position_cmd', DriverControllerCommand)]
+                  ('/vehicle/rear_bogie_velocity', VelocitySensor)]
+if DriverControllerCommand is not None:  # without the type ros2 bag play drops the topic anyway
+    VEHICLE_INPUTS.append(('/vehicle/driver_position_cmd', DriverControllerCommand))
 # contract §1 input; tools/eval feeds it too (bag.py: GNSS), so the core sees the same stream
 # and its t0 (start of the GNSS window, D-005) is the same in the node and in eval (D-028)
 ROVER_FIX_TOPIC = '/sensing/gnss/rover/fix'
