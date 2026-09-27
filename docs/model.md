@@ -14,7 +14,8 @@
 `gnss.init_window_s` секунд по `header.stamp`. Позиция контроллера проходит проверку
 и задаёт ускорение модели после задержки `drive.response_delay_s`. GNSS rover fix в том же окне
 даёт только курс master → rover для выбора ветки выставки (D-062). Выходы ноды — `/result/velocity` в м/с и `/result/position` в метрах,
-ENU прогона; их заполнение выполняют
+плоская сетка MGRS `37UCB` и высота над эллипсоидом (ядро считает в ENU прогона и переводит
+на выходе, D-083); их заполнение выполняют
 [`velocity_msg` и `position_msg`](../src/tram_odometry/tram_odometry/odometry_node.py).
 
 Внутренние величины `Estimate`: скорость `speed` (м/с), путь `distance` (м), положение

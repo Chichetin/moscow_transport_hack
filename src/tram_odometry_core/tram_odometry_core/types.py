@@ -89,6 +89,9 @@ class Estimate:
 class FramesParams:
     map: str
     base: str
+    grid_zone: int            # UTM zone (north) of the MGRS grid of /result/position (D-083)
+    grid_origin_e_m: float    # m, UTM easting of the corner of the grid square
+    grid_origin_n_m: float    # m, UTM northing of the corner of the grid square
 
 
 @dataclass(frozen=True)

@@ -2,8 +2,8 @@
 
 Timeline: speed (estimate, reference, both bogies as recorded), speed error, along/cross
 error, driver controller, slip flags. Map: the route of maps/route.csv, reference and
-estimate in the frame of the eval reference (ENU of `Reference.origin`), where the metrics
-compare them; its origin follows the rule of frame `map` of the tracker (D-050, #70). For
+estimate in the frame of the eval reference (the MGRS grid of /result/position, D-083), where
+the metrics compare them. For
 debugging, docs/accuracy.md and the pitch; not part of
 metrics.json (contracts §4). matplotlib is imported only in `render`: the dev image has
 no matplotlib (docker/Dockerfile, D-039).
@@ -21,7 +21,7 @@ import yaml
 from . import bag as bagmod
 from .bag import CMD, FRONT, REAR
 from .metrics import Estimates, extend_track, match_nearest, project_track
-from .reference import Reference, geodetic_to_ecef
+from .reference import Reference, enu_to_grid, geodetic_to_ecef
 
 EST, REF, FRONT_C, REAR_C, SLIP_C = '#2a78d6', '#0b0b0b', '#eb6834', '#1baf7a', '#e34948'
 GRID_C, MAP_C = '#d9d8d4', '#b8b7b2'
@@ -60,11 +60,15 @@ def enu_rotation(lat_deg: float, lon_deg: float) -> np.ndarray:
                      [np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)]])
 
 
-def route_in_ref_frame(route, origin) -> list:
-    """x/y of the map branches (ENU of the map's own origin) in the ENU of `origin`; the same
-    transform as PathTracker._set_origin, applied at the origin of the eval reference."""
+def route_in_ref_frame(route, origin, grid=None) -> list:
+    """x/y of the map branches (ENU of the map's own origin) in the frame of the reference:
+    the MGRS grid with `grid` (D-083, what `bag_series` passes), else the ENU of `origin` (the
+    transform of PathTracker._set_origin)."""
     if route is None or origin is None:
         return []
+    if grid is not None:
+        return [enu_to_grid(np.stack([b.x, b.y, b.z], axis=1), route.origin, grid)[:, :2]
+                for b in route.branches]
     rot_run = enu_rotation(*origin[:2])
     a = rot_run @ enu_rotation(*route.origin[:2]).T
     c = rot_run @ (geodetic_to_ecef(*route.origin) - geodetic_to_ecef(*origin))
@@ -102,7 +106,8 @@ def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '',
     return Series(name, bagmod.stamp(msgs[0][1]), wheel_t, wheel_v,
                   np.array([c[0] for c in cmd], float), np.array([c[1] for c in cmd], float),
                   est, ref, speed_err_t, speed_err, ref.pos_t[ri], along, cross,
-                  route_in_ref_frame(getattr(odometry, 'route', None), ref.origin), crash)
+                  route_in_ref_frame(getattr(odometry, 'route', None), ref.origin,
+                                     bagmod.output_grid()), crash)
 
 
 def _rmse(e) -> str:
