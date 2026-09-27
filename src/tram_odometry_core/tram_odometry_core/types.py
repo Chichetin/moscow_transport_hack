@@ -73,11 +73,11 @@ class Estimate:
     accel: float              # m/s^2, estimate
     accel_model: float        # m/s^2, drive-model prediction
     distance: float           # m, path since the start of the run
-    x: float                  # m, frame map
-    y: float
-    z: float                  # m, frame map (ENU up)
-    yaw: float                # rad, ENU
-    pos_cov: Tuple[float, float, float]   # var_x, var_y, cov_xy
+    x: float                  # m, MGRS grid of /result/position (D-083)
+    y: float                  # m, same grid
+    z: float                  # m, WGS84 ellipsoidal height
+    yaw: float                # rad, heading from grid x axis
+    pos_cov: Tuple[float, float, float]   # var_x, var_y, cov_xy in grid axes
     slip: SlipState
     gnss_used: bool
     filter_diagnostics: Optional[FilterDiagnostics] = None
