@@ -177,6 +177,7 @@ class PositionParams:
     heading_max_base_m: float
     base_ahead_m: float
     antenna_height_m: float
+    height_offset_max_m: float
     side_speed_mps: float
     side_min_m: float
     side_max_m: float
@@ -346,6 +347,8 @@ def _validate_base_link(position: PositionParams) -> None:
         raise ValueError('position.base_ahead_m must be nonnegative')
     if not math.isfinite(position.antenna_height_m):
         raise ValueError('position.antenna_height_m must be finite')
+    if not (position.height_offset_max_m > 0):
+        raise ValueError('position.height_offset_max_m must be positive')
     if not (0 <= position.scale_max_dev < 1):
         raise ValueError('position.scale_max_dev must satisfy 0 <= dev < 1')
     if not (position.speed_scale_prior_m > 0):

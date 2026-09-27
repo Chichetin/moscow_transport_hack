@@ -1,4 +1,4 @@
-"""Experiment #154, extension: how robust the online wheel scale 'h123' (rejected, D-087) and the
+"""Experiment #154, extension: how robust the online wheel scale 'h123' (rejected, D-088) and the
 relock alone 'h3' (the frozen candidate after it) are against 'base'.
 
 Runs (numbers only; the statistics are in wheel_scale_stats.py):
