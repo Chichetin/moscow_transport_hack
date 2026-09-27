@@ -61,11 +61,13 @@ VARIANTS = {
     # same = when the second miss is the same standstill as the pending one (it keeps the first
     # miss and never relocks): 'gate' closer than stop_snap_max_m of path (a creep in a queue,
     # review of #160); 'arc' closer than scale_min_arc_m; 'grow' the growth |y1| (q - 1) of the
-    # line within rec_k sigma of the residual; None = frozen 6853330 (only the same path)
+    # line within grow_k (default rec_k) sigma of the residual; None = frozen 6853330 (only the
+    # same path)
     'h3': dict(mode='base', recover=True, rec_scale='kf', same='gate'),
     'h3_v0': dict(mode='base', recover=True, rec_scale='kf'),
     'h3_arc': dict(mode='base', recover=True, rec_scale='kf', same='arc'),
     'h3_grow': dict(mode='base', recover=True, rec_scale='kf', same='grow'),
+    'h3_grow3': dict(mode='base', recover=True, rec_scale='kf', same='grow', grow_k=3.0),
     # the speed chain of #153 also skips the pair that starts at a relock place
     'h3_chain_from': dict(mode='base', recover=True, rec_scale='kf', same='gate', chain_from=False),
 }
@@ -287,7 +289,8 @@ class Tracker(PathTracker):
             dd1 = pend[0] - self._anchor[2]
             q = dd / dd1
             growth = abs(pend[1]) * (q - 1.0)
-            return growth <= rec_k * math.sqrt(R * (1.0 + q * q) + var0 * (1.0 - q) ** 2)
+            k = self.cfg.get('grow_k', rec_k)
+            return growth <= k * math.sqrt(R * (1.0 + q * q) + var0 * (1.0 - q) ** 2)
         return False
 
 

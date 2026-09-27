@@ -15,9 +15,16 @@ START_S = 1000.0                                  # the anchor sits 1 km along b
 WHEEL = 1.015                                     # wheels read 1.5 % long: another tram (trap 17)
 
 
-def _tracker(stops, params=PARAMS):
+class _Main(PathTracker):
+    """PathTracker of main before #154: a stop past the snap gate is always a signal."""
+
+    def _relock(self, innovation, distance, ambiguous):
+        return False
+
+
+def _tracker(stops, params=PARAMS, cls=PathTracker):
     r = _route()
-    tr = PathTracker(params, Route(origin=r.origin, branches=r.branches, stops=tuple(stops)))
+    tr = cls(params, Route(origin=r.origin, branches=r.branches, stops=tuple(stops)))
     tr.on_fix(*_lla(-START_S, 0.0, 170.0), 2, distance=0.0)
     return tr
 
@@ -340,20 +347,27 @@ def test_a_second_stop_at_the_same_path_is_not_a_second_miss():
 
 
 @pytest.mark.parametrize('from_anchor', [1000.0, 1400.0, 2000.0, 3000.0])
-@pytest.mark.parametrize('queue, creep', [(q, c) for q in (25.0, 30.0, 40.0)
-                                          for c in (0.3, 0.5, 2.0, 5.0) if q - c > 20.0])
+@pytest.mark.parametrize('queue', [25.0, 30.0, 40.0])
+@pytest.mark.parametrize('creep', [0.3, 0.5, 2.0, 5.0])
 def test_a_creep_in_a_queue_is_one_standstill(from_anchor, queue, creep):
     """Reviewer of #160: exact wheels, a queue `queue` m short of a place and a creep of
-    `creep` m in it, both past the snap gate (the pipeline sees two standstills). Both misses
-    are one place - s apart by the creep, q = 1 + creep / path: the residual y - q y1 is about
-    the creep, inside 2 sigma (5.7 m) of the line. A second stop closer than stop_snap_max_m of
-    path to the pending miss is the same standstill: no relock; the place and the next ones
-    snap exactly (main)."""
+    `creep` m in it (the pipeline sees two standstills). Both misses are one place - s apart by
+    the creep, q = 1 + creep / path: the residual y - q y1 is about the creep, inside 2 sigma
+    (5.7 m) of the line, and 6853330 relocked onto the place in the queue (on_stop
+    [F, T, F, F, F], +28.9 m at 1.4 km). A second stop closer than stop_snap_max_m of path to the
+    pending miss is the same standstill: the stops, the anchor, the path scale and the speed
+    scale are those of main; with both stops past the gate the place and the next ones snap
+    exactly."""
     places = [START_S + from_anchor + k * 500.0 for k in range(3)]
     tr = _tracker([(0, s) for s in places])
+    main = _tracker([(0, s) for s in places], cls=_Main)
     stops = [from_anchor - queue, from_anchor - queue + creep] + [s - START_S for s in places]
-    assert [tr.on_stop(d) for d in stops] == [False, False, True, True, True]
-    assert tr._state(stops[-1])[1] == pytest.approx(places[-1], abs=0.01)
+    got = [tr.on_stop(d) for d in stops]
+    assert got == [main.on_stop(d) for d in stops]
+    assert (tr._anchor, tr._scale, tr.speed_scale) == (main._anchor, main._scale, main.speed_scale)
+    if queue - creep > P.stop_snap_max_m:
+        assert got == [False, False, True, True, True]
+        assert tr._state(stops[-1])[1] == pytest.approx(places[-1], abs=0.01)
 
 
 def test_a_creep_in_a_queue_keeps_the_first_miss():
@@ -391,6 +405,28 @@ def test_a_true_scale_error_still_relocks_past_a_queue():
     stops = [1421.0, 1421.5] + [(s - START_S) * WHEEL for s in places[1:]]
     assert [tr.on_stop(d) for d in stops] == [False, False, True, True, True]
     assert abs(_arc(tr, 2000.0 * WHEEL, origin) - 2000.0) < 3.0
+
+
+@pytest.mark.parametrize('wheel', [0.975, 0.985, 1.015, 1.025])
+@pytest.mark.parametrize('creep', [0.3, 0.5, 2.0, 5.0])
+def test_a_true_scale_error_is_recovered_whatever_the_creep_at_the_first_miss(wheel, creep):
+    """Wheels 1.5-2.5 % off another tram's (trap 17), no place for 1.4 km: the tram stands at
+    the place of 2400 (a miss of 21-35 m), creeps `creep` m and stands again, then at 2600,
+    2800, 3000. The branch gets the lock back, and the creep, one standstill with the miss, does
+    not stop it. main does not (30-50 m off at 3000), unless the creep brings short wheels back
+    into the snap gate at the second standstill."""
+    places = [2400.0, 2600.0, 2800.0, 3000.0]
+    true = [places[0] - START_S, places[0] - START_S + creep] + [s - START_S for s in places[1:]]
+    errors = []
+    for cls in (PathTracker, _Main):
+        tr = _tracker([(0, s) for s in places], cls=cls)
+        origin = _anchor_xy(tr)
+        for d in true:
+            tr.on_stop(d * wheel)
+        errors.append(abs(_arc(tr, true[-1] * wheel, origin) - true[-1]))
+    assert errors[0] < 3.0
+    if abs(true[0] - wheel * true[1]) > P.stop_snap_max_m:
+        assert errors[1] > 29.0
 
 
 @pytest.mark.parametrize('ambiguous_at', [1627.04, 1640.0])

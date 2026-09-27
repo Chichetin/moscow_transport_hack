@@ -225,7 +225,9 @@ def run(mode, split, variants):
     for n in sorted(names, key=lambda n: -size[n]):
         for v in variants:
             p = d / f'{n}__{v}.json'
-            if not p.exists():
+            # a file of another cfg under the same name (h3 of 6853330 before the q ~ 1 rule of
+            # the review of #160) is stale: run it again
+            if not p.exists() or json.loads(p.read_text()).get('cfg') != allv[v]:
                 jobs.append((mode, n, v, allv[v], str(p)))
     print(f'{mode} {split}: {len(jobs)} tasks -> {d}', flush=True)
     t0 = time.time()
