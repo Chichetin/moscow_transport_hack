@@ -1,10 +1,12 @@
 """Identification of the drive model (issue #9): pure functions over per-bag samples.
 
-Model identified here (D-029 schema, D-032):
-    a = sign(n) * A(|n|, v) - (c0 + c1 v + c2 v^2) - g * grade,   n = notch(t - delay)
+Model identified here (D-029 schema, D-033):
+    a = sign(n) * A(|n|, v) - (c0 + c1 v + c2 v^2),   n = notch(t - delay)
     A = traction table for n > 0 (capped by adhesion and P/(m v)), brake table for n < 0.
-The grade term is removed from the training targets with GNSS altitude (offline only, train
-bags); online the model sees it through the map height or as a filter disturbance.
+By default the grade stays in the targets: the contract model_accel(notch, v) has no grade, so
+the tables absorb the mean grade. With use_grade the term - g * grade is removed from the
+targets using GNSS altitude (offline, train bags only), for a model that gets the grade online
+from the map height.
 """
 from __future__ import annotations
 
@@ -150,7 +152,13 @@ def fit_curve(v, y, grid, smooth=1.0, min_count=30):
     K = len(grid)
     D = np.diff(np.eye(K), 2, axis=0) if K > 2 else np.zeros((0, K))
     lhs = B.T @ B + smooth * SMOOTH_REL * len(v) / max(K, 1) * (D.T @ D) + 1e-9 * np.eye(K)
-    vals = np.linalg.solve(lhs, B.T @ y) if len(v) else np.full(K, np.nan)
+    # lstsq (SVD), not solve (LU with pivoting): same least-squares solution for this
+    # symmetric positive-definite lhs, but far less sensitive to which BLAS/LAPACK kernel
+    # a given CI runner picks -- solve() moved one node by 0.038 across two otherwise
+    # identical CI runs weeks apart (#68, D-060), always the same node and sign (ident.):
+    # a pivoting-order difference, not a random race, since single-threaded BLAS (D-060)
+    # didn't stop it recurring.
+    vals = np.linalg.lstsq(lhs, B.T @ y, rcond=None)[0] if len(v) else np.full(K, np.nan)
     counts = (B > 0.25).sum(axis=0)
     vals = np.where(counts >= min_count, vals, np.nan)
     return vals, counts

@@ -51,6 +51,10 @@ COVER_M = 5.0           # m, a fix farther than this from every branch is uncove
 EXTRA_MIN_M = 50.0      # m, shortest uncovered piece of a pass that becomes a new branch
 EXTRA_OVERLAP_M = 20.0  # m, covered track kept at both ends of a piece: joins the branches
 MAX_EXTRA = 4           # extra branches (terminal tracks) at most
+SHIFT_MAX_M = 10.0      # m, a piece never farther than this from a branch of its direction is
+                        # that branch shifted by GNSS (a pass 5 m off under a bridge), not a track (#138)
+DIR_HALF = 10           # samples (~1 s) each side: travel direction of a pass at a fix
+DIR_MIN_M = 2.0         # m, shorter displacement over the window: standing, direction unknown
 OFFSET_SMOOTH_M = 15.0  # m, moving average of the lateral correction along the branch
 
 
@@ -190,11 +194,33 @@ def _fast_steps(t: np.ndarray, xy: np.ndarray) -> np.ndarray:
     return (step > OUTLIER_M) & (step / np.maximum(np.diff(t), 1e-3) > REF_MAX_SPEED)
 
 
+def _travel_direction(xy: np.ndarray) -> np.ndarray:
+    """Unit travel direction at each fix over +-DIR_HALF samples, 0 while standing."""
+    n = len(xy)
+    idx = np.arange(n)
+    d = xy[np.minimum(idx + DIR_HALF, n - 1)] - xy[np.maximum(idx - DIR_HALF, 0)]
+    norm = np.hypot(*d.T)
+    return np.where((norm >= DIR_MIN_M)[:, None], d / np.maximum(norm, 1e-9)[:, None], 0.0)
+
+
+def _directed_offset(s: np.ndarray, poly: np.ndarray, xy: np.ndarray,
+                     heading: np.ndarray) -> np.ndarray:
+    """|lateral offset| of fixes to a branch, inf where the pass drives against it."""
+    ps, off = project(s, poly, xy)
+    i = np.clip(np.searchsorted(s, ps) - 1, 0, len(poly) - 2)
+    tangent = poly[i + 1] - poly[i]
+    against = (heading * tangent).sum(1) < 0.0
+    return np.where(against, np.inf, np.abs(off))
+
+
 def uncovered_pieces(t: np.ndarray, xy: np.ndarray, branches: list) -> list[np.ndarray]:
     """Runs of a pass farther than COVER_M from every branch, reached by driving (no GNSS
     jump at their edges or inside) and at least EXTRA_MIN_M long, with EXTRA_OVERLAP_M of
     covered track on both ends."""
-    dist = np.min([np.abs(project(s, poly, xy)[1]) for s, poly in branches], axis=0)
+    # a branch covers a fix only in its own direction: a single-ended tram never drives a
+    # branch backwards, so a parallel track of the other direction is a track of its own (#138)
+    heading = _travel_direction(xy)
+    dist = np.min([_directed_offset(s, poly, xy, heading) for s, poly in branches], axis=0)
     edges = np.flatnonzero(np.diff(np.r_[0, (dist > COVER_M).astype(int), 0]))
     fast = np.r_[_fast_steps(t, xy), False]
     cum = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(xy, axis=0).T))])
@@ -210,11 +236,19 @@ def uncovered_pieces(t: np.ndarray, xy: np.ndarray, branches: list) -> list[np.n
     return pieces
 
 
+def _shifted_branch(piece: np.ndarray, branches: list) -> bool:
+    """The piece stays within SHIFT_MAX_M of a branch of its own direction all along."""
+    heading = _travel_direction(piece)
+    near = np.min([_directed_offset(s, poly, piece, heading) for s, poly in branches], axis=0)
+    return bool(np.max(near) <= SHIFT_MAX_M)
+
+
 def add_extra_branches(branches: list, tracks: list[tuple[np.ndarray, np.ndarray]]) -> list:
     """New branches for the track the passes drive on but the branches miss (terminal tracks)."""
     branches = list(branches)
     for _ in range(MAX_EXTRA):
         pieces = [p for t, xy in tracks for p in uncovered_pieces(t, xy, branches)]
+        pieces = [p for p in pieces if not _shifted_branch(p, branches)]
         if not pieces:
             break
         ref = max(pieces, key=coverage)

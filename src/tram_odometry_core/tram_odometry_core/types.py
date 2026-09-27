@@ -73,13 +73,15 @@ class Estimate:
     accel: float              # m/s^2, estimate
     accel_model: float        # m/s^2, drive-model prediction
     distance: float           # m, path since the start of the run
-    x: float                  # m, frame map
-    y: float
-    z: float                  # m, frame map (ENU up)
-    yaw: float                # rad, ENU
-    pos_cov: Tuple[float, float, float]   # var_x, var_y, cov_xy
+    x: float                  # m, MGRS grid if absolute, local odom otherwise
+    y: float                  # m, same frame as x
+    z: float                  # m, WGS84 ellipsoidal height if absolute, 0 otherwise
+    yaw: float                # rad, heading from the frame's x axis
+    pos_cov: Tuple[float, float, float]   # var_x, var_y, cov_xy in that frame
     slip: SlipState
     gnss_used: bool
+    position_absolute: bool   # x, y, z, yaw in the MGRS grid (D-083); False: local metres of
+                              # the run with no geodetic anchor yet (no map, no fix), frame odom
     filter_diagnostics: Optional[FilterDiagnostics] = None
 
 
@@ -89,6 +91,9 @@ class Estimate:
 class FramesParams:
     map: str
     base: str
+    grid_zone: int            # UTM zone (north) of the MGRS grid of /result/position (D-083)
+    grid_origin_e_m: float    # m, UTM easting of the corner of the grid square
+    grid_origin_n_m: float    # m, UTM northing of the corner of the grid square
 
 
 @dataclass(frozen=True)
@@ -134,6 +139,15 @@ class FilterParams:
     q_bias: float
     initial_bias_var: float
     nis_gate: float
+    bias_release_speed_mps: float
+    pair_window_s: float
+    departure_slack_mps: float
+    departure_var_factor: float
+    scale_min_trust: float
+    scale_min_speed_mps: float
+    scale_max_diff_mps: float
+    scale_max_rel: float
+    scale_gain: float
 
 
 @dataclass(frozen=True)
@@ -142,6 +156,13 @@ class SlipParams:
     model_residual_threshold_mps2: float
     noise_accel_mps2: float
     noise_hold_s: float
+    freeze_min_samples: int
+    freeze_dv_mps: float
+    adhesion_window_s: float
+    adhesion_min_accel_mps2: float
+    spin_accel_mps2: float
+    skid_accel_mps2: float
+    readhesion_accel_mps2: float
 
 
 @dataclass(frozen=True)
@@ -152,6 +173,15 @@ class PositionParams:
     along_drift_frac: float
     cross_std_m: float
     fix_gate_m: float
+    heading_min_base_m: float
+    heading_max_base_m: float
+    base_ahead_m: float
+    antenna_height_m: float
+    height_offset_max_m: float
+    side_speed_mps: float
+    side_min_m: float
+    side_max_m: float
+    side_overrun_m: float
     anchor_std_m: float
     stop_speed_mps: float
     stop_min_s: float
@@ -160,6 +190,8 @@ class PositionParams:
     scale_alpha: float
     scale_max_dev: float
     scale_min_arc_m: float
+    speed_scale_prior_m: float
+    relock_sigma: float
 
 
 @dataclass(frozen=True)
@@ -281,7 +313,46 @@ def load_params(path) -> Params:
     if not (params.input.max_stamp_jump_s > 0):
         raise ValueError('input.max_stamp_jump_s must be positive')
     _validate_filter(params.filter)
+    _validate_slip(params.slip)
+    _validate_side(params.position)
+    _validate_base_link(params.position)
+    if not (math.isfinite(params.position.relock_sigma) and params.position.relock_sigma > 0):
+        raise ValueError('position.relock_sigma must be positive and finite')
     return params
+
+
+def _validate_slip(slip: SlipParams) -> None:
+    if not (0.0 < slip.adhesion_window_s <= 1.0):
+        raise ValueError('slip.adhesion_window_s must be in (0, 1] s')
+    for key in ('adhesion_min_accel_mps2', 'spin_accel_mps2', 'skid_accel_mps2'):
+        if not (getattr(slip, key) > 0.0):
+            raise ValueError(f'slip.{key} must be positive')
+    if not (slip.readhesion_accel_mps2 >= 0.0):
+        raise ValueError('slip.readhesion_accel_mps2 must be nonnegative')
+
+
+def _validate_side(position: PositionParams) -> None:
+    if not (position.side_speed_mps > 0):
+        raise ValueError('position.side_speed_mps must be positive')
+    if not (0 <= position.side_min_m <= position.side_max_m):
+        raise ValueError('position.side_min_m and side_max_m must satisfy 0 <= min <= max')
+    if not (position.side_overrun_m > 0):
+        raise ValueError('position.side_overrun_m must be positive')
+
+
+def _validate_base_link(position: PositionParams) -> None:
+    """The output point of D-077: ahead of master along the track, below the antennas; the
+    online wheel scale divides the offset, so it must stay away from 0."""
+    if not (position.base_ahead_m >= 0):
+        raise ValueError('position.base_ahead_m must be nonnegative')
+    if not math.isfinite(position.antenna_height_m):
+        raise ValueError('position.antenna_height_m must be finite')
+    if not (position.height_offset_max_m > 0):
+        raise ValueError('position.height_offset_max_m must be positive')
+    if not (0 <= position.scale_max_dev < 1):
+        raise ValueError('position.scale_max_dev must satisfy 0 <= dev < 1')
+    if not (position.speed_scale_prior_m > 0):
+        raise ValueError('position.speed_scale_prior_m must be positive')
 
 
 def _validate_filter(filt: FilterParams) -> None:
@@ -291,6 +362,19 @@ def _validate_filter(filt: FilterParams) -> None:
             raise ValueError(f'filter.{name} must be positive')
     if filt.q_bias < 0.0:
         raise ValueError('filter.q_bias must be nonnegative')
+    for name in ('bias_release_speed_mps', 'pair_window_s', 'scale_min_speed_mps',
+                 'scale_max_diff_mps'):
+        if getattr(filt, name) <= 0.0:
+            raise ValueError(f'filter.{name} must be positive')
+    if filt.departure_slack_mps < 0.0:
+        raise ValueError('filter.departure_slack_mps must be nonnegative')
+    if filt.departure_var_factor < 1.0:
+        raise ValueError('filter.departure_var_factor must be at least 1')
+    for name in ('scale_min_trust', 'scale_gain'):
+        if not 0.0 < getattr(filt, name) <= 1.0:
+            raise ValueError(f'filter.{name} must be in (0, 1]')
+    if not 0.0 < filt.scale_max_rel < 1.0:
+        raise ValueError('filter.scale_max_rel must be in (0, 1)')
 
 
 def _validate_drive(drive: DriveParams) -> None:

@@ -21,11 +21,12 @@ PARAMS_FILE = Path(__file__).resolve().parents[1] / 'config' / 'params.yaml'
 STAMP = Time(sec=1756195560, nanosec=123456789)   # float seconds would lose the nanoseconds
 
 
-def _estimate(t=1756195560.123456789):
+def _estimate(t=1756195560.123456789, position_absolute=True):
     return Estimate(t=t, speed=7.5, speed_var=0.04, accel=0.3, accel_model=0.25,
                     distance=120.0, x=-35.0, y=12.5, z=3.25, yaw=math.pi / 3,
                     pos_cov=(4.0, 9.0, 1.5),
-                    slip=SlipState(1.0, 1.0, False, False, None), gnss_used=False)
+                    slip=SlipState(1.0, 1.0, False, False, None), gnss_used=False,
+                    position_absolute=position_absolute)
 
 
 def _wheel(v=36.0):
@@ -73,6 +74,32 @@ def test_position_message_follows_contract():
     assert min(c[14], c[21], c[28], c[35]) >= on.UNKNOWN_VAR and -1.0 not in list(c)
     assert m.twist.twist.linear.x == 7.5 and m.twist.covariance[0] == 0.04
     assert m.twist.covariance[7] >= on.UNKNOWN_VAR
+
+
+def test_local_position_is_published_in_odom_not_in_the_grid():
+    """No geodetic anchor yet (no map, no fix): local metres go out in `odom` (REP-105), never
+    under `map`, which means the MGRS grid (D-083, #162)."""
+    params = load_params(PARAMS_FILE)
+    assert on.position_msg(_estimate(position_absolute=False), STAMP, params).header.frame_id == 'odom'
+    assert on.position_msg(_estimate(), STAMP, params).header.frame_id == params.frames.map
+
+
+def test_node_publishes_no_position_until_the_first_fix(node, monkeypatch):
+    """The whole node: before a master fix there is no position to publish -- not even in
+    `odom`, a judge may ignore frame_id (#163, D-086); from the fix on it is the grid (`map`)."""
+    node.odometry = on.Odometry(node.params)             # no route: no anchor until a fix
+    frames = []
+    monkeypatch.setattr(node.pub_position, 'publish', lambda m: frames.append(m.header.frame_id))
+    node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
+    fix = NavSatFix()
+    fix.header.stamp = Time(sec=STAMP.sec, nanosec=STAMP.nanosec + 1000)
+    fix.latitude, fix.longitude, fix.altitude = 55.8088325462547, 37.4602768500852, 170.0
+    node.on_input('/sensing/gnss/master/fix', fix)
+    w = _wheel(36.0)
+    w.header.stamp = Time(sec=STAMP.sec, nanosec=STAMP.nanosec + 2000)
+    node.on_input('/vehicle/front_bogie_velocity', w)
+    assert node.errors == 0
+    assert frames == [node.params.frames.map] * len(frames) and len(frames) >= 1
 
 
 def test_velocity_message_follows_contract():
@@ -155,7 +182,45 @@ def _stamp(sec, nanosec=0):
     return Time(sec=sec, nanosec=nanosec)
 
 
+def _window_fix(node, stamp=STAMP):
+    """A master fix at the start of the run: /result/position is published only once the
+    first valid fix gives an absolute position (#163, D-086)."""
+    fix = NavSatFix()
+    fix.header.stamp = stamp
+    fix.status.status = 2
+    fix.latitude, fix.longitude, fix.altitude = 55.75, 37.62, 150.0
+    node.on_input('/sensing/gnss/master/fix', fix)
+
+
+def test_real_core_without_gnss_publishes_odom_after_the_window(node, monkeypatch):
+    """A bag without GNSS (jury_layouts plays one): no fix ever. Inside the GNSS window only the
+    speed goes out; after it the local line goes out in odom, /result/position is never silent
+    for the whole run (#163, D-086)."""
+    frames = []
+    monkeypatch.setattr(node.pub_position, 'publish', lambda m: frames.append(m.header.frame_id))
+    node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
+    assert frames == []
+    later = _wheel(36.0)
+    later.header.stamp = _stamp(STAMP.sec + int(node.params.gnss.init_window_s) + 1, STAMP.nanosec)
+    node.on_input('/vehicle/front_bogie_velocity', later)
+    assert frames == ['odom'] and node.errors == 0
+
+
+def test_real_core_with_map_publishes_only_speed_before_the_first_fix(node, monkeypatch):
+    """#163: with the map, before any master fix only the map's origin is known, not where the
+    tram is: the speed goes out, the position does not; the first fix starts it."""
+    sent = _capture(node, monkeypatch)
+    node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
+    assert [k for k, _ in sent] == ['v']
+    _window_fix(node, _stamp(STAMP.sec, STAMP.nanosec + 10_000_000))
+    w = _wheel(36.0)
+    w.header.stamp = _stamp(STAMP.sec, STAMP.nanosec + 20_000_000)
+    node.on_input('/vehicle/front_bogie_velocity', w)
+    assert [k for k, _ in sent][-2:] == ['v', 'p']
+
+
 def test_real_core_converts_kmh_to_mps_once(node, monkeypatch):
+    _window_fix(node)
     sent = _capture(node, monkeypatch)
     node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
     p = node.params
@@ -175,6 +240,7 @@ def test_real_core_drops_nan_wheel_without_publishing(node, monkeypatch):
 
 
 def test_real_core_ignores_gnss_after_window_through_the_node(node, monkeypatch):
+    _window_fix(node)
     sent = _capture(node, monkeypatch)
     t0 = STAMP.sec
     w = _wheel(36.0)
@@ -194,8 +260,10 @@ def test_real_core_ignores_gnss_after_window_through_the_node(node, monkeypatch)
     w2 = _wheel(36.0)
     w2.header.stamp = _stamp(late, 50_000_000)
     node.on_input('/vehicle/front_bogie_velocity', w2)
-    q = sent[-1][1].pose.pose.orientation
-    assert sent[-1][0] == 'p' and q.z == 0.0 and q.w == 1.0    # yaw stayed 0: GNSS not used
+    q, q0 = sent[-1][1].pose.pose.orientation, sent[1][1].pose.pose.orientation
+    # yaw stayed that of the start (ENU east turned into the MGRS grid, D-083): GNSS not used
+    assert sent[-1][0] == 'p' and (q.z, q.w) == pytest.approx((q0.z, q0.w), abs=1e-6)
+    assert abs(math.atan2(2 * q.w * q.z, 1 - 2 * q.z ** 2)) < 0.05    # not north (1.57)
     assert len(sent) == 4                                       # GNSS inputs publish nothing
 
 
@@ -215,7 +283,25 @@ def test_diagnostics_reports_slip_and_input_age_with_input_stamp(node, monkeypat
                     'adhesion_est': 'unknown', 'wheel_scale_front': '1.0',
                     'wheel_scale_rear': '1.0'}
     assert inputs == {'front_age_s': '0.0', 'rear_age_s': 'unknown',
-                      'cmd_age_s': 'unknown', 'gnss_used': 'false'}
+                      'cmd_age_s': 'unknown', 'gnss_used': 'false',
+                      'mode': 'one_bogie', 'model_only_s': '0.0'}
+
+
+def test_diagnostics_mode_names_wheels_one_bogie_and_model_only(node, monkeypatch):
+    sent = []
+    monkeypatch.setattr(node.pub_diagnostics, 'publish', sent.append)
+    node.on_input('/vehicle/front_bogie_velocity', _wheel())
+    rear = _wheel()
+    rear.header.stamp = _stamp(STAMP.sec, STAMP.nanosec + 100_000_000)
+    node.on_input('/vehicle/rear_bogie_velocity', rear)
+    late = node.params.input.stale_timeout_s + 2.0
+    cmd = DriverControllerCommand()
+    cmd.header.stamp = _stamp(STAMP.sec + int(late), STAMP.nanosec)
+    node.on_input('/vehicle/driver_position_cmd', cmd)
+    values = [{v.key: v.value for v in m.status[1].values} for m in sent]
+    assert [v['mode'] for v in values] == ['one_bogie', 'wheels', 'model_only']
+    assert values[1]['model_only_s'] == '0.0'
+    assert float(values[2]['model_only_s']) == pytest.approx(int(late) - 0.1)
 
 
 def test_diagnostics_rate_and_warning_for_slipping_bogie(node, monkeypatch):
@@ -253,6 +339,7 @@ def test_empty_zero_stamp_and_nonfinite_output_do_not_publish(node, monkeypatch)
 def test_controller_continues_prediction_during_wheel_silence(node, monkeypatch):
     """Trap 7: a bogie silent for 73 s while the controller keeps talking (here every 5 s,
     within input.max_stamp_jump_s, #77): every command publishes on the model prediction."""
+    _window_fix(node)
     sent = _capture(node, monkeypatch)
     diagnostics = []
     monkeypatch.setattr(node.pub_diagnostics, 'publish', diagnostics.append)
@@ -270,6 +357,7 @@ def test_controller_continues_prediction_during_wheel_silence(node, monkeypatch)
     assert sent[-1][1].pose.pose.position.x > sent[1][1].pose.pose.position.x
     ages = {v.key: v.value for v in diagnostics[-1].status[1].values}
     assert ages['front_age_s'] == '73.0'
+    assert ages['mode'] == 'model_only' and ages['model_only_s'] == '73.0'
     assert ages['cmd_age_s'] == '0.0'
     assert diagnostics[-1].status[1].level == DiagnosticStatus.WARN
     node.on_input('/vehicle/driver_position_cmd', cmd)  # repeated stamp is dropped
@@ -286,6 +374,7 @@ def test_diagnostics_marks_missing_bogies_on_controller_start(node, monkeypatch)
     assert sent[0].status[1].level == DiagnosticStatus.WARN
     values = {v.key: v.value for v in sent[0].status[1].values}
     assert values['front_age_s'] == values['rear_age_s'] == 'unknown'
+    assert values['mode'] == 'model_only' and values['model_only_s'] == 'unknown'
 
 
 def test_diagnostics_inputs_ok_when_fresh_and_warn_after_stale_timeout(node, monkeypatch):

@@ -41,6 +41,17 @@ class Estimates:
     speed: np.ndarray       # (N,) m/s
     pos: np.ndarray         # (N, 3) m, frame map; z as published (0 until the model has one)
     slip: np.ndarray        # (N,) bool, slip_front or slip_rear
+    absolute: np.ndarray | None = None   # (N,) bool, Estimate.position_absolute (#162); None:
+                                         # all True. Local positions are not in the grid of the
+                                         # reference: speed and slip use them, position does not
+
+    def __post_init__(self):
+        if self.absolute is None:
+            self.absolute = np.ones(len(self.t), bool)
+
+    def select(self, keep: np.ndarray) -> 'Estimates':
+        return Estimates(self.t[keep], self.speed[keep], self.pos[keep], self.slip[keep],
+                         self.absolute[keep])
 
 
 def match_nearest(ref_t: np.ndarray, est_t: np.ndarray, tol: float = MATCH_TOL_S):
@@ -145,7 +156,9 @@ def bag_metrics(ref: Reference, est: Estimates) -> dict:
             if sel.any():
                 m[f'speed_bias_{name}'] = float(np.mean(err[sel]))
 
-    ri, ei = match_nearest(ref.pos_t, est.t)
+    grid = np.nonzero(est.absolute)[0]      # positions in the grid only (#162)
+    ri, ei = match_nearest(ref.pos_t, est.t[grid])
+    ei = grid[ei]
     if len(ri):
         ref_xyz, est_xyz = ref.pos[ri], est.pos[ei]
         s_est, cross = project_track(*extend_track(ref.poly, ref.poly_s), est_xyz[:, :2], ref.pos_t[ri],

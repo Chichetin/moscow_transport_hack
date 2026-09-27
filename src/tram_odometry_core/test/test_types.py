@@ -1,4 +1,5 @@
 import dataclasses
+import math
 from pathlib import Path
 
 import pytest
@@ -101,7 +102,7 @@ def test_estimate_fields_per_contract():
     names = [f.name for f in dataclasses.fields(T.Estimate)]
     assert names == ['t', 'speed', 'speed_var', 'accel', 'accel_model', 'distance',
                      'x', 'y', 'z', 'yaw', 'pos_cov', 'slip', 'gnss_used',
-                     'filter_diagnostics']
+                     'position_absolute', 'filter_diagnostics']
     names = [f.name for f in dataclasses.fields(T.SlipState)]
     assert names == ['front_trust', 'rear_trust', 'slip_front', 'slip_rear', 'adhesion_est']
 
@@ -150,4 +151,47 @@ def test_load_params_wrong_layout_raises(tmp_path):
 def test_load_params_rejects_invalid_drive_model(tmp_path, change, field):
     f = _write(tmp_path, lambda r: change(r['drive']))
     with pytest.raises(ValueError, match=field):
+        T.load_params(f)
+
+
+@pytest.mark.parametrize('bad', [0.0, -1.0])   # inf is a TypeError of the loader already
+def test_load_params_rejects_invalid_speed_scale_prior(tmp_path, bad):
+    f = _write(tmp_path, lambda r: r['position'].update(speed_scale_prior_m=bad))
+    with pytest.raises(ValueError, match='speed_scale_prior_m'):
+        T.load_params(f)
+
+
+@pytest.mark.parametrize('bad', [0.0, -1.0])
+def test_load_params_rejects_invalid_relock_sigma(tmp_path, bad):
+    f = _write(tmp_path, lambda r: r['position'].update(relock_sigma=bad))
+    with pytest.raises(ValueError, match='relock_sigma'):
+        T.load_params(f)
+
+
+@pytest.mark.parametrize('bad', [math.inf, math.nan])
+def test_relock_sigma_must_be_finite(tmp_path, bad, monkeypatch):
+    """inf would accept any pair of misses as a line. The loader already refuses a non-finite
+    float (TypeError); the check of the key refuses it on its own too."""
+    f = _write(tmp_path, lambda r: r['position'].update(relock_sigma=bad))
+    with pytest.raises(TypeError, match='relock_sigma'):
+        T.load_params(f)
+    params = T.load_params(PARAMS_YAML)
+    bad_params = dataclasses.replace(
+        params, position=dataclasses.replace(params.position, relock_sigma=bad))
+    monkeypatch.setattr(T, '_build', lambda cls, raw, path: bad_params)
+    with pytest.raises(ValueError, match='relock_sigma'):
+        T.load_params(PARAMS_YAML)
+
+
+@pytest.mark.parametrize('key,bad', [
+    ('adhesion_window_s', 0.0),
+    ('adhesion_window_s', 1.1),
+    ('adhesion_min_accel_mps2', 0.0),
+    ('spin_accel_mps2', -1.0),
+    ('skid_accel_mps2', 0.0),
+    ('readhesion_accel_mps2', -0.1),
+])
+def test_load_params_rejects_invalid_adhesion_setting(tmp_path, key, bad):
+    f = _write(tmp_path, lambda r: r['slip'].update({key: bad}))
+    with pytest.raises(ValueError, match=key):
         T.load_params(f)

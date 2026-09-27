@@ -39,12 +39,19 @@ def _run(odo, events):
     return out
 
 
+# an exact non-zero repeat while the drive model changes the speed by more than
+# slip.freeze_dv_mps is a frozen sensor (#144): real readings under traction or brake never do
+# that, so steady speeds here are dithered by this share on every other sample (0 stays 0)
+DITHER = 1e-9
+
+
 def _cruise(odo, kmh, t_from, t_to, notch, step=0.1):
     """Both bogies at `kmh`, controller at `notch`, every `step` s."""
-    t = t_from
+    t, k = t_from, 0
     while t < t_to - 1e-9:
-        _run(odo, [(t, FRONT, kmh), (t, REAR, kmh), (t, CMD, notch), (t + step / 2, CMD, notch)])
-        t += step
+        v = kmh * (1.0 + DITHER * (k % 2))
+        _run(odo, [(t, FRONT, v), (t, REAR, v), (t, CMD, notch), (t + step / 2, CMD, notch)])
+        t, k = t + step, k + 1
     return t
 
 
@@ -130,19 +137,38 @@ def test_command_history_is_bounded():
 
 def test_wheels_lagging_behind_the_controller_are_still_used():
     """docs/data.md trap 5: wheel stamps can trail the controller by seconds; a late wheel
-    sample is a measurement, not silence — on wheel and on controller events alike."""
+    sample is a measurement, not silence — on wheel and on controller events alike. The
+    state runs at the controller's time; an output stamped with the late wheel carries the
+    speed at the wheel's stamp (#105), not the speed 1 s later."""
     for use_model in (True, False):
         params = replace(PARAMS, drive=replace(PARAMS.drive, use_model=use_model))
         odo = Odometry(params)
         on_cmd, on_wheel = [], []
         for k in range(40):                              # 4 s, controller 1.0 s ahead
             t = T0 + 0.1 * k
-            on_cmd.append(odo.step((CMD, _cmd(t + 1.0, 10))))
-            on_wheel.append(odo.step((FRONT, _wheel(t, 36.0))))
-            odo.step((REAR, _wheel(t, 36.0)))
-        for est in on_cmd[10:] + on_wheel[10:]:
-            assert 9.5 < est.speed < 11.5, use_model
+            v = 5.0 + 0.05 * k                           # accelerating at 0.5 m/s^2
+            on_cmd.append((v + 0.5, odo.step((CMD, _cmd(t + 1.0, 10)))))
+            on_wheel.append((t, v, odo.step((FRONT, _wheel(t, v * 3.6)))))
+            odo.step((REAR, _wheel(t, v * 3.6)))
+        for t, v, est in on_wheel[20:]:
+            assert est.t == pytest.approx(t, abs=1e-6)
+            assert est.speed == pytest.approx(v, abs=0.1), use_model
+        for v, est in on_cmd[20:]:
+            assert est.speed == pytest.approx(v, abs=0.5), use_model
             assert (est.slip.front_trust, est.slip.rear_trust) == (1.0, 1.0), use_model
+
+
+def test_speed_at_the_stamp_of_a_late_wheel_is_never_negative():
+    # trap 5 at a start from rest: the controller 3.7 s ahead at full traction, the wheels
+    # just starting; the speed moved back 3.7 s along the acceleration would be below 0
+    odo = Odometry(PARAMS)
+    for k in range(60):
+        t = T0 + 0.1 * k
+        v = max(0.0, 1.0 * (0.1 * k - 3.0))
+        odo.step((CMD, _cmd(t + 3.7, 15)))
+        for topic in (FRONT, REAR):
+            est = odo.step((topic, _wheel(t, v * 3.6)))
+            assert est is not None and est.speed >= 0.0
 
 
 @pytest.mark.parametrize('alive', [FRONT, REAR])
@@ -153,7 +179,7 @@ def test_one_silent_bogie_with_controller_events_in_between(alive):
     _cruise(odo, 36.0, T0, T0 + 1.0, notch=10)
     for k in range(50):                                  # 5 s, only one bogie talks
         t = T0 + 1.0 + 0.1 * k
-        odo.step((alive, _wheel(t, 36.0)))
+        odo.step((alive, _wheel(t, 36.0 * (1.0 + DITHER * (k % 2)))))
         est = odo.step((CMD, _cmd(t + 0.05, 10)))
         if k > 6:
             assert est.speed == pytest.approx(10.0, abs=0.2)
@@ -195,3 +221,77 @@ def test_accel_model_changes_which_bogie_the_detector_blames():
         results[use_model] = (est.slip.front_trust, est.slip.rear_trust)
     assert results[False] == (0.0, 1.0)                  # a = 0: front is the outlier
     assert results[True] == (1.0, 0.0)                   # brake model: rear is the outlier
+
+
+@pytest.mark.parametrize('notch', [-5, -15])
+@pytest.mark.parametrize('lag', [1.0, 3.7])
+def test_late_wheel_at_rest_under_brake_reads_standstill(notch, lag):
+    """#105 review: at rest under brake the filter acceleration is negative (the drive model
+    brakes at v = 0) while the state is held at 0. Moving a late wheel's output back along
+    that acceleration would publish |a| * lag of phantom speed; the car was standing."""
+    assert model_accel(notch, 0.0, PARAMS) < 0.0
+    odo = Odometry(PARAMS)
+    worst = 0.0
+    for k in range(200):
+        t = T0 + 0.1 * k
+        odo.step((CMD, _cmd(t + lag, notch)))
+        for topic in (FRONT, REAR):
+            est = odo.step((topic, _wheel(t, 0.0)))
+            assert est is not None
+            worst = max(worst, est.speed)    # from the first message: standing since start
+    assert worst < PARAMS.position.stop_speed_mps
+    assert worst == 0.0                      # not even the neutral drag moved back
+
+
+@pytest.mark.parametrize('lag', [1.0, 3.7])
+def test_late_wheel_braking_to_a_stop_keeps_its_own_speed(lag):
+    """Braking to a stop with the controller ahead: before the state reaches 0 the late
+    wheel still carries the speed at its own stamp, and after the car stands it reads 0."""
+    odo = Odometry(PARAMS)
+    a = model_accel(-15, 5.0, PARAMS)
+    for k in range(120):
+        t = T0 + 0.1 * k
+        v = max(0.0, 8.0 + a * 0.1 * k)
+        odo.step((CMD, _cmd(t + lag, -15)))
+        for topic in (FRONT, REAR):
+            est = odo.step((topic, _wheel(t, v * 3.6)))
+        if k > 40:
+            assert est.speed == pytest.approx(v, abs=0.6), (k, v)
+    assert est.speed < PARAMS.position.stop_speed_mps
+
+
+
+def test_late_wheel_after_the_state_braked_to_zero_on_prediction():
+    """The wheels fall silent while braking at 2 m/s, the controller runs 8 s ahead and the
+    state reaches 0 on the prediction in between. A late zero wheel stamped before that
+    moment is published on the state's braking line, moved back from where it crossed 0
+    (t + v / -a), not from the latest state time 8 s later."""
+    odo = Odometry(PARAMS)
+    t = _cruise(odo, 7.2, T0, T0 + 2.0, notch=-15)     # 2 m/s under brake
+    v0, _, accel = odo._filter.state()
+    assert accel < 0.0
+    assert odo.step((CMD, _cmd(t + 8.0, -15))).speed == 0.0
+    t_cross = t + v0 / -accel
+    est = odo.step((FRONT, _wheel(t_cross - 1.0, 0.0)))
+    assert est.speed == pytest.approx(-accel, abs=0.1)
+    assert odo.step((REAR, _wheel(t_cross + 0.1, 0.0))).speed == 0.0
+
+
+def test_frozen_bogies_under_traction_hand_the_speed_to_the_model_and_come_back():
+    """#144 through Odometry.step: both bogies repeat 18 km/h exactly while traction 10 pulls:
+    no trust, both flagged, the speed follows the drive model; the first changed reading
+    brings both back."""
+    odo = Odometry(PARAMS)
+    t = _cruise(odo, 18.0, T0, T0 + 2.0, notch=10)       # 5 m/s, honest (dithered) readings
+    v0 = odo.step((CMD, _cmd(t, 10))).speed
+    last = None
+    for k in range(20):                                   # 2 s frozen at exactly 18 km/h
+        last = _run(odo, [(t + 0.1 * k, FRONT, 18.0), (t + 0.1 * k, REAR, 18.0),
+                          (t + 0.1 * k + 0.05, CMD, 10)])[-1]
+    assert (last.slip.front_trust, last.slip.rear_trust) == (0.0, 0.0)
+    assert last.slip.slip_front and last.slip.slip_rear
+    assert last.speed > v0 + 0.2              # accelerating on the model, not held at 5 m/s
+    t += 2.0
+    back = _run(odo, [(t, FRONT, 18.1), (t, REAR, 18.1)])[-1]
+    assert (back.slip.front_trust, back.slip.rear_trust) == (1.0, 1.0)
+    assert not back.slip.slip_front and not back.slip.slip_rear

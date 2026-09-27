@@ -56,6 +56,13 @@ def _f(v, fmt='{:.1f}'):
     return '—' if v is None else fmt.format(v)
 
 
+def ensure_utf8_stdout() -> None:
+    """Console codepage must not crash the report on its own ✅/❌ marks (#126, same
+    class of bug as #124 in tools/submission/check_submission.py)."""
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
+
 def table(res: dict) -> str:
     lat, rate, r, v = res['latency'], res['rate'], res['resources'], res['verdict']
     mark = {True: '✅', False: '❌', None: '—'}
@@ -77,6 +84,7 @@ def table(res: dict) -> str:
 
 
 def main(argv=None) -> int:
+    ensure_utf8_stdout()
     ap = argparse.ArgumentParser(prog='tram_stand')
     ap.add_argument('stand_dir', type=Path, help='out/stand/<bag>: record/, resources.csv')
     args = ap.parse_args(argv)

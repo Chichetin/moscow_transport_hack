@@ -246,3 +246,190 @@ def test_relative_wheel_scale_learned_before_one_bogie_gap():
         filt.predict(t, 0.0)
         filt.update(wheel(t, 10.1, 'front'), 1.0)
     assert filt.state()[0] == pytest.approx(10.0, abs=0.03)
+
+
+@pytest.mark.parametrize('gap_windows,stops', [(0.5, True), (2.0, False)])
+def test_zero_pair_confirms_a_stop_only_within_the_pair_window(gap_windows, stops):
+    window = PARAMS.filter.pair_window_s
+    filt = initialized()
+    filt.update(wheel(0.1, 0.0, 'front'), 0.0)
+    filt.update(wheel(0.1 + gap_windows * window, 0.0, 'rear'), 1.0)
+    assert (filt.state()[0] < 0.1) is stops
+
+
+def test_relative_scale_moves_by_the_gain_per_pair():
+    filt = SpeedFilter(PARAMS)
+    filt.predict(0.0, 0.0)
+    filt.update(wheel(0.0, 10.1, 'front'), 1.0)
+    filt.update(wheel(0.0, 9.9, 'rear'), 1.0)
+    target = (9.9 - 10.1) / (9.9 + 10.1)
+    assert filt._scale_delta == pytest.approx(PARAMS.filter.scale_gain * target)
+
+
+@pytest.mark.parametrize('front,rear,rear_trust', [
+    (10.1, 9.9, PARAMS.filter.scale_min_trust - 0.1),                     # distrusted bogie
+    (PARAMS.filter.scale_min_speed_mps - 0.1, PARAMS.filter.scale_min_speed_mps, 1.0),  # slow
+    (10.0, 10.0 + PARAMS.filter.scale_max_diff_mps + 0.1, 1.0),           # slip, not scale
+])
+def test_pair_unfit_for_scale_leaves_it_unchanged(front, rear, rear_trust):
+    filt = SpeedFilter(PARAMS)
+    filt.predict(0.0, 0.0)
+    filt.update(wheel(0.0, front, 'front'), 1.0)
+    filt.update(wheel(0.0, rear, 'rear'), rear_trust)
+    assert filt._scale_delta == 0.0
+
+
+def test_relative_scale_is_limited():
+    filt = SpeedFilter(PARAMS)
+    for k in range(2000):
+        t = k * 0.1
+        filt.predict(t, 0.0)
+        filt.update(wheel(t, 2.0, 'front'), 1.0)
+        filt.update(wheel(t, 2.45, 'rear'), 1.0)
+    assert filt._scale_delta == pytest.approx(PARAMS.filter.scale_max_rel, abs=1e-6)
+
+
+# --- #105: the two bogies are measured as a pair --------------------------------------------
+
+def resting():
+    """Both bogies at 0, the drive model decelerating (no traction), for 1 s."""
+    filt = SpeedFilter(PARAMS)
+    for k in range(11):
+        t = k / 10.0
+        filt.predict(t, -0.1)
+        filt.update(wheel(t, 0.0, 'front'), 1.0)
+        filt.update(wheel(t + 0.03, 0.0, 'rear'), 1.0)
+    assert filt.state()[0] == 0.0
+    return filt
+
+
+def test_antiphase_pair_that_the_detector_distrusts_is_fused_as_its_mean():
+    # the detector gives 0.5/0.5 to disagreeing bogies with opposite jumps (D-054): the
+    # second of the pair must not be rejected by NIS after the first pulled the state
+    filt = initialized()
+    for k in range(1, 6):
+        t = k / 10.0
+        filt.predict(t, 0.0)
+        filt.update(wheel(t, 10.8, 'front'), 0.5)
+        filt.update(wheel(t, 9.2, 'rear'), 0.5)
+        assert filt.diagnostics().accepted
+    assert filt.state()[0] == pytest.approx(10.0, abs=0.1)
+
+
+def test_partner_of_the_mean_is_brought_to_the_sample_stamp():
+    # accelerating at 2 m/s^2 with antiphase noise, the rear 0.05 s ahead of the front: the
+    # older reading is moved on by the acceleration, or the mean lags by a * dt / 2
+    filt = SpeedFilter(PARAMS)
+    for k in range(40):
+        t = k / 10.0
+        filt.predict(t, 2.0)
+        filt.update(wheel(t, 10.0 + 2.0 * t - 0.8, 'rear'), 0.5)
+        filt.predict(t + 0.05, 2.0)
+        filt.update(wheel(t + 0.05, 10.0 + 2.0 * (t + 0.05) + 0.8, 'front'), 0.5)
+    assert filt.state()[0] == pytest.approx(10.0 + 2.0 * 3.95, abs=0.03)
+
+
+def test_silent_partner_is_left_out_of_the_mean():
+    # the rear falls silent (30639: up to 73 s); past input.stale_timeout_s its last reading
+    # is no evidence and the front alone is measured
+    filt = initialized()
+    filt.update(wheel(0.0, 10.0, 'rear'), 1.0)
+    for k in range(1, 21):
+        t = k / 10.0
+        filt.predict(t, 0.0)
+        filt.update(wheel(t, 10.6, 'front'), 0.5)
+    assert filt.state()[0] == pytest.approx(10.6, abs=0.05)
+
+
+def test_untrusted_partner_is_left_out_of_the_mean():
+    filt = initialized()
+    filt.update(wheel(0.0, 10.0, 'rear'), 1.0)
+    filt.update(wheel(0.1, 0.0, 'rear'), 0.0)          # the detector drops the rear now
+    filt.predict(0.1, 0.0)
+    filt.update(wheel(0.1, 10.4, 'front'), 0.5)
+    assert filt.state()[0] > 10.1                      # not pulled toward the rear's 10.0
+
+
+def test_a_jumping_bogie_does_not_start_a_car_standing_without_traction():
+    filt = resting()
+    for k in range(11, 21):                            # front jumps to 0.8 m/s, rear stays 0
+        t = k / 10.0
+        filt.predict(t, -0.1)
+        filt.update(wheel(t, 0.8, 'front'), 1.0)
+        filt.update(wheel(t + 0.03, 0.0, 'rear'), 1.0)
+    assert filt.state()[0] < 0.05
+
+
+def test_a_smooth_rise_of_one_bogie_starts_the_car_without_traction_in_the_model():
+    # a start with the notch still 0 (response delay) or read as brake, the rear stuck at 0
+    # (trap 8, 30639): the front rising at 1 m/s^2 is no jump, the car is not held at 0
+    filt = resting()
+    for k in range(11, 21):
+        t = k / 10.0
+        filt.predict(t, -0.1)
+        filt.update(wheel(t, 1.0 * (t - 1.0), 'front'), 1.0)
+        filt.update(wheel(t + 0.03, 0.0, 'rear'), 1.0)
+    assert filt.state()[0] > 0.3
+
+
+def test_both_bogies_start_the_car_even_without_traction_from_the_model():
+    # a controller that says brake while both bogies move (wrong notch) must not lock the car
+    filt = resting()
+    for k in range(11, 41):
+        t = k / 10.0
+        v = 0.5 * (t - 1.0)
+        filt.predict(t, -0.1)
+        filt.update(wheel(t, v, 'front'), 1.0)
+        filt.update(wheel(t + 0.03, v, 'rear'), 1.0)
+    assert filt.state()[0] == pytest.approx(1.5, abs=0.2)
+
+
+def test_one_bogie_starts_the_car_with_traction():
+    # trap 8: the rear stuck at 0 while the drive pulls; the detector blames it (trust 0)
+    filt = resting()
+    for k in range(11, 21):
+        t = k / 10.0
+        filt.predict(t, 0.5)
+        filt.update(wheel(t, 0.5 * (t - 1.0), 'front'), 1.0)
+        filt.update(wheel(t + 0.03, 0.0, 'rear'), 0.0)
+    assert filt.state()[0] == pytest.approx(0.5, abs=0.1)
+
+
+def test_single_live_bogie_starts_the_car_when_the_other_is_silent():
+    # 30639: one bogie silent for up to 73 s; the live one is all there is (single-bogie mode)
+    filt = resting()
+    for k in range(11, 41):
+        t = k / 10.0
+        filt.predict(t, -0.1)
+        filt.update(wheel(t, 0.5 * (t - 1.0), 'front'), 1.0)
+    assert filt.state()[0] == pytest.approx(1.5, abs=0.2)
+
+
+def test_an_untrusted_then_trusted_sample_with_the_same_stamp_does_not_divide_by_zero():
+    # review of #105: the jump check divides by the time since the bogie's last raw reading;
+    # an untrusted sample does not advance the per-bogie stamp gate, so a trusted one with
+    # the same stamp may follow (direct SpeedFilter.update, not reachable via preprocess)
+    filt = initialized()
+    filt.predict(0.1, 0.0)
+    filt.update(wheel(0.1, 10.0), 0.0)
+    filt.update(wheel(0.1, 10.0), 1.0)
+    speed, _, _ = filt.state()
+    assert speed == pytest.approx(10.0)
+
+
+def test_restart_takes_the_car_speed_and_forgets_the_bias():
+    # a slide of the whole car (#156): the state followed slipping bogies and learned a bias
+    f = initialized()
+    f._x[1] = -0.6
+    f.restart(7.2)
+    speed, var, accel = f.state()
+    assert speed == pytest.approx(7.2)
+    assert accel == pytest.approx(f._model_accel)
+    assert var >= PARAMS.slip.front_rear_threshold_mps ** 2
+    assert f._cov[0, 1] == 0.0
+
+
+def test_restart_before_the_first_wheel_is_ignored():
+    f = SpeedFilter(PARAMS)
+    f.restart(5.0)
+    assert f.state()[0] == 0.0

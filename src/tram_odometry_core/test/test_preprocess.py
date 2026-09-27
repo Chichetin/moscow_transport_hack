@@ -5,7 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from tram_odometry_core.preprocess import CMD_TOPIC, FRONT_TOPIC, REAR_TOPIC, Preprocessor
+from tram_odometry_core.preprocess import (CMD_TOPIC, FRONT_TOPIC, REAR_TOPIC, ROVER_FIX_TOPIC,
+                                          Preprocessor)
 from tram_odometry_core.types import CommandSample, GnssFix, GnssVel, WheelSample, load_params
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -14,6 +15,9 @@ MASTER_FIX = PARAMS.gnss.topic_fix
 MASTER_VEL = PARAMS.gnss.topic_vel
 KMH_36 = 36.0  # = 10 m/s
 ACCEL_LIMIT = PARAMS.input.max_wheel_accel_mps2
+# km/h: an exact repeat while the drive model changes the speed by more than slip.freeze_dv_mps
+# is a frozen sensor (#144), so steady speeds through Odometry are dithered by this
+DITHER_KMH = 1e-9
 
 
 def _hdr(t):
@@ -208,6 +212,17 @@ def test_gnss_fix_after_window_dropped():
     assert pre.accept(gnss_fix(t)) is None
 
 
+def test_rover_fix_is_a_rover_sample_in_the_window_only():
+    """The rover gives the heading at a standstill (docs/data.md, trap 15), window only (D-005)."""
+    pre = Preprocessor(PARAMS)
+    pre.accept(wheel(FRONT_TOPIC, 0.0, KMH_36))
+    topic, msg = gnss_fix(1.0, status=2)
+    sample = pre.accept((ROVER_FIX_TOPIC, msg))
+    assert isinstance(sample, GnssFix) and sample.antenna == 'rover' and sample.status == 2
+    topic, msg = gnss_fix(PARAMS.gnss.init_window_s + 0.1)
+    assert pre.accept((ROVER_FIX_TOPIC, msg)) is None
+
+
 def test_gnss_vel_after_window_dropped():
     pre = Preprocessor(PARAMS)
     pre.accept(wheel(FRONT_TOPIC, 0.0, KMH_36))
@@ -362,13 +377,13 @@ def test_odometry_keeps_publishing_after_a_future_command():
     t0 = 1000.0
     for k in range(20):
         odo.step(cmd(t0 + 0.05 * k, 3))
-        odo.step(wheel(FRONT_TOPIC, t0 + 0.05 * k, 36.0))
+        odo.step(wheel(FRONT_TOPIC, t0 + 0.05 * k, 36.0 + DITHER_KMH * (k % 2)))
     assert odo.step(cmd(t0 + 86400.0, 3)) is None
     outs = []
     for k in range(200):                                           # 10 s at 20 Hz
         t = t0 + 1.0 + 0.05 * k
         outs.append(odo.step(cmd(t, 3)))
-        outs.append(odo.step(wheel(FRONT_TOPIC, t, 36.0)))
+        outs.append(odo.step(wheel(FRONT_TOPIC, t, 36.0 + DITHER_KMH * (k % 2))))
     assert all(e is not None for e in outs)
     assert outs[-1].t == pytest.approx(t0 + 1.0 + 0.05 * 199)
     assert outs[-1].speed == pytest.approx(10.0, abs=0.001)
@@ -457,7 +472,7 @@ def _run_odometry(glitches):
     before = None
     for k in range(20):
         odo.step(cmd(t0 + 0.05 * k, 3))
-        before = odo.step(wheel(FRONT_TOPIC, t0 + 0.05 * k, 36.0)) or before
+        before = odo.step(wheel(FRONT_TOPIC, t0 + 0.05 * k, 36.0 + DITHER_KMH * (k % 2))) or before
     for e in {'first': [], 'two_in_a_row': [cmd(t0 + 86400.0, 3), cmd(t0 + 86400.05, 3)],
               'two_streams': [cmd(t0 + 86400.0, 3), wheel(FRONT_TOPIC, t0 + 86401.0, 36.0)]}[glitches]:
         odo.step(e)
@@ -465,7 +480,7 @@ def _run_odometry(glitches):
     for k in range(200):
         t = t0 + 1.0 + 0.05 * k
         odo.step(cmd(t, 3))
-        last = odo.step(wheel(FRONT_TOPIC, t, 36.0)) or last
+        last = odo.step(wheel(FRONT_TOPIC, t, 36.0 + DITHER_KMH * (k % 2))) or last
     return before, last
 
 

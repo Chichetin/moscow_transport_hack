@@ -20,6 +20,8 @@ import yaml
 from .metrics import Estimates, bag_metrics
 from .reference import build_reference
 
+REF_POINT = 'base_link'   # the point the judge compares (organizers' tf, D-077); --ref-point master for the antenna
+
 REPO = Path(__file__).resolve().parents[3]
 MSG_DIR = REPO / 'src' / 'tram_vehicle_msgs' / 'msg'
 PARAMS_YAML = REPO / 'src' / 'tram_odometry' / 'config' / 'params.yaml'
@@ -141,6 +143,29 @@ def reference_inputs(msgs):
     return fix_t, fix, vel_t, vel
 
 
+def rover_inputs(msgs):
+    t, llas = [], []
+    for topic, m in msgs:
+        if topic == ROVER_FIX:
+            t.append(stamp(m))
+            llas.append((m.latitude, m.longitude, m.altitude, m.status.status))
+    return t, llas
+
+
+def output_grid():
+    """(zone, e0, n0) of the MGRS grid of /result/position: frames.grid_* of params.yaml (D-083)."""
+    frames = yaml.safe_load(PARAMS_YAML.read_text(encoding='utf-8'))['/**']['ros__parameters']['frames']
+    return int(frames['grid_zone']), float(frames['grid_origin_e_m']), float(frames['grid_origin_n_m'])
+
+
+def bag_reference(msgs, window_end: float, point: str = REF_POINT):
+    """The reference of a bag at `point` ('base_link' or 'master', D-077), in the grid of the
+    published position (D-083)."""
+    rover_t, rover_llas = rover_inputs(msgs) if point != 'master' else ((), ())
+    return build_reference(*reference_inputs(msgs), window_end, point=point,
+                           rover_t=rover_t, rover_llas=rover_llas, grid=output_grid())
+
+
 def gnss_window_end(msgs, gnss_window_s: float) -> float:
     """Last header.stamp at which GNSS may reach the model: first message + window (D-005)."""
     return stamp(msgs[0][1]) + gnss_window_s if msgs else 0.0
@@ -148,7 +173,7 @@ def gnss_window_end(msgs, gnss_window_s: float) -> float:
 
 def run_pipeline(msgs, odometry, window_end: float):
     """Feed messages; returns Estimates, crash text or None, count of Estimate.t != input stamp."""
-    t, speed, pos, slip = [], [], [], []
+    t, speed, pos, slip, absolute = [], [], [], [], []
     crash, stamp_mismatch = None, 0
     for topic, msg in msgs:
         s = stamp(msg)
@@ -166,18 +191,21 @@ def run_pipeline(msgs, odometry, window_end: float):
         speed.append(est.speed)
         pos.append((est.x, est.y, getattr(est, 'z', 0.0)))
         slip.append(bool(est.slip.slip_front or est.slip.slip_rear))
+        absolute.append(bool(getattr(est, 'position_absolute', True)))
     est = Estimates(np.asarray(t, float), np.asarray(speed, float),
-                    np.asarray(pos, float).reshape(-1, 3), np.asarray(slip, bool))
+                    np.asarray(pos, float).reshape(-1, 3), np.asarray(slip, bool),
+                    np.asarray(absolute, bool))
     return est, crash, stamp_mismatch
 
 
 def finite_only(est: Estimates) -> tuple[Estimates, int]:
     """Estimates without NaN/inf in time, speed or position, and how many were dropped."""
     ok = np.isfinite(est.t) & np.isfinite(est.speed) & np.isfinite(est.pos).all(axis=1)
-    return Estimates(est.t[ok], est.speed[ok], est.pos[ok], est.slip[ok]), int((~ok).sum())
+    return est.select(ok), int((~ok).sum())
 
 
-def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None) -> dict:
+def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None,
+                 ref_point: str = REF_POINT) -> dict:
     """Metrics dict of one bag (docs/contracts.md §4). make_odometry defaults to
     default_odometry; it and `msgs` are for tests."""
     make_odometry = make_odometry or default_odometry
@@ -189,7 +217,7 @@ def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None
     est, nonfinite = finite_only(est)
     m = {'duration_s': float(max(stamps) - min(stamps)) if stamps else 0.0}
     try:
-        m.update(bag_metrics(build_reference(*reference_inputs(msgs), window_end), est))
+        m.update(bag_metrics(bag_reference(msgs, window_end, ref_point), est))
     except Exception:   # one bad bag must not take down the whole split in the process pool
         crash = crash or 'metrics failed\n' + traceback.format_exc(limit=3)
     m['crashed'] = crash is not None
@@ -199,7 +227,11 @@ def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None
         print(f'{name}: {mismatch} estimates with t != input stamp (contract §1, D-015)', file=sys.stderr)
     if nonfinite:
         print(f'{name}: {nonfinite} non-finite estimates (NaN/inf) left out of the metrics', file=sys.stderr)
+    local = int((~est.absolute).sum())
+    if local:
+        print(f'{name}: {local} estimates in local odom (no anchor yet) left out of position metrics',
+              file=sys.stderr)
     m = {k: (None if isinstance(v, float) and not math.isfinite(v) else
              round(v, 4) if isinstance(v, float) else v) for k, v in m.items()}
-    m[NOTES] = {'nonfinite': nonfinite, 'stamp_mismatch': int(mismatch)}
+    m[NOTES] = {'nonfinite': nonfinite, 'stamp_mismatch': int(mismatch), 'position_local': local}
     return m

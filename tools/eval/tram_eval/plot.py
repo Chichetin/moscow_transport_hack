@@ -2,8 +2,8 @@
 
 Timeline: speed (estimate, reference, both bogies as recorded), speed error, along/cross
 error, driver controller, slip flags. Map: the route of maps/route.csv, reference and
-estimate in the frame of the eval reference (ENU of `Reference.origin`), where the metrics
-compare them; its origin follows the rule of frame `map` of the tracker (D-050, #70). For
+estimate in the frame of the eval reference (the MGRS grid of /result/position, D-083), where
+the metrics compare them. For
 debugging, docs/accuracy.md and the pitch; not part of
 metrics.json (contracts §4). matplotlib is imported only in `render`: the dev image has
 no matplotlib (docker/Dockerfile, D-039).
@@ -21,7 +21,7 @@ import yaml
 from . import bag as bagmod
 from .bag import CMD, FRONT, REAR
 from .metrics import Estimates, extend_track, match_nearest, project_track
-from .reference import Reference, build_reference, geodetic_to_ecef
+from .reference import Reference, enu_to_grid, geodetic_to_ecef
 
 EST, REF, FRONT_C, REAR_C, SLIP_C = '#2a78d6', '#0b0b0b', '#eb6834', '#1baf7a', '#e34948'
 GRID_C, MAP_C = '#d9d8d4', '#b8b7b2'
@@ -60,18 +60,23 @@ def enu_rotation(lat_deg: float, lon_deg: float) -> np.ndarray:
                      [np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)]])
 
 
-def route_in_ref_frame(route, origin) -> list:
-    """x/y of the map branches (ENU of the map's own origin) in the ENU of `origin`; the same
-    transform as PathTracker._set_origin, applied at the origin of the eval reference."""
+def route_in_ref_frame(route, origin, grid=None) -> list:
+    """x/y of the map branches (ENU of the map's own origin) in the frame of the reference:
+    the MGRS grid with `grid` (D-083, what `bag_series` passes), else the ENU of `origin` (the
+    transform of PathTracker._set_origin)."""
     if route is None or origin is None:
         return []
+    if grid is not None:
+        return [enu_to_grid(np.stack([b.x, b.y, b.z], axis=1), route.origin, grid)[:, :2]
+                for b in route.branches]
     rot_run = enu_rotation(*origin[:2])
     a = rot_run @ enu_rotation(*route.origin[:2]).T
     c = rot_run @ (geodetic_to_ecef(*route.origin) - geodetic_to_ecef(*origin))
     return [(np.stack([b.x, b.y, b.z], axis=1) @ a.T + c)[:, :2] for b in route.branches]
 
 
-def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '') -> Series:
+def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '',
+               ref_point: str = bagmod.REF_POINT) -> Series:
     """Run the pipeline over the messages the way `bag.evaluate_bag` does and keep the series."""
     window_end = bagmod.gnss_window_end(msgs, gnss_window_s)
     odometry = (make_odometry or bagmod.default_odometry)()
@@ -79,8 +84,8 @@ def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '') -
     est, _ = bagmod.finite_only(est)
     # estimates come in recording order (late bursts, trap 5): lines and slip bands need time order
     order = np.argsort(est.t, kind='stable')
-    est = Estimates(est.t[order], est.speed[order], est.pos[order], est.slip[order])
-    ref = build_reference(*bagmod.reference_inputs(msgs), window_end)
+    est = est.select(order)
+    ref = bagmod.bag_reference(msgs, window_end, ref_point)
 
     scale = wheel_speed_scale()
     wheel_t, wheel_v = {}, {}
@@ -101,7 +106,8 @@ def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '') -
     return Series(name, bagmod.stamp(msgs[0][1]), wheel_t, wheel_v,
                   np.array([c[0] for c in cmd], float), np.array([c[1] for c in cmd], float),
                   est, ref, speed_err_t, speed_err, ref.pos_t[ri], along, cross,
-                  route_in_ref_frame(getattr(odometry, 'route', None), ref.origin), crash)
+                  route_in_ref_frame(getattr(odometry, 'route', None), ref.origin,
+                                     bagmod.output_grid()), crash)
 
 
 def _rmse(e) -> str:
@@ -190,12 +196,13 @@ def render(s: Series, out_dir: Path) -> list[Path]:
     return [timeline, xy]
 
 
-def plot_bag(path, gnss_window_s: float, out_dir: Path, make_odometry=None, msgs=None) -> list[Path]:
+def plot_bag(path, gnss_window_s: float, out_dir: Path, make_odometry=None, msgs=None,
+             ref_point: str = bagmod.REF_POINT) -> list[Path]:
     """PNG files of one bag; make_odometry and msgs are for tests, as in `bag.evaluate_bag`."""
     name = Path(path).name
     try:   # metrics.json is already written: one bad bag must not take down the other plots
         msgs = bagmod.read_bag(Path(path)) if msgs is None else msgs
-        return render(bag_series(msgs, gnss_window_s, make_odometry, name), Path(out_dir))
+        return render(bag_series(msgs, gnss_window_s, make_odometry, name, ref_point), Path(out_dir))
     except Exception:
         print(f'{name}: plot failed\n{traceback.format_exc(limit=3)}', file=sys.stderr)
         return []

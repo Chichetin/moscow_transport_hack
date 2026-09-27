@@ -154,3 +154,32 @@ def test_summary_median_and_worst_bag():
     assert s['worst_bag']['speed_bias_stop'] == 'a'          # by |bias|
     assert s['median']['drift_pct'] == 1.5                    # None skipped
     assert s['median']['along_rmse'] is None
+
+
+def test_local_positions_are_left_out_of_position_metrics():
+    """Estimates without a geodetic anchor (position_absolute False, #162) carry local metres,
+    not the grid: they must not score along/cross/drift/pos3d; speed and slip still use all."""
+    good = estimates(cruise, 100)
+    local = good.t < 2.0                                     # first 2 s: no anchor yet
+    pos = good.pos.copy()
+    pos[local] = [-5000.0, 7000.0, 0.0]                      # local metres, far from the grid track
+    slip = local.copy()
+    est = Estimates(good.t, good.speed, pos, slip, absolute=~local)
+    m, ref = bag_metrics(reference(cruise, 100), est), bag_metrics(reference(cruise, 100), good)
+    for k in ('along_rmse', 'along_max', 'cross_rmse', 'cross_max', 'pos3d_rmse', 'pos3d_max', 'drift_pct'):
+        assert m[k] == pytest.approx(ref[k], abs=0.02), k
+    assert m['speed_rmse'] == pytest.approx(0.0, abs=1e-9) and m['n_matched'] == 1001
+    assert m['slip_flag_frac'] == pytest.approx(local.mean())
+
+
+def test_no_absolute_position_gives_no_position_metrics():
+    good = estimates(cruise, 100)
+    m = bag_metrics(reference(cruise, 100),
+                    Estimates(good.t, good.speed, good.pos, good.slip, absolute=np.zeros(len(good.t), bool)))
+    assert m['along_rmse'] is None and m['drift_pct'] is None and m['pos3d_rmse'] is None
+    assert m['speed_rmse'] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_estimates_are_absolute_by_default():
+    good = estimates(cruise, 10)
+    assert good.absolute.all() and len(good.absolute) == len(good.t)

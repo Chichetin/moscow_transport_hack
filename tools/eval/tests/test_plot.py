@@ -14,15 +14,16 @@ from test_cli import short_bags  # noqa: F401  (fixture)
 
 class Ahead(DeadReckoning):
     """Dead reckoning that reports 0.5 m/s too fast and 20 m ahead along the track (east)."""
+    ahead = 20.0
 
     def step(self, raw):
         e = super().step(raw)
-        return NS(t=e.t, speed=e.speed + 0.5, x=e.x + 20.0, y=e.y, slip=e.slip)
+        return NS(t=e.t, speed=e.speed + 0.5, x=e.x, y=e.y, z=e.z, slip=e.slip)
 
 
 def test_series_units_error_signs_controller_and_slip():
     msgs = drive(duration=60.0, speed=10.0)
-    s = plot.bag_series(msgs, 5.0, Ahead)
+    s = plot.bag_series(msgs, 5.0, Ahead, ref_point='master')    # the double tracks master
     assert s.t0 == pytest.approx(100.0)
     for side in ('front', 'rear'):
         assert len(s.wheel_t[side]) == 600
@@ -86,3 +87,13 @@ def test_cli_plot_writes_png_per_bag(short_bags, tmp_path):  # noqa: F811
     assert sorted(p.name for p in (tmp_path / 'plots').iterdir()) == [
         f'{short_bags[0]}_timeline.png', f'{short_bags[0]}_xy.png']
     assert bag.NOTES not in (tmp_path / 'metrics.json').read_text(encoding='utf-8')
+
+
+def test_route_in_the_grid_of_the_reference():
+    """With the grid of the published position (D-083) the map is drawn in it too."""
+    from tram_eval.reference import core_geo
+    geo = core_geo()
+    grid = (37, 300000.0, 6100000.0)
+    route = NS(origin=(LAT0, LON0, 150.0), branches=(NS(x=np.array([0.0]), y=np.zeros(1), z=np.zeros(1)),))
+    xy = plot.route_in_ref_frame(route, (LAT0 + 0.01, LON0, 150.0), grid)[0][0]
+    assert xy == pytest.approx(geo.to_grid(LAT0, LON0, 150.0, grid)[:2], abs=1e-3)

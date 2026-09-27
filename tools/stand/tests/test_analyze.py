@@ -1,7 +1,9 @@
 import pytest
 
+import io
+
 from tram_stand import analyze as A
-from tram_stand.cli import measure, table
+from tram_stand.cli import ensure_utf8_stdout, measure, table
 
 MS = 10**6
 
@@ -91,3 +93,15 @@ def test_missing_output_topic_fails_rate():
     msgs += [('/result/velocity', i * 100 * MS + MS, i * 100 * MS) for i in range(50)]
     res = measure(msgs, [], 100)               # /result/position never published
     assert res['rate']['mean_hz'] == 0.0 and res['verdict']['rate'] is False
+
+
+def test_ensure_utf8_stdout_survives_a_narrow_console_encoding(monkeypatch):
+    """A '✅'/'❌' in table() must not crash the stand report on a console whose default
+    codepage is not UTF-8 (Windows, cp1251) -- same class of bug as #124 (#126)."""
+    import tram_stand.cli as cli
+    narrow = io.TextIOWrapper(io.BytesIO(), encoding='ascii')
+    monkeypatch.setattr(cli.sys, 'stdout', narrow)
+    ensure_utf8_stdout()
+    print('✅ ❌')  # raises UnicodeEncodeError on the original ascii-encoded stream
+    narrow.flush()
+    assert narrow.buffer.getvalue()

@@ -3,7 +3,7 @@ import numpy as np
 
 from ..types import FilterDiagnostics, Params, WheelSample
 
-BIAS_RELEASE_MPS = 0.5  # near-stop region: do not extrapolate braking through v=0
+COV_EPS = 1e-8  # (m/s)^2: numerical margin that puts an inflated innovation strictly inside the gate
 
 
 class SpeedFilter:
@@ -12,13 +12,22 @@ class SpeedFilter:
     The first trusted wheel initializes speed without a zero-speed prior. Each
     bogie contributes at most once per stamp; a fresh delayed sample is compared
     with the predicted state at its stamp without rolling the state backward.
+
+    Both bogies ride on one car body, so a wheel sample is measured together with
+    the other bogie's last accepted reading (if it is live on the wheel timeline):
+    the trust-weighted mean of the pair while moving, the smaller one at rest
+    without traction (#105, D-061).
     """
 
     def __init__(self, params: Params):
         self._p = params.filter
         self._stale_timeout = params.input.stale_timeout_s
         self._max_wheel_accel = params.input.max_wheel_accel_mps2
-        self._rest_speed = max(params.position.stop_speed_mps, BIAS_RELEASE_MPS)
+        self._rest_speed = max(params.position.stop_speed_mps, self._p.bias_release_speed_mps)
+        self._stop_speed = params.position.stop_speed_mps
+        self._jump_accel = params.slip.noise_accel_mps2
+        self._jump_hold = params.slip.noise_hold_s
+        self._restart_var = params.slip.front_rear_threshold_mps ** 2
         if (self._p.q_accel < 0.0 or self._p.r_wheel <= 0.0
                 or self._p.q_bias < 0.0 or self._p.initial_bias_var < 0.0
                 or self._p.nis_gate <= 0.0):
@@ -35,6 +44,9 @@ class SpeedFilter:
         self._recent_wheel = {'front': None, 'rear': None}
         self._zero_wheel = {'front': None, 'rear': None}
         self._confirmed_stop_t = None
+        self._pair = {'front': None, 'rear': None}  # last accepted (t, speed m/s, trust)
+        self._raw = {'front': None, 'rear': None}   # last fresh (t, speed m/s), any trust
+        self._jump_t = {'front': None, 'rear': None}  # stamp of the bogie's last jump
 
     def rebase_time(self, t: float):
         """Keep the estimate but start a fresh input clock after a confirmed jump."""
@@ -44,6 +56,9 @@ class SpeedFilter:
         self._recent_wheel = {'front': None, 'rear': None}
         self._zero_wheel = {'front': None, 'rear': None}
         self._confirmed_stop_t = None
+        self._pair = {'front': None, 'rear': None}
+        self._raw = {'front': None, 'rear': None}
+        self._jump_t = {'front': None, 'rear': None}
         self._diagnostic = None
 
     def predict(self, t: float, accel_model: float):
@@ -80,7 +95,20 @@ class SpeedFilter:
             return
         if sample.speed == 0.0:
             self._zero_wheel[sample.bogie] = sample.t
+        raw = self._raw[sample.bogie]
+        if (raw is not None and sample.t > raw[0]
+                and abs((sample.speed - raw[1]) / (sample.t - raw[0])
+                        - self._model_accel) > self._jump_accel):
+            # a step the car cannot make (the detector's jump, D-054); an untrusted sample
+            # does not advance the stamp gate above, so the same stamp may come again
+            self._jump_t[sample.bogie] = sample.t
+        self._raw[sample.bogie] = (sample.t, sample.speed)
         if trust == 0.0:
+            # the detector does not trust this bogie now: its last reading gets no weight
+            # in the pair mean while moving
+            last_pair = self._pair[sample.bogie]
+            if last_pair is not None:
+                self._pair[sample.bogie] = (last_pair[0], last_pair[1], 0.0)
             return
         self.predict(sample.t, self._model_accel)
         self._last[sample.bogie] = sample.t
@@ -88,20 +116,23 @@ class SpeedFilter:
                                 else max(self._latest_wheel_t, sample.t))
         age = self._t - sample.t
         scale = 1.0 - self._scale_delta if sample.bogie == 'front' else 1.0 + self._scale_delta
-        measurement = sample.speed / scale + self._model_accel * age
+        own = sample.speed / scale
+        measurement = self._pair_speed(sample, own, trust) + self._model_accel * age
         measurement_var = self._p.r_wheel / (trust * scale ** 2) + self._p.q_accel * age
         plausible_departure = (
             self._confirmed_stop_t is not None and sample.speed > 0.0
-            and sample.speed <= self._max_wheel_accel * max(0.0, sample.t - self._confirmed_stop_t) + 0.05)
+            and sample.speed <= (self._max_wheel_accel * max(0.0, sample.t - self._confirmed_stop_t)
+                                  + self._p.departure_slack_mps))
         if plausible_departure:
             # Velocity at the next departure is a new motion segment. The
             # braking posterior should not slow the first plausible wheel.
-            self._cov[0, 0] = max(self._cov[0, 0], 9.0 * measurement_var)
+            self._cov[0, 0] = max(self._cov[0, 0], self._p.departure_var_factor * measurement_var)
         if not self._initialized:
             self._x[0] = max(0.0, measurement)
             self._cov = np.diag((measurement_var, self._p.initial_bias_var))
             self._initialized = True
             self._diagnostic = FilterDiagnostics(sample.t, sample.bogie, 0.0, True)
+            self._pair[sample.bogie] = (sample.t, own, trust)
             self._observe_scale(sample, trust)
             return
 
@@ -112,13 +143,13 @@ class SpeedFilter:
         other = 'rear' if sample.bogie == 'front' else 'front'
         other_zero = self._zero_wheel[other]
         paired_zero = (sample.speed == 0.0 and other_zero is not None
-                       and abs(sample.t - other_zero) <= 0.02)
+                       and abs(sample.t - other_zero) <= self._p.pair_window_s)
         if paired_zero and innovation ** 2 > self._p.nis_gate * innovation_var:
             # Two independent zero readings expose a real stop that a smooth
             # motion prior cannot explain. Inflate speed uncertainty so the
             # ordinary NIS gate can accept the corroborated measurement.
             self._cov[0, 0] += (innovation ** 2 / self._p.nis_gate
-                                - innovation_var + 1e-8)
+                                - innovation_var + COV_EPS)
             projected = self._cov @ observation
             innovation_var = float(observation @ projected + measurement_var)
         nis = float(innovation ** 2 / innovation_var)
@@ -126,6 +157,7 @@ class SpeedFilter:
         self._diagnostic = FilterDiagnostics(sample.t, sample.bogie, nis, accepted)
         if not accepted:
             return
+        self._pair[sample.bogie] = (sample.t, own, trust)
         if paired_zero:
             self._confirmed_stop_t = sample.t
         elif sample.speed > 0.0:
@@ -146,17 +178,56 @@ class SpeedFilter:
             self._cov[1, 1] = max(self._cov[1, 1], self._p.initial_bias_var)
         self._observe_scale(sample, trust)
 
+    def _pair_speed(self, sample: WheelSample, own: float, trust: float) -> float:
+        """Car speed at `sample.t` from this bogie and the other bogie's last reading."""
+        other = self._pair['rear' if sample.bogie == 'front' else 'front']
+        if (not self._initialized or other is None
+                or abs(sample.t - other[0]) > self._stale_timeout):
+            return own       # the other bogie is silent: single-bogie mode
+        jump = self._jump_t[sample.bogie]
+        if (self._x[0] < self._stop_speed and self._model_accel < 0.0
+                and jump is not None and sample.t - jump <= self._jump_hold):
+            # The car stands, the drive model decelerates and this bogie has just jumped:
+            # no more than the slower bogie shows is motion. At rest the negative half of
+            # noise arrives only as 0 (preprocess clamps kmh < 0, D-064), so a filter fed the
+            # jumping bogie alone rides its positive half and drives off. A smooth rise of
+            # one bogie is a start (a bogie stuck at 0 is trap 8, the notch can lag or read
+            # brake at a start), and both bogies moving move the car whatever the controller
+            # says.
+            return min(own, other[1])
+        if trust == 1.0 and other[2] == 1.0:
+            return own       # agreeing bogies: independent readings, fused one by one
+        # The detector saw the bogies disagree (antiphase noise gets 0.5/0.5, D-054): the car
+        # speed is their trust-weighted mean, an untrusted partner (trust 0) gets no weight.
+        # Fused one by one, the first of a pair wins and the NIS gate then rejects its
+        # opposite partner. The partner is brought to this stamp with the filter's
+        # acceleration (model + bias).
+        partner = max(0.0, other[1] + (self._model_accel + self._x[1]) * (sample.t - other[0]))
+        return (trust * own + other[2] * partner) / (trust + other[2])
+
     def _observe_scale(self, sample: WheelSample, trust: float):
         self._recent_wheel[sample.bogie] = (sample.t, sample.speed, trust)
         front, rear = self._recent_wheel['front'], self._recent_wheel['rear']
-        if (front is None or rear is None or abs(front[0] - rear[0]) > 0.02
-                or min(front[2], rear[2]) < 0.8 or min(front[1], rear[1]) < 2.0
-                or abs(front[1] - rear[1]) > 0.5):
+        p = self._p
+        if (front is None or rear is None or abs(front[0] - rear[0]) > p.pair_window_s
+                or min(front[2], rear[2]) < p.scale_min_trust
+                or min(front[1], rear[1]) < p.scale_min_speed_mps
+                or abs(front[1] - rear[1]) > p.scale_max_diff_mps):
             return
         # A wheel pair identifies only the relative scale. Keep their common
         # scale fixed at the train calibration applied by Preprocessor.
-        target = np.clip((rear[1] - front[1]) / (rear[1] + front[1]), -0.03, 0.03)
-        self._scale_delta += 0.02 * (target - self._scale_delta)
+        target = np.clip((rear[1] - front[1]) / (rear[1] + front[1]),
+                         -p.scale_max_rel, p.scale_max_rel)
+        self._scale_delta += p.scale_gain * (target - self._scale_delta)
+
+    def restart(self, speed: float):
+        """The car slid (#156): the state followed slipping bogies and its bias learned from
+        them. Take the car speed from the slide detector, known to the pair tolerance
+        `slip.front_rear_threshold_mps`, and forget the bias."""
+        if not self._initialized or not np.isfinite(speed):
+            return
+        self._x = np.array((max(0.0, speed), 0.0))
+        self._cov = np.diag((max(self._cov[0, 0], self._restart_var), self._p.initial_bias_var))
 
     def state(self):
         return (float(self._x[0]), float(self._cov[0, 0]),

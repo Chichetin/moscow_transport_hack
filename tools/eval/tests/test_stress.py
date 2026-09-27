@@ -9,12 +9,15 @@ from tram_eval.metrics import Estimates
 from tram_eval.stress import SCENARIOS, _errors, perturb, recovery_seconds
 from test_bag import drive
 
+REAR_CHANGED = ('noise', 'gap_both_30', 'scale_up', 'scale_down')
+
 
 def wheels(msgs, topic):
     return [(stamp(m), m.velocity) for t, m in msgs if t == topic]
 
 
-@pytest.mark.parametrize('scenario', SCENARIOS)
+# freeze changes nothing at a constant speed: its own test below drives a ramp
+@pytest.mark.parametrize('scenario', [s for s in SCENARIOS if s != 'freeze'])
 def test_scenario_changes_only_wheels_and_is_reproducible(scenario):
     source = drive(100.0)
     original = deepcopy(source)
@@ -26,7 +29,7 @@ def test_scenario_changes_only_wheels_and_is_reproducible(scenario):
     changed, start, end = first
     assert start < end
     assert [(t, m) for t, m in changed if t in GNSS] == [(t, m) for t, m in source if t in GNSS]
-    assert wheels(changed, REAR) == wheels(source, REAR) if scenario != 'noise' else True
+    assert wheels(changed, REAR) == wheels(source, REAR) if scenario not in REAR_CHANGED else True
     assert wheels(changed, FRONT) != wheels(source, FRONT)
 
 
@@ -42,6 +45,31 @@ def test_gap_removes_front_samples_only_inside_requested_interval(duration):
     assert wheels(changed, REAR) == wheels(source, REAR)
 
 
+def test_gap_both_removes_both_bogies_only_inside_interval():
+    source = drive(100.0)
+    changed, start, end = perturb(source, 'gap_both_30', 5.0)
+    assert end - start == pytest.approx(30.0)
+    for topic in (FRONT, REAR):
+        before = wheels(source, topic)
+        after = wheels(changed, topic)
+        assert after == [(t, v) for t, v in before if not start <= t < end]
+        assert len(after) < len(before)
+
+
+@pytest.mark.parametrize('scenario, factor', [('scale_up', 1.015), ('scale_down', 0.985)])
+def test_scale_multiplies_both_bogies_from_event_start_to_recovery_tail(scenario, factor):
+    from tram_eval.bag import gnss_window_end
+
+    source = drive(100.0)
+    changed, start, end = perturb(source, scenario, 5.0)
+    wheel_t = [t for t, _ in wheels(source, FRONT) + wheels(source, REAR)]
+    assert start == pytest.approx(gnss_window_end(source, 5.0) + 1.0)
+    assert end == pytest.approx(max(wheel_t) - 3.0)
+    for topic in (FRONT, REAR):
+        for (t, v0), (_, v1) in zip(wheels(source, topic), wheels(changed, topic)):
+            assert v1 == pytest.approx(v0 * factor if start <= t < end else v0)
+
+
 def test_outlier_and_spike_have_distinct_amplitudes():
     source = drive(100.0)
     out, a, b = perturb(source, 'outlier', 5.0)
@@ -50,6 +78,32 @@ def test_outlier_and_spike_have_distinct_amplitudes():
     spike, a, b = perturb(source, 'spike', 5.0)
     assert b - a == 5.0
     assert sum(v > 36.0 for t, v in wheels(spike, FRONT) if a <= t < b) >= 40
+
+
+def ramp(duration):
+    """drive() accelerating: wheel readings grow by 0.1 km/h per sample."""
+    msgs = deepcopy(drive(duration))
+    for topic in (FRONT, REAR):
+        for k, m in enumerate(m for t, m in msgs if t == topic):
+            m.velocity += 0.1 * k
+    return msgs
+
+
+def test_freeze_holds_both_bogies_at_their_last_reading_before_the_event():
+    source = ramp(100.0)
+    original = deepcopy(source)
+    changed, a, b = perturb(source, 'freeze', 5.0)
+    assert source == original and b - a == 10.0
+    assert [(t, m) for t, m in changed if t in GNSS] == [(t, m) for t, m in source if t in GNSS]
+    for topic in (FRONT, REAR):
+        held = [v for t, v in wheels(source, topic) if t < a][-1]
+        assert {v for t, v in wheels(changed, topic) if a <= t < b} == {held}
+        assert [(t, v) for t, v in wheels(changed, topic) if not a <= t < b] \
+            == [(t, v) for t, v in wheels(source, topic) if not a <= t < b]
+
+
+def test_freeze_at_a_constant_speed_is_skipped():
+    assert perturb(drive(100.0), 'freeze', 5.0) is None
 
 
 def test_noise_is_bounded_and_zero_mean_over_full_cycles():
@@ -105,7 +159,8 @@ def test_stress_evaluation_measures_peak_and_recovery_without_touching_reference
     result = evaluate_stress_bag('fake', 5.0, make_odometry=DeadReckoning, msgs=source)
     assert source == original
     assert set(result) == set(SCENARIOS)
-    assert all(not r['crashed'] for r in result.values())
+    assert all(not r['crashed'] for r in result.values() if not r['skipped'])
+    assert result['freeze']['skipped'] is True          # constant speed: nothing to freeze
     spike = result['spike']
     assert spike['peak_speed_excess_mps'] > 5.0
     assert spike['speed_recovery_s'] is not None
