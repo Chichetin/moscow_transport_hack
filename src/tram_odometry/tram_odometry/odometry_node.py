@@ -184,7 +184,7 @@ class OdometryNode(Node):
             stamp_ns = _stamp_ns(msg.header.stamp)
             if stamp_ns <= 0:
                 return
-            verdict, items = self.run_gate.place(topic in VEHICLE_TOPICS,
+            verdict, items = self.run_gate.place(topic if topic in VEHICLE_TOPICS else None,
                                                  stamp_ns / 1_000_000_000, time.monotonic(),
                                                  (topic, msg))
         except Exception as e:  # noqa: BLE001 — the node must outlive any bad input

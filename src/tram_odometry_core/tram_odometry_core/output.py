@@ -19,9 +19,13 @@ HISTORY_MARGIN_S = 1.0
 # samples at most, whatever the stamps do (a repeated stamp never ages out): O(1) memory per
 # message; delay + margin (~1.1 s) of every input (~60 Hz) is ~70 samples
 MAX_SAMPLES = 256
-# vehicle inputs on a new stamp-to-wall offset that make it a new bag: one is a stamp glitch
-# (D-043), both bogies at ~10 Hz give three within ~0.15 s of a real new bag
+# vehicle inputs on a new stamp-to-wall offset that make it a new bag, from at least
+# RUN_CONFIRM_TOPICS vehicle topics: glitched stamps of one stream are not a new bag (D-043),
+# both bogies at ~10 Hz give three from two topics within ~0.15 s of a real new bag
 RUN_CONFIRM_SAMPLES = 3
+RUN_CONFIRM_TOPICS = 2
+# s of wall clock an input is held for a new bag: GNSS comes ~1 s before the first bogie
+RUN_HOLD_S = 3.0
 # inputs held for a new bag until it is confirmed: GNSS (3 topics, ~10 Hz each) may come ~1 s
 # before its first bogie; O(1) memory per message
 RUN_PENDING_MAX = 256
@@ -77,9 +81,10 @@ class RunGate:
     `ros2 bag play` replays at the recorded pace, so within one bag `stamp - wall clock` stays
     put up to the input lag (docs/data.md, traps 5-6: bursts late by up to 3.7 s), across a
     silence of every stream too; the next bag has another offset. An input within `max_jump_s`
-    of the current offset belongs to the current run. One off it is held: a new bag starts only
-    once RUN_CONFIRM_SAMPLES vehicle inputs share a new offset, so neither GNSS (never after
-    its window, D-005) nor one glitched stamp can open a run; the held inputs of that offset,
+    of the current offset belongs to the current run. One off it is held (RUN_HOLD_S at most): a
+    new bag starts only once RUN_CONFIRM_SAMPLES vehicle inputs of RUN_CONFIRM_TOPICS topics
+    share a new offset, so neither GNSS (never after its window, D-005) nor the glitched stamps
+    of one stream can open a run; the held inputs of that offset,
     GNSS that came before the bogies included, go to the new run first. Inputs on the offset of
     the run just left are what was still queued from the old bag and are dropped.
     """
@@ -88,10 +93,11 @@ class RunGate:
         self.max_jump_s = max_jump_s    # s, input.max_stamp_jump_s: farther is another clock
         self.offset = None              # s, stamp - wall of the latest input of the current run
         self.retired = None             # s, the same of the run before it
-        self._held = deque(maxlen=RUN_PENDING_MAX)  # (offset s, vehicle, item)
+        self._held = deque(maxlen=RUN_PENDING_MAX)  # (offset s, wall s, vehicle topic, item)
 
-    def place(self, vehicle: bool, stamp_s: float, wall_s: float, item):
-        """Place `item` (stamp `stamp_s`, received at monotonic `wall_s`): ('run', [item]) --
+    def place(self, vehicle, stamp_s: float, wall_s: float, item):
+        """Place `item` of the vehicle topic `vehicle` (None: GNSS), stamp `stamp_s`, received
+        at monotonic `wall_s`: ('run', [item]) --
         step the current run; ('new', items) -- start a new run and step it with `items`, in
         arrival order; ('hold', []) or ('drop', []) -- nothing to step now."""
         offset = stamp_s - wall_s
@@ -100,10 +106,14 @@ class RunGate:
             return 'run', [item]
         if self.retired is not None and abs(offset - self.retired) <= self.max_jump_s:
             return 'drop', []
-        self._held.append((offset, vehicle, item))
+        while self._held and wall_s - self._held[0][1] > RUN_HOLD_S:
+            self._held.popleft()
+        self._held.append((offset, wall_s, vehicle, item))
         same = [h for h in self._held if abs(h[0] - offset) <= self.max_jump_s]
-        if not vehicle or sum(h[1] for h in same) < RUN_CONFIRM_SAMPLES:
+        topics = [h[2] for h in same if h[2] is not None]
+        if (vehicle is None or len(topics) < RUN_CONFIRM_SAMPLES
+                or len(set(topics)) < RUN_CONFIRM_TOPICS):
             return 'hold', []
         self.retired, self.offset = self.offset, offset
         self._held.clear()
-        return 'new', [h[2] for h in same]
+        return 'new', [h[3] for h in same]
