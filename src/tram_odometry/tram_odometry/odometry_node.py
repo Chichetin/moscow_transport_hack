@@ -173,7 +173,11 @@ class OdometryNode(Node):
                                         throttle_duration_sec=5.0)
                 return
             self.pub_velocity.publish(velocity_msg(est, msg.header.stamp, self.params))
-            self.pub_position.publish(position_msg(est, msg.header.stamp, self.params))
+            if self.odometry.position_due(est):
+                # inside the GNSS window before the first valid fix there is no position yet, not
+                # even a local one: a judge that ignores frame_id would compare it with the grid;
+                # a bag without GNSS gets local odom after the window (#163, D-086)
+                self.pub_position.publish(position_msg(est, msg.header.stamp, self.params))
             if topic in (VEHICLE_INPUTS[0][0], VEHICLE_INPUTS[1][0], VEHICLE_INPUTS[2][0]):
                 self._last_input_ns[topic] = stamp_ns
             if (self._last_diagnostic_ns is None

@@ -61,6 +61,17 @@ class Odometry:
         self._t_zero: Optional[float] = -math.inf
         self._a_zero = 0.0                    # m/s^2, <= 0
 
+    def position_due(self, est: Estimate) -> bool:
+        """Whether the node publishes /result/position for `est` (#163, D-086): an absolute
+        position always; a local one only once the GNSS window closed without a valid master fix
+        (a bag without GNSS: odom, D-084), never inside the window, where a fix is still coming."""
+        if est.position_absolute:
+            return True
+        # the newest state time, not the stamp of this input: a stamp rolled back into the
+        # window (traps 5-6) must not silence a bag without GNSS again
+        latest = est.t if self._t is None else max(est.t, self._t)
+        return self._t0 is not None and latest - self._t0 > self.params.gnss.init_window_s
+
     def step(self, raw: Any) -> Optional[Estimate]:
         """Consume one raw input; None means the input was dropped, nothing to publish."""
         try:
@@ -195,20 +206,23 @@ class Odometry:
             speed *= self._tracker.speed_scale     # wheel scale from the stop chain (#153)
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
         pose = (self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0))
-        # the output is the flat MGRS grid (D-083): the ENU pose of the map, or of the straight
-        # line (D-021) in the map's own ENU before the first fix, goes through geodetic -> UTM
+        # the output is the flat MGRS grid (D-083): the ENU pose of the map, else the straight
+        # line (D-021) from the first valid master fix -- also with a map that rejected every fix
+        # of the window (a bag off the route, #163); before any fix there is no anchor at all:
+        # local metres, never the map's origin kilometres away; the node holds them back while
+        # the GNSS window is open and publishes them in odom after it (position_due, D-086)
         frame = self._line_frame
         if self._tracker is not None:
             on_map = self._tracker.advance(self._distance, self._v)
-            pose = pose if on_map is None else on_map
-            frame = self._tracker.frame
+            if on_map is not None:
+                pose, frame = on_map, self._tracker.frame
         x, y, z, yaw, pos_cov = pose if frame is None else pose_to_grid(*frame, self._grid, *pose)
         return Estimate(
             t=t, speed=speed, speed_var=var, accel=accel, accel_model=self._accel_model,
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used,
-            position_absolute=frame is not None,   # no map, no fix: local metres (#162)
+            position_absolute=frame is not None,   # no fix yet: local metres (#162, #163)
             filter_diagnostics=self._filter.diagnostics())
 
     def _on_fix(self, sample: GnssFix) -> None:
@@ -219,7 +233,7 @@ class Odometry:
             return
         # the origin of the straight line is the first valid fix, so the start is (0, 0)
         if sample.status >= 0:
-            if (self._tracker is None and self._line_frame is None
+            if (self._line_frame is None
                     and all(math.isfinite(v) for v in (sample.lat, sample.lon, sample.alt))
                     and abs(sample.lat) + abs(sample.lon) > 0.0):   # lat = lon = 0: trap 10
                 self._line_frame = (enu_rotation(sample.lat, sample.lon),
