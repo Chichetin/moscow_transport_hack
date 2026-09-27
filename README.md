@@ -14,6 +14,9 @@
 из apt Humble. Шаги 1–4 (сборка, запуск, выходы, логи) работают без интернета. Для шагов 5–6
 сеть нужна один раз: `pip install` зависимостей `tools/eval` и `docker build` образа стенда
 (`ros:humble-ros-base` + `apt-get install procps time`); сам стенд идёт с `--network=none`.
+Шаги 1, 3–5 занимают минуты; полное проигрывание bag (конец шага 2 и весь шаг 6) идёт в
+реальном темпе и зависит от длины конкретного bag — на длинных это может быть до ~20–30 минут,
+не только 5.
 
 ### 1. Сборка (без интернета)
 
@@ -26,10 +29,22 @@ source install/setup.bash
 ```
 
 **Ожидается:** `colcon build` заканчивается строкой вида `Summary: 3 packages finished [...]`,
-без `Failed`. Если ROS 2 Humble на хосте нет (например, не Ubuntu 22.04) — те же команды
-выполняются внутри `docker run --rm -it ros:humble-ros-base bash` (образ и без того нужен для
-шага 6); дальше по всему разделу `<ws>` — произвольный путь внутри контейнера, например `/ws`,
-а вместо новых окон терминала — `docker exec -it <контейнер> bash` в каждом шаге.
+без `Failed`. Если ROS 2 Humble на хосте нет (например, не Ubuntu 22.04) — тот же образ, что и
+для шага 6, но с именем и смонтированными путями к исходникам и bag (без `-v` контейнер будет
+пустым):
+```bash
+docker run -it --name tram-jury-rehearsal \
+  -v <клон репозитория>:/tram:ro \
+  -v <каталог с распакованными bag>:/data:ro \
+  --network=none ros:humble-ros-base bash
+# внутри контейнера — `/tram` смонтирован только для чтения, colcon туда собирать не может,
+# поэтому исходники копируются в обычный (writable) путь внутри контейнера, дальше как обычно:
+mkdir -p /ws/src && cp -r /tram/src/* /ws/src/
+cd /ws && source /opt/ros/humble/setup.bash && colcon build && source install/setup.bash
+```
+Дальше по всему разделу `<ws>` = `/ws`, путь к bag = `/data/<bag_id>`, а вместо новых окон
+терминала — `docker exec -it tram-jury-rehearsal bash` (с тем же `source` из шага 1 в каждой
+новой сессии).
 
 Собираются три пакета: `tram_vehicle_msgs_vendor`, `tram_odometry_core`, `tram_odometry`.
 Свой `tram_vehicle_msgs` ничего исключать не требует. `tram_vehicle_msgs_vendor` (каталог
@@ -135,7 +150,11 @@ ros2 topic echo --once /result/position
 ```
 
 **Ожидается** один блок YAML с полями `header.stamp`, `pose.pose.position.{x,y,z}`,
-`twist.twist.linear.x`; `frame_id` — `map` (или `odom` для bag без GNSS), не пустой.
+`twist.twist.linear.x`; `frame_id` — `map` (или `odom` для bag без GNSS), не пустой. Если bag с
+GNSS и вы делаете эту проверку в первые секунды после запуска `ros2 bag play` — `/result/position`
+ещё может не публиковаться (до первого валидного fix, см. таблицу выше): `echo --once` в этот
+момент тоже просто ждёт без вывода — тот же класс поведения, что и полностью остановленный bag;
+подождать пару секунд и повторить.
 
 ### 4. Логи
 
@@ -146,13 +165,17 @@ ros2 topic echo --once /result/position
   продолжает публиковать `/result/*`, процесс `odometry_node` остаётся в списке (`ps aux`
   внутри контейнера или `ros2 node list`).
 
-  Пока bag играет, из терминала 3 можно спровоцировать её один раз явно:
+  Пока bag играет, из терминала 3 можно проверить это явно одной командой:
   ```bash
   ros2 topic pub --once /vehicle/front_bogie_velocity tram_vehicle_msgs/msg/VelocitySensor \
     '{header: {stamp: {sec: 0, nanosec: 0}}, velocity: .nan}'
   ```
-  **Ожидается:** в терминале 1 — не более одной строки `error` (может не появиться, если
-  троттлинг 5 с уже сработал на другом входе), нода не завершается, `/result/*` продолжает идти.
+  **Ожидается:** сама команда подтверждает публикацию в своём stdout
+  (`publishing #1: ...velocity=nan`). В терминале 1 при этом может не появиться вообще
+  ничего — с `stamp` `0` сообщение отбрасывается раньше ядра (`odometry_node.py`, гейт по
+  stamp), строка `error` тут не про этот случай. Главная проверка — нода не падает и
+  `/result/*` не прерывается: сравнить `ros2 topic hz /result/velocity` до и после — частота
+  не должна заметно измениться.
 - На стенде (п. 6) всё складывается в `out/stand/<bag>/`: `build.log` (colcon), `node.log`
   (нода), `play.log`, `record/` (rosbag2 с входами и `/result/*`), `resources.csv`, `stand.json`.
 
@@ -166,9 +189,10 @@ cp .env.example .env                                  # TRAM_DATA_DIR = ката
 ```
 
 **Ожидается:** таблица метрик в stdout (`speed_rmse`, `along_rmse`, `drift_pct`, …) и файл
-`out/eval/<commit>-<bag>/metrics.json`; строка «упали: нет» в сводке. Команда не требует ни
-запущенной ноды, ни Docker — чистый Python, доигрывать bag через `ros2 bag play` для неё не
-нужно.
+`out/eval/<commit>-<bag_id>/metrics.json` для `--bag` (для `--split holdout` — метка в имени
+каталога `holdout`, не имя bag: `out/eval/<commit>-holdout/metrics.json`); строка «упали: нет» в
+сводке. Команда не требует ни запущенной ноды, ни Docker — чистый Python, доигрывать bag через
+`ros2 bag play` для неё не нужно.
 
 `tools/eval` подаёт сообщения bag в то же ядро `Odometry.step`, что и нода, в порядке записи
 (скорость в метриках — `Estimate.speed` без сдвига `output.velocity_delay_s`: эталон eval, GNSS
