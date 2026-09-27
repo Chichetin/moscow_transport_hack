@@ -153,3 +153,25 @@ def test_wheel_gap_during_spin_does_not_reanchor_on_spinning_wheels():
             errors.append(abs(odo._v - car))
         car += model_accel(odo._notch_at(t), car, PARAMS) * 0.1
     assert max(errors) < 0.8
+
+
+def test_braking_during_slide_gap_allows_honest_wheels_to_return():
+    # The drive changes from traction to braking while both wheels are absent.
+    # The car reference must integrate those commands on state time, so the honest
+    # wheels can re-enter before the tram reaches zero.
+    from tram_odometry_core.dynamics import model_accel
+    odo, car = Odometry(PARAMS), 3.0
+    for k in range(56):
+        t = T0 + round(k * 0.1, 2)
+        notch = 8 if k <= 20 else -15
+        odo.step((CMD, _msg(t, position=notch)))
+        if not 14 <= k <= 39:
+            slip = max(0, k - 5) * 0.1 if k <= 13 else 0.0
+            odo.step((FRONT, _msg(t, velocity=(car + 1.2 * slip) * 3.6)))
+            e = odo.step((REAR, _msg(t, velocity=(car + 2.0 * slip) * 3.6)))
+            if k == 40:
+                assert odo._slip.car_speed(t) == pytest.approx(car, abs=0.7)
+            if k == 55:
+                assert (e.slip.front_trust, e.slip.rear_trust) == (1.0, 1.0)
+                assert odo._slip.car_speed(t) is None
+        car += model_accel(odo._notch_at(t), car, PARAMS) * 0.1

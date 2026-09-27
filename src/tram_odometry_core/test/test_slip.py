@@ -522,3 +522,27 @@ def test_wheel_gap_during_a_slide_keeps_the_original_car_anchor():
         det.update(ws('front', t, car + 1.2 * extra),
                    ws('rear', t, car + 2.0 * extra), 0.8, car, state_time=t)
     assert det.car_speed(3.0) == pytest.approx(anchor_before + 0.8 * 1.6, abs=TOL)
+
+
+def test_command_change_during_slide_gap_preserves_model_integral():
+    # The controller changes from traction to braking while wheels are silent.
+    # Integrating only when a wheel stamp advances would apply the final braking
+    # command to the entire 2.6 s gap and make honest wheels look far from the car.
+    det = SlipDetector(P)
+    _ramp(det, 14, 3.0, 0.8, 1.2, 2.0)
+    assert det.car_speed(1.3) is not None
+    front, rear = det._last['front'], det._last['rear']
+    car = 3.0 + 0.8 * 1.4
+    for k in range(14, 40):
+        t = k * DT
+        a = 0.8 if k <= 20 else -1.0
+        det.update(front, rear, a, car, state_time=t)
+        car += a * DT
+    assert det.car_speed(3.9) == pytest.approx(car + 0.1, abs=0.6)
+    for k in range(40, 56):
+        t = k * DT
+        s = det.update(ws('front', t, car), ws('rear', t, car + 0.02),
+                       -1.0, car, state_time=t)
+        car -= 0.1
+    assert (s.front_trust, s.rear_trust) == (1.0, 1.0)
+    assert det.car_speed(5.5) is None

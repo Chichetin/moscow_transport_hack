@@ -42,14 +42,15 @@ ADHESION_HISTORY = 16
 class SlipDetector:
     def __init__(self, params: Params):
         self._p = params
-        self._t_prev: Optional[float] = None    # stamp of the previous update
+        self._t_prev: Optional[float] = None    # newest wheel stamp of the previous update
+        self._model_t_prev: Optional[float] = None  # pipeline state time of the model integral
         self._last = {'front': None, 'rear': None}      # newest sample of each bogie
         # (bogie, jump up?) -> stamp of the last jump of that bogie in that direction
         self._t_jump = {('front', True): None, ('front', False): None,
                         ('rear', True): None, ('rear', False): None}
         # bogie -> (repeats of its newest reading on new stamps, model speed change over them)
         self._repeat = {'front': (0, 0.0), 'rear': (0, 0.0)}
-        self._integral = 0.0                    # m/s, accel_model integrated over the update time
+        self._integral = 0.0                    # m/s, accel_model integrated over state time
         self._accel = 0.0                       # m/s^2, accel_model of the newest update
         # bogie -> recent (stamp, speed, model integral at that stamp)
         self._hist = {'front': deque(maxlen=ADHESION_HISTORY), 'rear': deque(maxlen=ADHESION_HISTORY)}
@@ -70,11 +71,17 @@ class SlipDetector:
         if not stamps:
             return SlipState(0.0, 0.0, False, False, None)
         t_now = max(stamps)
-        if self._t_prev is not None and self._t_prev - t_now > p.input.max_stamp_jump_s:
-            # Both wheel streams are back on a new clock timeline (D-043). The model
-            # integral and slide anchors belong to the old one; retaining _t_prev would
-            # keep dt at zero until the old future stamp was reached again.
-            self._t_prev = None
+        model_t = t_now if state_time is None else state_time
+        wheel_rebase = (self._t_prev is not None
+                        and self._t_prev - t_now > p.input.max_stamp_jump_s)
+        model_rebase = (self._model_t_prev is not None
+                        and self._model_t_prev - model_t > p.input.max_stamp_jump_s)
+        if wheel_rebase or model_rebase:
+            # A confirmed clock rollback (D-043) starts a new model timeline. The
+            # old window and car anchor cannot be projected across it.
+            if wheel_rebase:
+                self._t_prev = None
+            self._model_t_prev = None
             self._integral = self._accel = 0.0
             self._car = None
             for name in ('front', 'rear'):
@@ -83,8 +90,14 @@ class SlipDetector:
                 self._released[name] = -math.inf
         dt = 0.0 if self._t_prev is None else max(0.0, t_now - self._t_prev)
         self._t_prev = t_now if self._t_prev is None else max(self._t_prev, t_now)
+        model_dt = (0.0 if self._model_t_prev is None
+                    else max(0.0, model_t - self._model_t_prev))
+        if model_dt > p.input.max_stamp_jump_s:
+            model_dt = 0.0       # pipeline also skips an unconfirmed forward clock jump
+        self._model_t_prev = (model_t if self._model_t_prev is None
+                              else max(self._model_t_prev, model_t))
         if math.isfinite(accel_model):
-            self._integral += accel_model * dt
+            self._integral += accel_model * model_dt
             self._accel = accel_model
         lagged = (state_time is not None
                   and state_time - t_now > p.input.stale_timeout_s)
@@ -127,7 +140,7 @@ class SlipDetector:
                                       if s.speed == prev.speed and s.speed != 0.0 else (0, 0.0))
             self._last[name] = s
             if not lagged:
-                self._adhesion(name, s, accel_model, t_now)
+                self._adhesion(name, s, accel_model)
         if self._slide['front'] is None and self._slide['rear'] is None:
             self._car = None
 
@@ -186,9 +199,9 @@ class SlipDetector:
         if self._car is None or self._slide['front'] is None or self._slide['rear'] is None:
             return None
         return max(0.0, self._car[1] + self._integral - self._car[2]
-                   + self._accel * (t - self._t_prev))
+                   + self._accel * (t - self._model_t_prev))
 
-    def _adhesion(self, name: str, s: WheelSample, accel_model: float, t_now: float) -> None:
+    def _adhesion(self, name: str, s: WheelSample, accel_model: float) -> None:
         """Adhesion of the car from the bogies' own acceleration over `slip.adhesion_window_s`
         against the mean drive model over the same time (#156). Under traction both bogies
         speeding up faster than the torque allows spin; under braking both slowing down faster
@@ -210,7 +223,9 @@ class SlipDetector:
         hist = self._hist[name]
         integral = self._integral
         if math.isfinite(accel_model):
-            integral -= accel_model * (t_now - s.t)
+            # A fresh wheel can trail the state by up to stale_timeout_s. Interpolate
+            # its model integral from the current state; older wheels have no window.
+            integral -= accel_model * (self._model_t_prev - s.t)
         hist.append((s.t, s.speed, integral))
         start = None
         for sample in reversed(hist):          # bounded: at most ADHESION_HISTORY entries
