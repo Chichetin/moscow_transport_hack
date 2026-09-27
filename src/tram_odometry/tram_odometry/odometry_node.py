@@ -4,10 +4,12 @@ Thin by design (D-001): the raw input of Odometry.step is the (topic, message) p
 received, exactly what tools/eval passes (tools/eval/tram_eval/bag.py: to_raw); parsing, units
 and stamps are the core's job. One publication per accepted input; header.stamp is that
 input's stamp (D-015); /result/velocity carries the estimate output.velocity_delay_s before
-it, the time base of the judge's reference (D-095).
+it, the time base of the judge's reference (D-095). Bags played one after another into one node
+get a fresh core each (RunGate, #200, D-098).
 """
 import math
 import os
+import time
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
@@ -24,7 +26,7 @@ try:  # the organizers' judge image ships tram_vehicle_msgs with VelocitySensor 
 except ImportError:
     DriverControllerCommand = None
 
-from tram_odometry_core.output import DelayLine
+from tram_odometry_core.output import DelayLine, RunGate
 from tram_odometry_core.pipeline import Odometry
 from tram_odometry_core.types import load_params, load_route
 
@@ -152,16 +154,14 @@ class OdometryNode(Node):
         super().__init__('tram_odometry')
         path = self.declare_parameter('params_file', params_file or '').value
         self.params = load_params(path or default_params_file())
-        route = load_route(route_file(self.params)) if self.params.position.use_map else None
-        self.odometry = Odometry(self.params, route=route)
-        self.velocity_delay = DelayLine(self.params.output.velocity_delay_s,
-                                        self.params.input.max_stamp_jump_s)
+        self._route = (load_route(route_file(self.params)) if self.params.position.use_map
+                       else None)
+        self._new_run()
+        self.run_gate = RunGate(self.params.input.max_stamp_jump_s)
         self.errors = 0
         self.pub_velocity = self.create_publisher(VelocitySensor, '/result/velocity', 10)
         self.pub_position = self.create_publisher(OdometryMsg, '/result/position', 10)
         self.pub_diagnostics = self.create_publisher(DiagnosticArray, '/result/diagnostics', 10)
-        self._last_input_ns = {}
-        self._last_diagnostic_ns = None
         inputs = VEHICLE_INPUTS + [(self.params.gnss.topic_fix, NavSatFix),
                                    (ROVER_FIX_TOPIC, NavSatFix),
                                    (self.params.gnss.topic_vel, TwistStamped)]
@@ -170,12 +170,38 @@ class OdometryNode(Node):
                                      lambda msg, topic=topic: self.on_input(topic, msg),
                                      INPUT_QOS)
 
+    def _new_run(self) -> None:
+        """A fresh core for a new bag: the GNSS window, the anchor on the map and the delay line
+        of the previous one are kilometres off in it (#200)."""
+        self.odometry = Odometry(self.params, route=self._route)
+        self.velocity_delay = DelayLine(self.params.output.velocity_delay_s,
+                                        self.params.input.max_stamp_jump_s)
+        self._last_input_ns = {}
+        self._last_diagnostic_ns = None
+
     def on_input(self, topic: str, msg) -> None:
-        """One input -> at most one velocity and one position; a core error skips the input."""
+        """Route the input to the run of its bag (RunGate, #200) and step that run."""
         try:
             stamp_ns = _stamp_ns(msg.header.stamp)
             if stamp_ns <= 0:
                 return
+            verdict, items = self.run_gate.place(topic if topic in VEHICLE_TOPICS else None,
+                                                 stamp_ns / 1_000_000_000, time.monotonic(),
+                                                 (topic, msg))
+        except Exception as e:  # noqa: BLE001 — the node must outlive any bad input
+            self.errors += 1
+            self.get_logger().error(f'{topic} input skipped: {e!r}', throttle_duration_sec=5.0)
+            return
+        if verdict == 'new':
+            self._new_run()
+            self.get_logger().info('new bag: a fresh run (#200)')
+        for item in items:
+            self._step(*item)
+
+    def _step(self, topic: str, msg) -> None:
+        """One input -> at most one velocity and one position; a core error skips the input."""
+        try:
+            stamp_ns = _stamp_ns(msg.header.stamp)
             est = self.odometry.step(to_raw(topic, msg))
             if est is None:
                 return

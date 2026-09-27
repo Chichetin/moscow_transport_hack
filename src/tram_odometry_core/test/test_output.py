@@ -4,7 +4,8 @@ import random
 
 import pytest
 
-from tram_odometry_core.output import HISTORY_MARGIN_S, MAX_SAMPLES, DelayLine
+from tram_odometry_core.output import (HISTORY_MARGIN_S, MAX_SAMPLES, RUN_CONFIRM_SAMPLES,
+                                       RUN_HOLD_S, RUN_PENDING_MAX, DelayLine, RunGate)
 
 # literals, not params.yaml: the rollback of D-095 (output.velocity_delay_s: 0) keeps these green
 DELAY = 0.09          # s, the lag of the judge's reference on its bag (D-095)
@@ -144,3 +145,114 @@ def test_output_of_nonnegative_speeds_is_finite_nonnegative_and_within_the_input
         out = line.push(t, v)
         assert math.isfinite(out) and 0.0 <= out <= 20.0
 
+
+
+# RunGate (#200, D-098): which bag an input belongs to when one node gets several
+
+WALL0 = 5000.0        # s, monotonic clock of the node at the first input
+
+
+def _play(gate, inputs):
+    """inputs: (vehicle topic or None, stamp, wall, name) -> the names stepped per run."""
+    runs = [[]]
+    for vehicle, stamp, wall, name in inputs:
+        verdict, items = gate.place(vehicle, stamp, wall, name)
+        if verdict == 'new':
+            runs.append([])
+        runs[-1].extend(items)
+    return runs
+
+
+def _bag(t0, wall0, seconds, gnss_first=0.0, gnss=True, hz=10):
+    """One bag played at its pace: GNSS fixes from t0, both bogies from t0 + gnss_first."""
+    out = []
+    for k in range(int(seconds * hz)):
+        dt = k / hz
+        if gnss:
+            out.append((None, t0 + dt, wall0 + dt, f'g{t0 + dt:.2f}'))
+        if dt >= gnss_first:
+            out.append(('front', t0 + dt + 0.01, wall0 + dt + 0.01, f'f{t0 + dt + 0.01:.2f}'))
+            out.append(('rear', t0 + dt + 0.02, wall0 + dt + 0.02, f'r{t0 + dt + 0.02:.2f}'))
+    return out
+
+
+def test_one_bag_is_one_run_across_a_silence_of_every_stream():
+    """A 73 s silence (docs/data.md) keeps the offset: no new run, the GNSS window stays shut."""
+    inputs = _bag(T0, WALL0, 20) + _bag(T0 + 93, WALL0 + 93, 5)
+    runs = _play(RunGate(JUMP), inputs)
+    assert len(runs) == 1 and len(runs[0]) == len(inputs)
+
+
+def test_vehicle_silence_with_gnss_going_on_is_no_new_run():
+    """Review of 2ad79a9: bogies quiet 1020..1035 while GNSS goes on -- the same bag."""
+    inputs = _bag(T0, WALL0, 20) + [(None, T0 + 20 + k, WALL0 + 20 + k, 'g') for k in range(15)]
+    inputs += _bag(T0 + 35, WALL0 + 35, 3)
+    assert len(_play(RunGate(JUMP), inputs)) == 1
+
+
+def test_next_bag_is_a_new_run_with_its_gnss_that_came_before_the_bogies():
+    """Review of 2ad79a9: the new bag's fix before its first bogie goes to the new run."""
+    first = _bag(T0, WALL0, 5)
+    second = _bag(T0 - 40000, WALL0 + 8, 5, gnss_first=1.0)
+    runs = _play(RunGate(JUMP), first + second)
+    assert len(runs) == 2
+    assert runs[0] == [name for *_, name in first]
+    assert runs[1] == [name for *_, name in second]
+
+
+def test_next_bag_without_gnss_is_a_new_run():
+    runs = _play(RunGate(JUMP), _bag(T0, WALL0, 5) + _bag(T0 + 3600, WALL0 + 8, 5, gnss=False))
+    assert len(runs) == 2 and runs[1][0].startswith('f')
+
+
+def test_old_bag_inputs_still_queued_after_the_switch_are_dropped():
+    gate = RunGate(JUMP)
+    runs = _play(gate, _bag(T0, WALL0, 5) + _bag(T0 + 3600, WALL0 + 6, 2)
+                 + [('front', T0 + 5.5, WALL0 + 8.1, 'old')] + _bag(T0 + 3602, WALL0 + 8.2, 1))
+    assert len(runs) == 2 and 'old' not in runs[1]
+
+
+def test_glitched_vehicle_stamp_is_not_a_new_run_and_gnss_never_opens_one():
+    inputs = _bag(T0, WALL0, 2)
+    inputs += [('front', T0 + 500, WALL0 + 2, 'glitch')] * (RUN_CONFIRM_SAMPLES - 1)
+    inputs += [(None, T0 + 900 + k, WALL0 + 2 + k / 10, 'gnss') for k in range(50)]
+    inputs += _bag(T0 + 2.1, WALL0 + 2.1, 2)
+    runs = _play(RunGate(JUMP), inputs)
+    assert len(runs) == 1 and 'glitch' not in runs[0] and 'gnss' not in runs[0]
+
+
+def test_late_bursts_of_the_same_bag_stay_in_its_run():
+    """Inputs up to 3.7 s late (docs/data.md, trap 6) are within the jump limit."""
+    inputs = _bag(T0, WALL0, 3) + [('front', T0 + 3 - 3.7 + k * 0.01, WALL0 + 3, f'late{k}')
+                                   for k in range(10)] + _bag(T0 + 3, WALL0 + 3, 2)
+    runs = _play(RunGate(JUMP), inputs)
+    assert len(runs) == 1 and len(runs[0]) == len(inputs)
+
+
+def test_held_inputs_are_bounded():
+    gate = RunGate(JUMP)
+    gate.place('front', T0, WALL0, 'a')
+    for k in range(10 * RUN_PENDING_MAX):
+        gate.place(None, T0 + 900 + k * 1e-3, WALL0, 'g')
+    assert len(gate._held) == RUN_PENDING_MAX
+
+
+def test_one_stream_whose_clock_moves_for_good_is_no_new_run():
+    """Review of e8cbafb: any number of glitched stamps of one bogie never opens a run, the
+    other streams go on in the current one."""
+    inputs = _bag(T0, WALL0, 2)
+    for k in range(50):
+        dt = 2 + k / 10
+        inputs += [('front', T0 + dt + 20, WALL0 + dt, 'glitch'),
+                   ('rear', T0 + dt, WALL0 + dt, 'rear'), (None, T0 + dt, WALL0 + dt, 'g')]
+    runs = _play(RunGate(JUMP), inputs)
+    assert len(runs) == 1 and 'glitch' not in runs[0] and runs[0].count('rear') == 50
+
+
+def test_held_inputs_age_out():
+    """Two glitches long ago and one now of another stream do not add up to a new bag."""
+    gate = RunGate(JUMP)
+    gate.place('front', T0, WALL0, 'a')
+    gate.place('front', T0 + 500, WALL0 + 1, 'x')
+    gate.place('rear', T0 + 500, WALL0 + 1, 'x')
+    assert gate.place('front', T0 + 500 + RUN_HOLD_S + 2, WALL0 + RUN_HOLD_S + 2, 'y')[0] == 'hold'
