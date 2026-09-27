@@ -5,7 +5,9 @@ H2  the scale is a Kalman state with a variance instead of an EMA: scalar (ratio
     the last reference, correlations ignored) or joint with s (2x2, correlations kept);
 H3  a lost lock is recovered from two misses of one sign growing with the path.
 
-Variants replace PathTracker in memory (a subclass), the core and params.yaml are not changed.
+Variants replace PathTracker in memory (a subclass that overrides every method using the scale,
+so 'base' stays main c90577f on any core); the core and params.yaml are not changed. 'h123' is
+what #154 took into the core: run_eval on that commit gives the same numbers bag for bag.
 Per bag and variant: the clean run (metrics of D-012 + along_max), the stress runs scale_up,
 scale_down, gap_both_30 (position recovery against the clean run of the same variant, as
 run_eval --stress), and a log of every on_stop with the truth from the GNSS master track (eval
@@ -28,29 +30,29 @@ FALSE_M = 10.0          # tram farther than this from the snapped place: a false
 JOBS = 12
 MAIN_SCALE_ALPHA = 0.3  # position.scale_alpha of main c90577f: the EMA weight that #154 replaces
 
-# mode: base = main; ema = main's EMA with H1 (anchor as the first reference, walk-relative
-# arcs, so the anchor and the place may be on different branches); kf1 = scalar Kalman on the
-# ratio of arcs from the last reference (H1+H2); kf2 = joint Kalman of (s, scale) (H1+H2)
-S2 = dict(mode='kf1', min_arc=300.0, keep_ref=True)          # H1+H2: no new parameter
+# mode: base = main c90577f (EMA over two snaps on one branch); ema = the same EMA with H1
+# (the anchor is the first reference; a reference is kept until an arc of scale_min_arc_m);
+# kf1 = scalar Kalman on the ratio of arcs from the last reference (H1+H2); kf2 = joint Kalman
+# of (s, scale) with their covariance (H1+H2). cross: arcs through a branch join are used too;
+# meas_std: 1 sigma of a place as a scale reference (default stop_std_m); prior: 1 sigma of the
+# scale (default along_drift_frac); min_arc (kf1: 0 unless set); recover: H3, rec_scale = what a
+# relock does to the scale ('kf': Kalman from the reference with the prior variance again,
+# 'implied': jump to the scale the miss implies, 'pos': s only, the reference restarts)
+H12 = dict(mode='kf1', min_arc=300.0, keep_ref=True)
 VARIANTS = {
     'base': dict(mode='base'),
     'h1_ema': dict(mode='ema', keep_ref=True),
     'h1_ema_cross': dict(mode='ema', keep_ref=True, cross=True),
     'h12_kf2': dict(mode='kf2'),
-    'kf1_s2': dict(mode='kf1'),
-    'kf1_s3': dict(mode='kf1', meas_std=3.0),
-    'kf1_s2_a300': S2,
-    'kf1_s3_a300': dict(S2, meas_std=3.0),
-    'kf1_s5_a300': dict(S2, meas_std=5.0),
-    'kf1_s3_a200': dict(S2, meas_std=3.0, min_arc=200.0),
-    'kf1_s3_a300_p15': dict(S2, meas_std=3.0, prior=0.015),
-    'kf1_s2_a300_p15': dict(S2, prior=0.015),
-    'kf1_s2_a300_rk': dict(S2, recover=True, rec_scale='kf'),
-    'kf1_s2_a300_ri': dict(S2, recover=True, rec_scale='implied'),
-    'kf1_s2_a300_rp': dict(S2, recover=True, rec_scale='pos'),
-    'kf1_s2_a300_rk3': dict(S2, recover=True, rec_scale='kf', rec_k=3.0),
-    'kf1_s3_a300_p15_rk': dict(S2, meas_std=3.0, prior=0.015, recover=True, rec_scale='kf'),
-    'kf1_s2_a300_p15_rk': dict(S2, prior=0.015, recover=True, rec_scale='kf'),
+    'h12_noarc': dict(mode='kf1'),
+    'h12': H12,
+    'h12_s5': dict(H12, meas_std=5.0),
+    'h12_p15': dict(H12, prior=0.015),
+    'h123': dict(H12, recover=True, rec_scale='kf'),
+    'h123_implied': dict(H12, recover=True, rec_scale='implied'),
+    'h123_pos': dict(H12, recover=True, rec_scale='pos'),
+    'h123_k3': dict(H12, recover=True, rec_scale='kf', rec_k=3.0),
+    'h123_p15': dict(H12, prior=0.015, recover=True, rec_scale='kf'),
 }
 
 
@@ -81,9 +83,7 @@ class Tracker(PathTracker):
 
     def _prop(self, dd):
         pss, psc, pcc = self._P
-        qs, qc = self.cfg.get('qs', 0.0), self.cfg.get('qc', 0.0)
-        return (pss + 2.0 * dd * psc + dd * dd * pcc + qs * dd + qc * dd ** 3 / 3.0,
-                psc + dd * pcc + qc * dd * dd / 2.0, pcc + qc * dd)
+        return pss + 2.0 * dd * psc + dd * dd * pcc, psc + dd * pcc, pcc
 
     def _var_along(self, distance):
         if self.mode != 'kf2':
@@ -203,10 +203,7 @@ class Tracker(PathTracker):
         if self.mode == 'ema':
             self._scale += MAIN_SCALE_ALPHA * (self._clamp(ratio) - self._scale)
             return True
-        self._Pc += self.cfg.get('qc', 0.0) * wheel
         r = (var_ref + self._meas_var) / wheel ** 2
-        if self.cfg.get('gate') and (ratio - self._scale) ** 2 > self.cfg['gate'] ** 2 * (self._Pc + r):
-            return False
         g = self._Pc / (self._Pc + r)
         self._scale = self._clamp(self._scale + g * (ratio - self._scale))
         self._Pc *= 1.0 - g
