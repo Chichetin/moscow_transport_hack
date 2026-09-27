@@ -257,6 +257,10 @@ def test_pipeline_without_gnss_publishes_local_position_after_the_window():
     after = _wheels(odo, PARAMS.gnss.init_window_s - 0.4, PARAMS.gnss.init_window_s + 1.0, 36.0)
     assert not inside.position_absolute and not odo.position_due(inside)
     assert not after.position_absolute and odo.position_due(after)
+    from types import SimpleNamespace
+    late = odo.step(('/vehicle/driver_position_cmd', SimpleNamespace(
+        header=_hdr(PARAMS.gnss.init_window_s - 1.0), position=0)))   # stamp rolled back into the window
+    assert late is None or odo.position_due(late)
 
 
 def test_pipeline_with_the_fixes_off_the_map_starts_the_line_at_the_first_fix():

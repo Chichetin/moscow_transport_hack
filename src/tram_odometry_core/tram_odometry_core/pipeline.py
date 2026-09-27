@@ -67,7 +67,10 @@ class Odometry:
         (a bag without GNSS: odom, D-084), never inside the window, where a fix is still coming."""
         if est.position_absolute:
             return True
-        return self._t0 is not None and est.t - self._t0 > self.params.gnss.init_window_s
+        # the newest state time, not the stamp of this input: a stamp rolled back into the
+        # window (traps 5-6) must not silence a bag without GNSS again
+        latest = est.t if self._t is None else max(est.t, self._t)
+        return self._t0 is not None and latest - self._t0 > self.params.gnss.init_window_s
 
     def step(self, raw: Any) -> Optional[Estimate]:
         """Consume one raw input; None means the input was dropped, nothing to publish."""
