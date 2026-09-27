@@ -189,20 +189,22 @@ class Odometry:
             speed *= self._tracker.speed_scale     # wheel scale from the stop chain (#153)
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
         pose = (self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0))
-        # the output is the flat MGRS grid (D-083): the ENU pose of the map, or of the straight
-        # line (D-021) in the map's own ENU before the first fix, goes through geodetic -> UTM
+        # the output is the flat MGRS grid (D-083): the ENU pose of the map, else the straight
+        # line (D-021) from the first valid master fix -- also with a map that rejected every fix
+        # of the window (a bag off the route, #163); before any fix there is no anchor at all:
+        # local metres, published in odom (#162), never the map's origin kilometres away
         frame = self._line_frame
         if self._tracker is not None:
             on_map = self._tracker.advance(self._distance, self._v)
-            pose = pose if on_map is None else on_map
-            frame = self._tracker.frame
+            if on_map is not None:
+                pose, frame = on_map, self._tracker.frame
         x, y, z, yaw, pos_cov = pose if frame is None else pose_to_grid(*frame, self._grid, *pose)
         return Estimate(
             t=t, speed=speed, speed_var=var, accel=accel, accel_model=self._accel_model,
             distance=self._distance, x=x, y=y, z=z, yaw=yaw,
             pos_cov=pos_cov,
             slip=self._slip_state, gnss_used=self._gnss_used,
-            position_absolute=frame is not None,   # no map, no fix: local metres (#162)
+            position_absolute=frame is not None,   # no fix yet: local metres (#162, #163)
             filter_diagnostics=self._filter.diagnostics())
 
     def _on_fix(self, sample: GnssFix) -> None:
@@ -213,7 +215,7 @@ class Odometry:
             return
         # the origin of the straight line is the first valid fix, so the start is (0, 0)
         if sample.status >= 0:
-            if (self._tracker is None and self._line_frame is None
+            if (self._line_frame is None
                     and all(math.isfinite(v) for v in (sample.lat, sample.lon, sample.alt))
                     and abs(sample.lat) + abs(sample.lon) > 0.0):   # lat = lon = 0: trap 10
                 self._line_frame = (enu_rotation(sample.lat, sample.lon),

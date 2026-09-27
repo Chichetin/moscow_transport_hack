@@ -237,15 +237,41 @@ def test_pipeline_ignores_gnss_after_the_window():
     assert math.hypot(est.x - fx, est.y - fy) < 2.0
 
 
-def test_pipeline_before_the_first_fix_starts_at_the_map_origin_in_the_grid():
-    """No fix yet: the straight line (D-021) runs from the map's own origin and is published in
-    the grid like the rest (D-083), never as local metres near 0."""
+def test_pipeline_before_the_first_fix_has_no_anchor_even_with_a_map():
+    """No fix yet: where the tram is is unknown, the map's origin is kilometres from a start at
+    the other terminal (#163). The line stays in local metres and is marked not absolute: the
+    node publishes it in odom (#162), eval does not score it."""
     from tram_odometry_core.pipeline import Odometry
     est = _wheels(Odometry(PARAMS, route=_route()), 0.0, 1.0, 36.0)
-    fx, fy, fz = _grid(*_lla(est.distance, 0.0))              # yaw 0: east
+    assert est.position_absolute is False
+    assert (est.x, est.y) == pytest.approx((est.distance, 0.0))
+
+
+def test_pipeline_with_the_fixes_off_the_map_starts_the_line_at_the_first_fix():
+    """#163: every window fix is farther than fix_gate_m from the map (a bag off the route), so
+    the tracker never aligns. The straight line (D-021) starts at the first valid master fix,
+    published in the grid, not at the map's origin kilometres away."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    off = _lla(-1000.0, 500.0, 170.0)                    # 500 m north of branch 0
+    odo.step(_fix_msg(0.0, off))
+    est = _wheels(odo, 0.0, 0.0, 0.0)
+    fx, fy, fz = _grid(*off)
+    assert not odo._tracker.ready and est.position_absolute is True
     assert math.hypot(est.x - fx, est.y - fy) < 0.1 and est.z == pytest.approx(fz, abs=0.01)
-    assert est.x > 1e4 and est.y > 1e4
-    assert est.position_absolute is True          # the map origin is a geodetic anchor (#162)
+
+
+def test_pipeline_line_before_the_map_anchor_runs_from_the_first_fix():
+    """A fix the map accepts: from then on the map; the same fix also anchors the line, so no
+    estimate ever sits at the map's origin (#163, e2dcf65f)."""
+    from tram_odometry_core.pipeline import Odometry
+    odo = Odometry(PARAMS, route=_route())
+    start = _lla(-1000.0, 0.0, 170.0)
+    odo.step(_fix_msg(0.0, start))
+    est = _wheels(odo, 0.0, 0.0, 0.0)
+    fx, fy, _ = _grid(*start)
+    assert odo._tracker.ready and est.position_absolute
+    assert math.hypot(est.x - fx, est.y - fy) < 2.0
 
 
 def test_pipeline_without_route_keeps_the_baseline():
