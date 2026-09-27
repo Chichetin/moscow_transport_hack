@@ -151,6 +151,8 @@ class SlipParams:
     model_residual_threshold_mps2: float
     noise_accel_mps2: float
     noise_hold_s: float
+    freeze_min_samples: int
+    freeze_dv_mps: float
 
 
 @dataclass(frozen=True)

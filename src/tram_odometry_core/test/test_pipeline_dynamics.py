@@ -39,12 +39,19 @@ def _run(odo, events):
     return out
 
 
+# an exact non-zero repeat while the drive model changes the speed by more than
+# slip.freeze_dv_mps is a frozen sensor (#144): real readings under traction or brake never do
+# that, so steady speeds here are dithered by this share on every other sample (0 stays 0)
+DITHER = 1e-9
+
+
 def _cruise(odo, kmh, t_from, t_to, notch, step=0.1):
     """Both bogies at `kmh`, controller at `notch`, every `step` s."""
-    t = t_from
+    t, k = t_from, 0
     while t < t_to - 1e-9:
-        _run(odo, [(t, FRONT, kmh), (t, REAR, kmh), (t, CMD, notch), (t + step / 2, CMD, notch)])
-        t += step
+        v = kmh * (1.0 + DITHER * (k % 2))
+        _run(odo, [(t, FRONT, v), (t, REAR, v), (t, CMD, notch), (t + step / 2, CMD, notch)])
+        t, k = t + step, k + 1
     return t
 
 
@@ -172,7 +179,7 @@ def test_one_silent_bogie_with_controller_events_in_between(alive):
     _cruise(odo, 36.0, T0, T0 + 1.0, notch=10)
     for k in range(50):                                  # 5 s, only one bogie talks
         t = T0 + 1.0 + 0.1 * k
-        odo.step((alive, _wheel(t, 36.0)))
+        odo.step((alive, _wheel(t, 36.0 * (1.0 + DITHER * (k % 2)))))
         est = odo.step((CMD, _cmd(t + 0.05, 10)))
         if k > 6:
             assert est.speed == pytest.approx(10.0, abs=0.2)
@@ -268,3 +275,23 @@ def test_late_wheel_after_the_state_braked_to_zero_on_prediction():
     est = odo.step((FRONT, _wheel(t_cross - 1.0, 0.0)))
     assert est.speed == pytest.approx(-accel, abs=0.1)
     assert odo.step((REAR, _wheel(t_cross + 0.1, 0.0))).speed == 0.0
+
+
+def test_frozen_bogies_under_traction_hand_the_speed_to_the_model_and_come_back():
+    """#144 through Odometry.step: both bogies repeat 18 km/h exactly while traction 10 pulls:
+    no trust, both flagged, the speed follows the drive model; the first changed reading
+    brings both back."""
+    odo = Odometry(PARAMS)
+    t = _cruise(odo, 18.0, T0, T0 + 2.0, notch=10)       # 5 m/s, honest (dithered) readings
+    v0 = odo.step((CMD, _cmd(t, 10))).speed
+    last = None
+    for k in range(20):                                   # 2 s frozen at exactly 18 km/h
+        last = _run(odo, [(t + 0.1 * k, FRONT, 18.0), (t + 0.1 * k, REAR, 18.0),
+                          (t + 0.1 * k + 0.05, CMD, 10)])[-1]
+    assert (last.slip.front_trust, last.slip.rear_trust) == (0.0, 0.0)
+    assert last.slip.slip_front and last.slip.slip_rear
+    assert last.speed > v0 + 0.2              # accelerating on the model, not held at 5 m/s
+    t += 2.0
+    back = _run(odo, [(t, FRONT, 18.1), (t, REAR, 18.1)])[-1]
+    assert (back.slip.front_trust, back.slip.rear_trust) == (1.0, 1.0)
+    assert not back.slip.slip_front and not back.slip.slip_rear

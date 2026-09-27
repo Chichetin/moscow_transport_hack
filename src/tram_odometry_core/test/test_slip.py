@@ -236,3 +236,105 @@ def test_jumps_are_seen_again_after_the_clock_is_resynced_back():
     # the prediction leans to the front: without the noise rule the front alone would win
     s = _pair(det, 1.1, 10.0 + d, 10.0 - d, est=10.0 + 0.5 * d)
     assert (s.front_trust, s.rear_trust) == (0.5, 0.5)
+
+
+# Frozen bogie (#144): a bogie that repeats exactly the same non-zero reading on new stamps
+# while the drive model changes the speed by more than slip.freeze_dv_mps is not trusted
+FREEZE_N = P.slip.freeze_min_samples
+FREEZE_DV = P.slip.freeze_dv_mps
+DT = 0.1
+
+
+def run_pair(det, n, front, rear, accel_model, t0=0.0):
+    """Feed `n` updates at DT; `front`/`rear` map the step index to a speed. Last state."""
+    s = None
+    for k in range(n):
+        t = t0 + k * DT
+        est = (front(k) + rear(k)) / 2.0
+        s = det.update(ws('front', t, front(k)), ws('rear', t, rear(k)), accel_model, est)
+    return s
+
+
+def steps_to_freeze(accel):
+    """Updates after which a bogie frozen from step 0 is past both freeze thresholds."""
+    return max(FREEZE_N, int(FREEZE_DV / (abs(accel) * DT)) + 2) + 1
+
+
+def test_both_bogies_frozen_under_traction_are_not_trusted():
+    det = SlipDetector(P)
+    s = run_pair(det, steps_to_freeze(1.0), lambda k: 5.0, lambda k: 5.0, accel_model=1.0)
+    assert (s.front_trust, s.rear_trust) == (0.0, 0.0)
+    assert s.slip_front and s.slip_rear
+
+
+def test_frozen_bogie_under_braking_is_not_trusted():
+    det = SlipDetector(P)
+    s = run_pair(det, steps_to_freeze(-1.0), lambda k: 8.0, lambda k: 8.0, accel_model=-1.0)
+    assert (s.front_trust, s.rear_trust) == (0.0, 0.0)
+
+
+@pytest.mark.parametrize('frozen', ['front', 'rear'])
+def test_one_frozen_bogie_is_blamed_the_moving_one_trusted(frozen):
+    # the frozen one stays within the pair tolerance of the moving one for a while
+    n = steps_to_freeze(0.5)
+    moving = lambda k: 5.0 + 0.05 * k       # noqa: E731
+    still = lambda k: 5.0                   # noqa: E731
+    f, r = (still, moving) if frozen == 'front' else (moving, still)
+    s = run_pair(SlipDetector(P), n, f, r, accel_model=0.5)
+    other = 'rear' if frozen == 'front' else 'front'
+    assert getattr(s, f'slip_{frozen}') and getattr(s, f'{frozen}_trust') == 0.0
+    assert not getattr(s, f'slip_{other}') and getattr(s, f'{other}_trust') == 1.0
+
+
+def test_repeated_reading_while_coasting_is_trusted():
+    # train 30639_3b3d9eb8: the rear repeats 4.8082 km/h 18 times over 1.8 s at notch 0
+    s = run_pair(SlipDetector(P), 19, lambda k: 1.34 + 0.004 * k, lambda k: 1.3356,
+                 accel_model=-0.05)
+    assert (s.front_trust, s.rear_trust) == (1.0, 1.0)
+    assert not s.slip_front and not s.slip_rear
+
+
+def test_standstill_zero_under_brake_is_not_frozen():
+    s = run_pair(SlipDetector(P), 100, lambda k: 0.0, lambda k: 0.0, accel_model=-1.5)
+    assert (s.front_trust, s.rear_trust) == (1.0, 1.0)
+    assert not s.slip_front and not s.slip_rear
+
+
+def test_short_repeat_under_traction_is_trusted():
+    # fewer than freeze_min_samples repeats: quantization, not a frozen sensor
+    s = run_pair(SlipDetector(P), FREEZE_N, lambda k: 5.0, lambda k: 5.0, accel_model=3.0)
+    assert (s.front_trust, s.rear_trust) == (1.0, 1.0)
+
+
+def test_frozen_bogie_trusted_again_once_it_moves():
+    det = SlipDetector(P)
+    n = steps_to_freeze(1.0)
+    run_pair(det, n, lambda k: 5.0, lambda k: 5.0, accel_model=1.0)
+    s = run_pair(det, 1, lambda k: 5.05, lambda k: 5.05, accel_model=1.0, t0=n * DT)
+    assert (s.front_trust, s.rear_trust) == (1.0, 1.0)
+    assert not s.slip_front and not s.slip_rear
+
+
+def test_repeated_stamp_is_not_a_frozen_sample():
+    # the front is one repeat short of frozen with the model far past freeze_dv_mps; then its
+    # newest sample is offered again (only the rear spoke) while it is still live: a sample
+    # offered again is not a new repeat, the front stays trusted
+    det = SlipDetector(P)
+    accel = 2.0
+    for k in range(FREEZE_N):                       # FREEZE_N samples: FREEZE_N - 1 repeats
+        det.update(ws('front', k * DT, 5.0), ws('rear', k * DT, 5.0 + 1e-3 * k), accel, 5.0)
+    assert accel * DT * (FREEZE_N - 1) > FREEZE_DV
+    last = ws('front', (FREEZE_N - 1) * DT, 5.0)
+    for j in range(1, 4):                           # 0.3 s: within input.stale_timeout_s
+        k = FREEZE_N - 1 + j
+        s = det.update(last, ws('rear', k * DT, 5.0 + 1e-3 * k), accel, 5.0)
+        assert s.front_trust == 1.0 and not s.slip_front
+
+
+def test_clock_resync_forgets_the_frozen_run():
+    det = SlipDetector(P)
+    n = steps_to_freeze(1.0)
+    run_pair(det, n - 1, lambda k: 5.0, lambda k: 5.0, accel_model=1.0, t0=100.0)
+    # the input clock jumps back: the run before the resync does not count
+    s = run_pair(det, 2, lambda k: 5.0, lambda k: 5.0, accel_model=1.0, t0=0.0)
+    assert (s.front_trust, s.rear_trust) == (1.0, 1.0)
