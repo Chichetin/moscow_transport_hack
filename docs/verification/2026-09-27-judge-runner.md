@@ -64,6 +64,35 @@ runner показывает его как warning.
 (`base_link`, сетка 37UCB) по полному исходному bag на 90 с стоянки и разгона. Это проверка
 выставки, а не метрика точности.
 
+## Финальный прогон на `e2777e56779307fa3cfef93551b35604e450268d`
+
+Команда: `bash tools/submission/judge_runner.sh` (A=`30618_0e41eac3`, B=`30618_68847170`,
+`CUT_S=90`, `LATE_S=8`). Каталог:
+`out/submission/judge-runner-e2777e56779307fa3cfef93551b35604e450268d-20260927T224428/`.
+Итоговый exit code `0`; в `run.txt` — `container_exit 0`, `report_exit 0`.
+Полный `report.md`:
+
+| сценарий | ожидание | итог | map/odom | 1-й frame | Гц pos/vel | покрытие pos/vel: начало, конец, с | launch→ready, с | err2d med/max, м | exit play/check/launch | child exit |
+|---|---|---|---|---|---|---|---|---|---|---|
+| seq1_a | map | ok | 3703/0 | map | 41.2/41.25 | +0.192/+0.000 / +0.000/+0.000 | 0.95 | 0.71/1.69 | 0/0/0 | 1 |
+  ! seq1_a: odometry_node exit 1 после SIGINT runner
+| seq2_b | map | ok | 3708/0 | map | 41.24/41.27 | +0.087/+0.000 / +0.000/+0.000 | 0.96 | 0.11/0.65 | 0/0/0 | 1 |
+  ! seq2_b: odometry_node exit 1 после SIGINT runner
+| gnss_first | map | ok | 3666/0 | map | 40.79/40.8 | +0.000/+0.000 / +0.000/+0.000 | 1.11 | 0.72/1.69 | 0/0/0 | 1 |
+  ! gnss_first: odometry_node exit 1 после SIGINT runner
+| no_gnss_after_gnss | odom | ok | 0/3521 | odom | 39.82/41.27 | +4.997/+0.000 / +0.000/+0.000 | 1.06 | —/— | 0/0/0 | 1 |
+  ! no_gnss_after_gnss: odometry_node exit 1 после SIGINT runner
+| late_short_gnss | odom | ok | 0/3045 | odom | 39.76/39.78 | +16.921/+0.000 / +12.007/+0.000 | 0.82 | —/— | 0/0/0 | 1 |
+  ! late_short_gnss: odometry_node exit 1 после SIGINT runner
+
+Предупреждение во всех пяти сценариях: дочерняя `odometry_node` завершилась с кодом 1 после
+SIGINT runner; это известный `ExternalShutdownException` (#205). Все пять сценариев `ok`.
+
+Второй прогон до исправлений ревью, на `e138768` с A=`30618_8158f0b0`,
+B=`30618_b15eafc3`, `LATE_S=3`: все пять сценариев `ok`; `late_short_gnss` дал
+`0 map / 3246 odom`, медиана err2d для первых двух bag — `0,7 / 0,06 м`.
+Итоговый exit этого прогона недостоверен: скрипт правился во время выполнения.
+
 ## Что это закрывает и что нет
 
 - **Порядок «свежая нода на каждый bag»** работает: два разных bag подряд в одном контейнере дают
