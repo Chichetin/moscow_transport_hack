@@ -185,6 +185,8 @@ class Odometry:
             speed = 0.0
         else:
             speed = -self._a_zero * (self._t_zero - t)
+        if self._tracker is not None:
+            speed *= self._tracker.speed_scale     # wheel scale from the stop chain (#153)
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
         x, y, z, yaw, pos_cov = self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0)
         on_map = self._tracker.advance(self._distance, self._v) if self._tracker is not None else None
