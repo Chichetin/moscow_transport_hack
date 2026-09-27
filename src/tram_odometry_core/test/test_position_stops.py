@@ -475,3 +475,18 @@ def test_a_new_anchor_drops_the_pending_miss():
     assert not tr.on_stop(1421.0)                              # 21 m short of 2400
     tr.on_fix(*_lla(-2400.0, 0.0, 170.0), 2, distance=1421.0)  # a fix of the window re-anchors
     assert not tr.on_stop(2842.0)                              # 21 m short of 3800 from there
+
+
+def test_stop_snap_is_switched_off_by_a_zero_gate_and_a_vanishing_relock_sigma():
+    """The switch for organisers who forbid the stop snap (docs/pitch/qa.md, question 4):
+    stop_snap_max_m = 0 with relock_sigma = 1e-9. No stop snaps then, neither 5 m from its
+    place nor two misses on the line of a wheel scale error, and s stays the wheel path. With
+    the gate of the repository the same stops snap."""
+    places = [1500.0, 2400.0, 2600.0, 2800.0, 3000.0, 3200.0]
+    at = [495.0] + [(s - START_S) * WHEEL for s in places[1:]]
+    assert any(_tracker([(0, s) for s in places]).on_stop(d) for d in at)
+    tr = _tracker([(0, s) for s in places], _position(stop_snap_max_m=0.0, relock_sigma=1e-9))
+    origin = _anchor_xy(tr)
+    assert [tr.on_stop(d) for d in at] == [False] * len(at)
+    assert tr._last_snap is None and tr._scale == 1.0 and tr.speed_scale == 1.0
+    assert _arc(tr, at[-1], origin) == pytest.approx(at[-1])
