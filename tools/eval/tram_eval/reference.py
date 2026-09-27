@@ -33,6 +33,7 @@ BEST_STATUS = 2           # if a bag has GBAS fixes, only they are the reference
                           # status 0 and 2 jumps the track by 1-9 m (30618_27e994fc: 1792 switches)
 OUTLIER_WINDOW = 21       # samples (~2 s at 10 Hz) for the rolling median of the track
 OUTLIER_DIST_M = 15.0     # farther than this from the rolling median -> outlier (docs/data.md, trap 10)
+OUTLIER_HALF_S = 1.0      # s, half-width of the time window of the second median (#174)
 MAX_SPEED_MPS = 30.0      # GNSS vel above this is a glitch (tram max ~16 m/s)
 ARC_STEP_M = 0.5          # arc is accumulated over vertices >= this apart: GNSS jitter at stops adds no path
 BASE_AHEAD_M = 9.873      # organizers' tf (27.09): master at x = -9.873 m in base_link, rover at +2.563
@@ -88,13 +89,26 @@ def rolling_median(v: np.ndarray, window: int) -> np.ndarray:
     return np.median(np.lib.stride_tricks.sliding_window_view(padded, window), axis=-1)
 
 
-def outlier_mask(xy: np.ndarray) -> np.ndarray:
-    """True for points far from the rolling median of the track (single-point jumps of km)."""
+def outlier_mask(xy: np.ndarray, t: np.ndarray | None = None) -> np.ndarray:
+    """True for points far from the rolling median of the track (single-point jumps of km).
+
+    With stamps `t` (sorted), also far from the median of the points within +-OUTLIER_HALF_S:
+    next to a gap of the kept status the window of neighbouring indices reaches points a
+    minute away and lets a short jump through (#174, 30639_4285f2bc)."""
     if len(xy) < 3:
         return np.zeros(len(xy), bool)
     w = min(OUTLIER_WINDOW, len(xy) if len(xy) % 2 else len(xy) - 1)
     med = np.stack([rolling_median(xy[:, 0], w), rolling_median(xy[:, 1], w)], axis=-1)
-    return np.hypot(*(xy - med).T) > OUTLIER_DIST_M
+    far = np.hypot(*(xy - med).T) > OUTLIER_DIST_M
+    if t is None:
+        return far
+    lo = np.searchsorted(t, t - OUTLIER_HALF_S, side='left')
+    hi = np.searchsorted(t, t + OUTLIER_HALF_S, side='right')
+    for i in range(len(t)):
+        if hi[i] - lo[i] >= 3:
+            m = np.median(xy[lo[i]:hi[i]], axis=0)
+            far[i] |= bool(np.hypot(*(xy[i] - m)) > OUTLIER_DIST_M)
+    return far
 
 
 def sort_unique(t: np.ndarray) -> np.ndarray:
@@ -128,7 +142,7 @@ def clean_fixes(fix_t: np.ndarray, fix_llas: np.ndarray) -> tuple[np.ndarray, np
     if len(fix_t):
         provisional = tuple(np.median(fix_llas[:, :3], axis=0))
         enu = geodetic_to_enu(fix_llas[:, 0], fix_llas[:, 1], fix_llas[:, 2], provisional)
-        good = ~outlier_mask(enu[:, :2])
+        good = ~outlier_mask(enu[:, :2], fix_t)
         fix_t, fix_llas = fix_t[good], fix_llas[good]
     return fix_t, fix_llas
 

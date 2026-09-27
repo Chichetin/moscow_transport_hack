@@ -235,3 +235,25 @@ def test_grid_reference_keeps_the_geometry_of_the_enu_one():
 def test_no_fixes_in_the_grid_is_empty():
     ref = build_reference([], np.zeros((0, 4)), [], np.zeros((0, 2)), window_end=5.0, grid=GRID)
     assert len(ref.pos) == 0 and ref.origin is None
+
+
+def test_jump_before_a_status_gap_is_an_outlier():
+    """#174: status-2 fixes, 4 of them jumped ~96 m, then 59 s without status 2 (status 1 is
+    dropped), then status 2 again. A median over neighbouring indices reaches across the gap
+    and lets the jump through; the median over +-1 s of time does not."""
+    from tram_eval.reference import outlier_mask
+    t_before = 100.0 + 0.1 * np.arange(9)
+    t_after = t_before[-1] + 59.0 + 0.1 * np.arange(160)
+    t = np.concatenate([t_before, t_after])
+    xy = np.column_stack([10.0 * (t - t[0]), np.zeros(len(t))])      # 10 m/s east
+    xy[5:9, 1] += 96.0                                                # the jump
+    mask = outlier_mask(xy, t)
+    assert mask[5:9].all()
+    assert not mask[:5].any() and not mask[9:].any()
+
+
+def test_time_window_keeps_a_clean_track():
+    from tram_eval.reference import outlier_mask
+    t = 0.1 * np.arange(500)
+    xy = np.column_stack([10.0 * t, 0.5 * np.sin(t)])
+    assert not outlier_mask(xy, t).any()
