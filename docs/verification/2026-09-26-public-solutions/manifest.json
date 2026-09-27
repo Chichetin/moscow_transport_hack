@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-26",
+  "baseline_commit": "eeca835c3a2484aabebca3e986c3e778a008b971",
+  "publication_main": "22d861a",
+  "python": "3.13.13",
+  "platform": "Linux-7.1.5-zen1-2-zen-x86_64-with-glibc2.44",
+  "packages": {
+    "numpy": "2.5.3",
+    "scipy": "1.18.1",
+    "pandas": "3.0.6",
+    "pyproj": "3.8.0",
+    "PyYAML": "6.0.3",
+    "rosbags": "0.11.5",
+    "pytest": "9.1.1"
+  },
+  "dataset_url": "https://disk.yandex.ru/d/DdnscmWTBtzkOQ",
+  "dataset_zip_sha256": "d0b2483e13990edb8219b0d7bbcafc7ed001cce549a4d3af467069b2472e7d52",
+  "eigen_commit": "3147391d946bb4b6c68edd901f2add6ac1f31f8c",
+  "scope": "core adapters, not native ROS benchmarking",
+  "candidate_holdout_run": false,
+  "source_files_sha256": {
+    "tools/research/README.md": "36b5cf7172427d9bc11406bda99891565825bb954065b82b87d9f48539c7e38a",
+    "tools/research/ange_runner.cpp": "c386e82154bc77bffc3e7e2b823d50e58d08ccbab62fd53c5b93daaef8c13a81",
+    "tools/research/stress_public_ideas.py": "ee4d48f48cac71491aecfce325b9cfcf3d3165c20aa0e3924f5233b3cf7a9f21",
+    "tools/research/compare_public.py": "7b69bd1b3b58a9cc38fd2de40a531184109d6ce1c8240ed206eacf3bc6d472d1"
+  }
+}
