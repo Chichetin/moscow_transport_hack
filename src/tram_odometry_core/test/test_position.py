@@ -637,6 +637,26 @@ def test_pipeline_publishes_base_link_with_the_offset_of_params():
     assert est.z == pytest.approx(fz - 3.0, abs=0.3)          # ellipsoidal height of base_link
 
 
+def test_pipeline_map_position_of_late_wheel_uses_earlier_path():
+    from types import SimpleNamespace
+    from dataclasses import replace
+    from tram_odometry_core.pipeline import Odometry
+    from tram_odometry_core.position import pose_to_grid
+
+    params = replace(PARAMS, drive=replace(PARAMS.drive, use_model=False))
+    odo = Odometry(params, route=_route())
+    odo.step(_fix_msg(0.0, _lla(-1000.0, 0.0, 170.0)))
+    _wheels(odo, 0.0, 2.0, 36.0)
+    odo.step(('/vehicle/driver_position_cmd', SimpleNamespace(header=_hdr(3.05), position=0)))
+    late = odo.step(('/vehicle/front_bogie_velocity', SimpleNamespace(
+        header=_hdr(2.05), velocity=36.0)))
+
+    expected = odo._tracker.advance(odo._distance - 10.0, 10.0)
+    grid = pose_to_grid(*odo._tracker.frame, odo._grid, *expected)
+    assert late.t == pytest.approx(2.05)
+    assert (late.x, late.y) == pytest.approx(grid[:2], abs=0.2)
+
+
 def test_base_link_goes_on_past_a_dead_end_by_the_offset_at_most():
     """The map ends where master stood: the rail goes on for base_ahead_m past it."""
     tr = PathTracker(PARAMS_YAML, _route())
