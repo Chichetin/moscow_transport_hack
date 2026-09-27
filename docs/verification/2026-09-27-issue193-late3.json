@@ -1,0 +1,95 @@
+{
+  "commit": "fccfba998f3bbfb3b44e8723ea54bafb458371bd",
+  "scenario": "original organizer bag, full messages, node launched 3 seconds after player invocation",
+  "metrics": {
+    "velocity": {
+      "rmse": 0.027819,
+      "max": 0.307895,
+      "n": 50419
+    },
+    "x": {
+      "rmse": 1.418184,
+      "max": 12.364169,
+      "n": 50417
+    },
+    "y": {
+      "rmse": 1.205641,
+      "max": 14.664549,
+      "n": 50417
+    },
+    "z": {
+      "rmse": 1.430413,
+      "max": 1.70282,
+      "n": 50417
+    },
+    "distance": {
+      "rmse": 2.34753,
+      "max": 19.225146,
+      "n": 50417
+    }
+  },
+  "probe": {
+    "count": 50423,
+    "frames": {
+      "map": 50423
+    },
+    "first": {
+      "frame_id": "map",
+      "x": 103634.55675883178,
+      "y": 86057.46336947195,
+      "z": 165.09155723787237,
+      "stamp": {
+        "sec": 1788955806,
+        "nanosec": 958533173
+      }
+    }
+  },
+  "first_position": {
+    "frame_id": "map",
+    "x": 103634.55675883178,
+    "y": 86057.46336947195,
+    "z": 165.09155723787237,
+    "stamp": {
+      "sec": 1788955806,
+      "nanosec": 958533173
+    }
+  },
+  "launch_delay_s": 3.002678871154785,
+  "playback_process_duration_s": 1309.8690989017487,
+  "metric_report_after_player_exit": {
+    "velocity": true,
+    "x": true,
+    "y": true,
+    "z": true,
+    "distance": true
+  },
+  "exits": {
+    "build.exitstatus": 0,
+    "checker.exitstatus": 0,
+    "container.exitstatus": 0,
+    "node-alive.exitstatus": 0,
+    "node.exitstatus": 0,
+    "play.exitstatus": 0,
+    "probe.exitstatus": 0
+  },
+  "node_error_lines": [],
+  "player_warning_lines": [],
+  "checker_traceback": false,
+  "changed_original_source_files": [],
+  "provenance": {
+    "commit": "fccfba998f3bbfb3b44e8723ea54bafb458371bd",
+    "src_tree": "91332ae819ef7ad959feaa3c96ade08f6f3f7d3a",
+    "source_archive_sha256": "901c1542a520655374a4aa47bcbd5a0e898cc8e9ab91fff157ab0d1db04b36c9",
+    "organizer_checker_source": "/home/m1hairu/Documents/msk_transport/repo/dataset/organizers/check-code/src/checker_ros",
+    "bag": "30618_88aea4d9",
+    "bag_duration_ns": 1309591314745,
+    "bag_message_count": 117976,
+    "late_launch_delay_s": 3,
+    "rate": 1,
+    "blind": false,
+    "message_package": "full repository package, including DriverControllerCommand",
+    "scenario": "player invocation then 3 seconds then node launch",
+    "sealed154_accessed": false
+  },
+  "elapsed_s": 1324.6262990679825
+}
