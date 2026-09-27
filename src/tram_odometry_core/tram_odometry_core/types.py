@@ -153,6 +153,12 @@ class SlipParams:
     noise_hold_s: float
     freeze_min_samples: int
     freeze_dv_mps: float
+    adhesion_window_s: float
+    adhesion_min_accel_mps2: float
+    spin_accel_mps2: float
+    skid_accel_mps2: float
+    readhesion_accel_mps2: float
+    slide_max_s: float
 
 
 @dataclass(frozen=True)

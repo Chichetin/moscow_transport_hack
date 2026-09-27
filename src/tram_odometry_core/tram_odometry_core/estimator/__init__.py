@@ -27,6 +27,7 @@ class SpeedFilter:
         self._stop_speed = params.position.stop_speed_mps
         self._jump_accel = params.slip.noise_accel_mps2
         self._jump_hold = params.slip.noise_hold_s
+        self._restart_var = params.slip.front_rear_threshold_mps ** 2
         if (self._p.q_accel < 0.0 or self._p.r_wheel <= 0.0
                 or self._p.q_bias < 0.0 or self._p.initial_bias_var < 0.0
                 or self._p.nis_gate <= 0.0):
@@ -218,6 +219,15 @@ class SpeedFilter:
         target = np.clip((rear[1] - front[1]) / (rear[1] + front[1]),
                          -p.scale_max_rel, p.scale_max_rel)
         self._scale_delta += p.scale_gain * (target - self._scale_delta)
+
+    def restart(self, speed: float):
+        """The car slid (#156): the state followed slipping bogies and its bias learned from
+        them. Take the car speed from the slide detector, known to the pair tolerance
+        `slip.front_rear_threshold_mps`, and forget the bias."""
+        if not self._initialized or not np.isfinite(speed):
+            return
+        self._x = np.array((max(0.0, speed), 0.0))
+        self._cov = np.diag((max(self._cov[0, 0], self._restart_var), self._p.initial_bias_var))
 
     def state(self):
         return (float(self._x[0]), float(self._cov[0, 0]),

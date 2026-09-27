@@ -36,6 +36,7 @@ class Odometry:
         self._slip = SlipDetector(params)
         self._filter = SpeedFilter(params)
         self._slip_state = SlipState(1.0, 1.0, False, False, None)
+        self._sliding = False                 # the car slides: both bogies out (#156)
         self._cmd = deque(maxlen=CMD_HISTORY)  # (stamp, notch), stamps increasing
         self._accel_model = 0.0               # m/s^2, drive model at the state time
         self._v = 0.0                         # current speed, m/s
@@ -122,6 +123,11 @@ class Odometry:
         self._slip_state = st
         v_before, t_before = self._v, self._t
         self._filter.predict(now, self._accel_model)
+        car = self._slip.car_speed(now)
+        if car is not None and not self._sliding:
+            # the filter has been following the slipping bogies since the slide began
+            self._filter.restart(car)
+        self._sliding = car is not None
         if sample is not None:
             trust = st.front_trust if sample.bogie == 'front' else st.rear_trust
             self._filter.update(sample, trust)
