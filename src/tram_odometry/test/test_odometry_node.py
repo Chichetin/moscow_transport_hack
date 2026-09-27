@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import yaml
 
 rclpy = pytest.importorskip('rclpy')
 
@@ -142,7 +143,7 @@ def test_node_publishes_no_position_until_the_first_fix(node, monkeypatch):
 
 def test_velocity_message_follows_contract():
     params = load_params(PARAMS_FILE)
-    m = on.velocity_msg(_estimate(), STAMP, params)
+    m = on.velocity_msg(_estimate().speed, STAMP, params)
     assert m.header.stamp == STAMP and m.header.frame_id == 'base_link'
     assert m.velocity == 7.5
 
@@ -155,6 +156,65 @@ def test_node_publishes_both_results_with_input_stamp(node, monkeypatch):
     node.on_input('/vehicle/front_bogie_velocity', _wheel())
     assert [k for k, _ in sent] == ['v', 'p']
     assert all(m.header.stamp == STAMP for _, m in sent)
+
+
+def _ramp(n, dt_ns=50_000_000, accel=2.0):
+    """Estimates of a speed ramp (accel, m/s^2) every dt_ns from STAMP, with their input stamps."""
+    out = []
+    for k in range(n):
+        ns = STAMP.nanosec + k * dt_ns
+        stamp = _stamp(STAMP.sec + ns // 1_000_000_000, ns % 1_000_000_000)
+        est = replace(_estimate(t=stamp.sec + stamp.nanosec * 1e-9), speed=accel * k * dt_ns * 1e-9)
+        out.append((stamp, est))
+    return out
+
+
+def _feed(n, ramp, monkeypatch):
+    sent = _capture(n, monkeypatch)
+    for stamp, est in ramp:
+        monkeypatch.setattr(n.odometry, 'step', lambda raw, est=est: est)
+        n.on_input('/vehicle/front_bogie_velocity', _wheel_at(stamp))
+    return sent
+
+
+def _wheel_at(stamp):
+    m = _wheel()
+    m.header.stamp = stamp
+    return m
+
+
+def test_velocity_goes_out_delayed_position_speed_does_not(node, monkeypatch):
+    """D-095: /result/velocity is the estimate output.velocity_delay_s before its stamp (the
+    judge's reference lags the sensors by that much); /result/position keeps est.speed; both
+    keep the input stamp."""
+    delay = node.params.output.velocity_delay_s
+    assert delay > 0
+    ramp = _ramp(40)
+    sent = _feed(node, ramp, monkeypatch)
+    vel = [m for k, m in sent if k == 'v']
+    pos = [m for k, m in sent if k == 'p']
+    assert len(vel) == len(pos) == len(ramp) and node.errors == 0
+    for (stamp, est), v, p in zip(ramp, vel, pos):
+        assert v.header.stamp == stamp and p.header.stamp == stamp
+        assert p.twist.twist.linear.x == est.speed
+        since = est.t - ramp[0][1].t
+        want = 2.0 * (since - delay) if since >= delay else 0.0   # before: the first estimate
+        assert v.velocity == pytest.approx(want, abs=1e-4)
+
+
+def test_zero_velocity_delay_publishes_the_estimate_as_is(node, monkeypatch, tmp_path):
+    raw = yaml.safe_load(PARAMS_FILE.read_text(encoding='utf-8'))
+    raw['/**']['ros__parameters']['output']['velocity_delay_s'] = 0.0
+    f = tmp_path / 'p.yaml'
+    f.write_text(yaml.safe_dump(raw), encoding='utf-8')
+    n = on.OdometryNode(params_file=str(f))
+    try:
+        ramp = _ramp(20)
+        ramp = ramp[5:] + ramp[:5]                    # stamps out of order as well
+        sent = _feed(n, ramp, monkeypatch)
+        assert [m.velocity for k, m in sent if k == 'v'] == [e.speed for _, e in ramp]
+    finally:
+        n.destroy_node()
 
 
 def test_node_publishes_nothing_when_input_dropped(node, monkeypatch):

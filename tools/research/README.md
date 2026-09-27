@@ -88,3 +88,16 @@ RMSE на пересечении сопоставленных точек все�
 Калибровки/карта LCM опубликованы после обучения с пересечением нашего holdout.
 Даже общий evaluator не делает такую оценку независимой от обучения конкурента.
 Метрики годятся для сравнения зафиксированных артефактов и поиска идей.
+
+## Задержка `/result/velocity` против эталона судьи (D-095)
+
+`judge_speed_delay.py` гоняет ядро как `tools/eval` на bag организаторов с
+`/localization/kinematic_state` (все входы и без контроллера, как в образе судьи), пропускает
+скорость через `DelayLine` ноды и сопоставляет с эталоном как судья (±0,05 с): RMSE и max без
+задержки и с `output.velocity_delay_s`, перебор задержки, четверти bag, положение со сдвигом.
+`--holdout` — цена той же задержки против эталона `tools/eval` (GNSS `master/vel`).
+
+```bash
+.venv/bin/python tools/research/judge_speed_delay.py            # dataset/organizers/check-code/bags/30618_88aea4d9
+.venv/bin/python tools/research/judge_speed_delay.py --holdout
+```

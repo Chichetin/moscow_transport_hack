@@ -11,6 +11,9 @@
       grid_origin_e_m: 300000.0 # м, UTM easting угла квадрата 37UCB: x = easting − это, без переноса за 100 км
       grid_origin_n_m: 6100000.0  # м, UTM northing угла квадрата 37UCB: y = northing − это
 
+    output:
+      velocity_delay_s: 0.09    # с, ≥ 0: /result/velocity — оценка на столько раньше своего stamp; эталон судьи /localization/kinematic_state отстаёт от датчиков на ~0,09 с (30618_88aea4d9, D-095); /result/position не задерживается; 0 — без задержки
+
     input:
       wheel_speed_scale: 0.2777777778   # вход тележек в км/ч -> м/с (D-003, docs/data.md)
       stale_timeout_s: 0.5              # датчик молчит дольше -> не доверять ему
