@@ -94,3 +94,84 @@ def test_a_clock_glitch_of_one_bogie_does_not_freeze_the_jump_memory(n_future):
             if e is not None and k >= 90:
                 errors.append(abs(e.speed - v / 3.6))
     assert max(errors) < PARAMS.slip.front_rear_threshold_mps
+
+
+def _spin_run(extra_front, extra_rear, notch=8, v0=3.0, seconds=12.0, spin=(4.0, 6.0)):
+    """Car on `notch` from v0 by the drive model (the truth); in `spin` both bogies run
+    `extra_*` m/s^2 above it, then drop back to it within 0.5 s (30618_33bec73f, #156).
+    Returns [(t from T0, estimate, truth)] of the wheel outputs."""
+    from tram_odometry_core.dynamics import model_accel
+    odo, out, car, lead = Odometry(PARAMS), [], v0, {'front': 0.0, 'rear': 0.0}
+    extra = {'front': extra_front, 'rear': extra_rear}
+    for k in range(int(seconds * 10)):
+        t = T0 + 0.1 * k
+        s = 0.1 * k
+        for side in lead:
+            if spin[0] <= s < spin[1]:
+                lead[side] += extra[side] * 0.1
+            elif s >= spin[1]:
+                lead[side] = max(0.0, lead[side] - 0.2 * extra[side] * 0.1 * 5)
+        for topic, msg in ((CMD, _msg(t, position=notch)),
+                           (FRONT, _msg(t, velocity=(car + lead['front']) * 3.6)),
+                           (REAR, _msg(t, velocity=(car + lead['rear']) * 3.6))):
+            e = odo.step((topic, msg))
+            if e is not None and topic != CMD:
+                out.append((s, e, car))
+        car += model_accel(odo._notch_at(t), car, PARAMS) * 0.1
+    return out
+
+
+def test_spin_of_both_bogies_does_not_drag_the_speed_up():
+    # both bogies spin 1.2 and 2.8 m/s^2 faster than the car for 2 s, each step below the jump
+    # limit: the pair rules followed the slower one to 2.4 m/s off (holdout 33bec73f: 1.5).
+    # The slide is seen after a window of evidence; from then on the filter runs on the model
+    # from the car speed of the slide windows and trusts the bogies again once they are back
+    out = _spin_run(1.2, 2.8)
+    err = {round(s, 1): abs(e.speed - car) for s, e, car in out}
+    assert max(err.values()) < 0.8
+    assert max(v for s, v in err.items() if 5.0 <= s < 7.0) < 0.4
+    assert any(e.slip.slip_front and e.slip.slip_rear for s, e, car in out if 4.0 <= s < 6.5)
+    assert not out[-1][1].slip.slip_front and not out[-1][1].slip.slip_rear
+    assert err[round(out[-1][0], 1)] < 0.1
+
+
+def test_wheel_gap_during_spin_does_not_reanchor_on_spinning_wheels():
+    # Controller continues at 10 Hz while both bogies disappear for 0.8 s. A slide
+    # found before the gap must keep its car anchor when the slipping wheels resume.
+    from tram_odometry_core.dynamics import model_accel
+    odo, car, errors = Odometry(PARAMS), 3.0, []
+    for k in range(35):
+        t = T0 + round(k * 0.1, 2)
+        odo.step((CMD, _msg(t, position=8)))
+        slip = max(0, k - 5) * 0.1
+        if not 14 <= k <= 21:
+            odo.step((FRONT, _msg(t, velocity=(car + 1.2 * slip) * 3.6)))
+            odo.step((REAR, _msg(t, velocity=(car + 2.0 * slip) * 3.6)))
+        if k == 12 or k == 21:
+            assert odo._slip.car_speed(t) is not None
+        if k >= 22:
+            errors.append(abs(odo._v - car))
+        car += model_accel(odo._notch_at(t), car, PARAMS) * 0.1
+    assert max(errors) < 0.8
+
+
+def test_braking_during_slide_gap_allows_honest_wheels_to_return():
+    # The drive changes from traction to braking while both wheels are absent.
+    # The car reference must integrate those commands on state time, so the honest
+    # wheels can re-enter before the tram reaches zero.
+    from tram_odometry_core.dynamics import model_accel
+    odo, car = Odometry(PARAMS), 3.0
+    for k in range(56):
+        t = T0 + round(k * 0.1, 2)
+        notch = 8 if k <= 20 else -15
+        odo.step((CMD, _msg(t, position=notch)))
+        if not 14 <= k <= 39:
+            slip = max(0, k - 5) * 0.1 if k <= 13 else 0.0
+            odo.step((FRONT, _msg(t, velocity=(car + 1.2 * slip) * 3.6)))
+            e = odo.step((REAR, _msg(t, velocity=(car + 2.0 * slip) * 3.6)))
+            if k == 40:
+                assert odo._slip.car_speed(t) == pytest.approx(car, abs=0.7)
+            if k == 55:
+                assert (e.slip.front_trust, e.slip.rear_trust) == (1.0, 1.0)
+                assert odo._slip.car_speed(t) is None
+        car += model_accel(odo._notch_at(t), car, PARAMS) * 0.1

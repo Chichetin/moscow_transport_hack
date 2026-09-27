@@ -73,11 +73,11 @@ class Estimate:
     accel: float              # m/s^2, estimate
     accel_model: float        # m/s^2, drive-model prediction
     distance: float           # m, path since the start of the run
-    x: float                  # m, frame map
-    y: float
-    z: float                  # m, frame map (ENU up)
-    yaw: float                # rad, ENU
-    pos_cov: Tuple[float, float, float]   # var_x, var_y, cov_xy
+    x: float                  # m, MGRS grid if absolute, local odom otherwise
+    y: float                  # m, same frame as x
+    z: float                  # m, WGS84 ellipsoidal height if absolute, 0 otherwise
+    yaw: float                # rad, heading from the frame's x axis
+    pos_cov: Tuple[float, float, float]   # var_x, var_y, cov_xy in that frame
     slip: SlipState
     gnss_used: bool
     position_absolute: bool   # x, y, z, yaw in the MGRS grid (D-083); False: local metres of
@@ -158,6 +158,11 @@ class SlipParams:
     noise_hold_s: float
     freeze_min_samples: int
     freeze_dv_mps: float
+    adhesion_window_s: float
+    adhesion_min_accel_mps2: float
+    spin_accel_mps2: float
+    skid_accel_mps2: float
+    readhesion_accel_mps2: float
 
 
 @dataclass(frozen=True)
@@ -306,9 +311,20 @@ def load_params(path) -> Params:
     if not (params.input.max_stamp_jump_s > 0):
         raise ValueError('input.max_stamp_jump_s must be positive')
     _validate_filter(params.filter)
+    _validate_slip(params.slip)
     _validate_side(params.position)
     _validate_base_link(params.position)
     return params
+
+
+def _validate_slip(slip: SlipParams) -> None:
+    if not (0.0 < slip.adhesion_window_s <= 1.0):
+        raise ValueError('slip.adhesion_window_s must be in (0, 1] s')
+    for key in ('adhesion_min_accel_mps2', 'spin_accel_mps2', 'skid_accel_mps2'):
+        if not (getattr(slip, key) > 0.0):
+            raise ValueError(f'slip.{key} must be positive')
+    if not (slip.readhesion_accel_mps2 >= 0.0):
+        raise ValueError('slip.readhesion_accel_mps2 must be nonnegative')
 
 
 def _validate_side(position: PositionParams) -> None:

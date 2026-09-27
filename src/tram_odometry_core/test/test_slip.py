@@ -338,3 +338,211 @@ def test_clock_resync_forgets_the_frozen_run():
     # the input clock jumps back: the run before the resync does not count
     s = run_pair(det, 2, lambda k: 5.0, lambda k: 5.0, accel_model=1.0, t0=0.0)
     assert (s.front_trust, s.rear_trust) == (1.0, 1.0)
+
+
+# Adhesion of the whole car (#156): both bogies speeding up faster than the drive allows under
+# traction (spin) or slowing down faster than the brake allows (skid), apart from each other
+SPIN = P.slip.spin_accel_mps2
+SKID = P.slip.skid_accel_mps2
+WINDOW = P.slip.adhesion_window_s
+
+
+def test_slide_recovery_of_both_bogies_is_not_antiphase_noise():
+    # 30618_2050d396, 444.5 s: both bogies slid down on braking, then both jump back up while
+    # still below the prediction; each has jumped both ways within the hold, but the pair does
+    # not straddle the car speed as antiphase noise does: it is still a slide of the car
+    det = SlipDetector(P)
+    _pair(det, 0.0, 5.8, 5.8, accel_model=-1.5, est=5.8)
+    _pair(det, 0.1, 4.45, 5.26, accel_model=-1.5, est=5.8)
+    _pair(det, 0.2, 2.2, 3.1, accel_model=-1.5, est=5.8)
+    s = _pair(det, 0.3, 3.0, 3.9, accel_model=-1.5, est=5.8)
+    assert (s.front_trust, s.rear_trust) == (0.0, 0.0)
+    assert s.slip_front and s.slip_rear
+
+
+def test_latest_same_way_jumps_override_older_antiphase_jumps():
+    # A stale opposite-direction jump remains in the 1 s memory, but both latest
+    # jumps are upward. The readings still straddle the prediction, so the special
+    # same-side rule alone would incorrectly keep 0.5/0.5.
+    det = SlipDetector(P)
+    _pair(det, 0.0, 9.2, 10.8, est=10.4)
+    _pair(det, 0.1, 9.6, 10.4, est=10.4)
+    s = _pair(det, 0.2, 10.0, 10.8, est=10.4)
+    assert (s.front_trust, s.rear_trust) == (0.0, 0.0)
+    assert s.slip_front and s.slip_rear
+
+
+def _ramp(det, n, v0, accel_model, extra_front, extra_rear, start=5, t0=0.0):
+    """`n` pairs at DT: the car follows the model from v0; from step `start` the front and the
+    rear run `extra_*` m/s^2 above it. The estimate passed is the car. Returns (states, car)."""
+    out, car = [], v0
+    for k in range(n):
+        t = t0 + k * DT
+        slip_k = max(0, k - start)
+        f = car + extra_front * slip_k * DT
+        r = car + extra_rear * slip_k * DT
+        out.append(det.update(ws('front', t, f), ws('rear', t, r), accel_model, car))
+        car += accel_model * DT
+    return out, car
+
+
+def test_gradual_spin_of_both_bogies_under_traction_trusts_neither():
+    # 30618_33bec73f, 104 s: on notch 8 both bogies run 1.8 and 2.6 m/s^2 above the model, each
+    # step below the jump limit, while the car follows it: the pair rules trusted the front
+    assert 1.8 * DT < _jump_step(JUMP) and 2.6 * DT < _jump_step(JUMP)
+    det = SlipDetector(P)
+    out, car = _ramp(det, 20, 3.0, 0.8, 1.8, 2.6)
+    s = out[-1]
+    assert (s.front_trust, s.rear_trust) == (0.0, 0.0)
+    assert s.slip_front and s.slip_rear
+    # the car speed is the start of the windows moved on by the model
+    assert det.car_speed(19 * DT) == pytest.approx(car - 0.8 * DT, abs=TOL)
+
+
+def test_gradual_skid_of_both_bogies_under_braking_trusts_neither():
+    det = SlipDetector(P)
+    out, _ = _ramp(det, 25, 8.0, -1.0, -2.5, -2.9)
+    s = out[-1]
+    assert (s.front_trust, s.rear_trust) == (0.0, 0.0)
+    assert s.slip_front and s.slip_rear
+    assert det.car_speed(24 * DT) is not None
+
+
+def test_bogies_jumping_together_are_not_a_slide():
+    # 30618_27e994fc, 243.5 s: after a late burst of the bus both bogies catch up with the car
+    # by the same 0.9 m/s in one step; two wheelsets never slip alike: trusted
+    det = SlipDetector(P)
+    s = None
+    for k in range(15):
+        v = 1.2 + 0.08 * k + (0.9 if k >= 8 else 0.0)
+        s = det.update(ws('front', k * DT, v), ws('rear', k * DT, v + 0.01), 0.8, 1.2 + 0.08 * k)
+        assert det.car_speed(k * DT) is None
+    assert (s.front_trust, s.rear_trust) == (1.0, 1.0)
+
+
+def test_honest_braking_harder_than_the_model_is_trusted():
+    # train: the brake table under-predicts by up to 1.67 m/s^2 over the window (skid limit 2)
+    det = SlipDetector(P)
+    out, _ = _ramp(det, 25, 8.0, -1.0, -0.9 * SKID, -0.9 * SKID + 0.1)
+    assert all((s.front_trust, s.rear_trust) == (1.0, 1.0) for s in out)
+    assert det.car_speed(24 * DT) is None
+
+
+def test_spin_of_one_bogie_is_left_to_the_pair_rules():
+    det = SlipDetector(P)
+    out, _ = _ramp(det, 20, 3.0, 0.8, 2.6, 0.0)
+    s = out[-1]
+    assert det.car_speed(19 * DT) is None
+    assert s.rear_trust == 1.0 and s.front_trust == 0.0 and s.slip_front
+
+
+def test_bogies_adhere_again_back_at_the_car_speed():
+    det = SlipDetector(P)
+    out, car = _ramp(det, 16, 3.0, 0.8, 1.8, 2.6)
+    assert (out[-1].front_trust, out[-1].rear_trust) == (0.0, 0.0)
+    # the spin stops: the bogies come down to the car and follow it again
+    s, t = None, 16 * DT
+    for k in range(20):
+        s = det.update(ws('front', t, car), ws('rear', t, car + 0.02), 0.8, car)
+        car += 0.8 * DT
+        t += DT
+    assert (s.front_trust, s.rear_trust) == (1.0, 1.0)
+    assert not s.slip_front and not s.slip_rear
+    assert det.car_speed(t) is None
+
+
+def test_sustained_slide_keeps_the_original_car_anchor():
+    det = SlipDetector(P)
+    out, car = _ramp(det, 75, 3.0, 0.8, 1.2, 1.6)
+    # A timeout must not make the filter trust spinning wheels or restart from their
+    # already inflated speeds. At 7.4 s the wheels are ~9-12 m/s above the car.
+    assert (out[-1].front_trust, out[-1].rear_trust) == (0.0, 0.0)
+    # The onset window may already contain up to ~1 m/s of spin; it must not acquire
+    # another several metres per second from a new anchor after the old one expires.
+    assert abs(det.car_speed(74 * DT) - (car - 0.8 * DT)) < 1.1
+
+
+def test_start_from_the_dead_zone_is_no_evidence_of_a_spin():
+    # trap 8: a bogie reads exactly 0 until the car rolls, then jumps to its speed
+    det = SlipDetector(P)
+    s = None
+    for k in range(15):
+        f = 0.0 if k < 5 else 1.5 + 0.1 * k
+        r = 0.0 if k < 5 else 0.9 + 0.1 * k
+        s = det.update(ws('front', k * DT, f), ws('rear', k * DT, r), 0.8, None if k < 5 else r)
+        assert det.car_speed(k * DT) is None
+
+
+def test_antiphase_ramp_is_not_a_slide():
+    det = SlipDetector(P)
+    _ramp(det, 20, 3.0, 0.8, 2.6, -2.6)
+    assert det.car_speed(19 * DT) is None
+
+
+def test_clock_resync_restores_adhesion_model_timeline():
+    # D-043: after a confirmed backward clock jump, the drive integral must resume on the
+    # new timeline. Otherwise its dt stays zero until the old future stamp is reached.
+    det = SlipDetector(P)
+    _ramp(det, 20, 3.0, 0.8, 0.0, 0.0, t0=86400.0)
+    out, _ = _ramp(det, 20, 3.0, 0.8, 1.8, 2.6, t0=0.0)
+    assert (out[-1].front_trust, out[-1].rear_trust) == (0.0, 0.0)
+    assert det.car_speed(19 * DT) is not None
+
+
+def test_buffered_wheels_do_not_anchor_a_slide_to_later_commands():
+    # Wheel stamps can lag the controller by 3.7 s. Its current acceleration is then
+    # unrelated to the wheel window; a restart from that integral would be arbitrary.
+    det = SlipDetector(P)
+    for k in range(25):
+        t = k * DT
+        car = 3.0 + 0.8 * t
+        extra = max(0, k - 5) * DT
+        accel_now = -1.0 if k < 12 else 0.8  # command changed during the lag
+        det.update(ws('front', t, car + 1.8 * extra),
+                   ws('rear', t, car + 2.6 * extra), accel_now, car,
+                   state_time=t + 3.0)
+        assert det.car_speed(t + 3.0) is None
+
+
+def test_wheel_gap_during_a_slide_keeps_the_original_car_anchor():
+    det = SlipDetector(P)
+    out, _ = _ramp(det, 15, 3.0, 0.8, 1.2, 2.0)
+    assert (out[-1].front_trust, out[-1].rear_trust) == (0.0, 0.0)
+    anchor_before = det.car_speed(1.4)
+    front, rear = det._last['front'], det._last['rear']
+    for k in range(15, 23):
+        # Commands keep advancing while the wheels say nothing for 0.8 s.
+        s = det.update(front, rear, 0.8, 3.0 + 0.8 * k * DT, state_time=k * DT)
+        assert (s.front_trust, s.rear_trust) == (0.0, 0.0)
+        assert det.car_speed(k * DT) is not None
+    for k in range(23, 31):
+        t = k * DT
+        car = 3.0 + 0.8 * t
+        extra = (k - 5) * DT
+        det.update(ws('front', t, car + 1.2 * extra),
+                   ws('rear', t, car + 2.0 * extra), 0.8, car, state_time=t)
+    assert det.car_speed(3.0) == pytest.approx(anchor_before + 0.8 * 1.6, abs=TOL)
+
+
+def test_command_change_during_slide_gap_preserves_model_integral():
+    # The controller changes from traction to braking while wheels are silent.
+    # Integrating only when a wheel stamp advances would apply the final braking
+    # command to the entire 2.6 s gap and make honest wheels look far from the car.
+    det = SlipDetector(P)
+    _ramp(det, 14, 3.0, 0.8, 1.2, 2.0)
+    assert det.car_speed(1.3) is not None
+    front, rear = det._last['front'], det._last['rear']
+    car = 3.0 + 0.8 * 1.4
+    for k in range(14, 40):
+        t = k * DT
+        a = 0.8 if k <= 20 else -1.0
+        det.update(front, rear, a, car, state_time=t)
+        car += a * DT
+    assert det.car_speed(3.9) == pytest.approx(car + 0.1, abs=0.6)
+    for k in range(40, 56):
+        t = k * DT
+        s = det.update(ws('front', t, car), ws('rear', t, car + 0.02),
+                       -1.0, car, state_time=t)
+        car -= 0.1
+    assert (s.front_trust, s.rear_trust) == (1.0, 1.0)
+    assert det.car_speed(5.5) is None

@@ -158,3 +158,17 @@ def test_load_params_rejects_invalid_speed_scale_prior(tmp_path, bad):
     f = _write(tmp_path, lambda r: r['position'].update(speed_scale_prior_m=bad))
     with pytest.raises(ValueError, match='speed_scale_prior_m'):
         T.load_params(f)
+
+
+@pytest.mark.parametrize('key,bad', [
+    ('adhesion_window_s', 0.0),
+    ('adhesion_window_s', 1.1),
+    ('adhesion_min_accel_mps2', 0.0),
+    ('spin_accel_mps2', -1.0),
+    ('skid_accel_mps2', 0.0),
+    ('readhesion_accel_mps2', -0.1),
+])
+def test_load_params_rejects_invalid_adhesion_setting(tmp_path, key, bad):
+    f = _write(tmp_path, lambda r: r['slip'].update({key: bad}))
+    with pytest.raises(ValueError, match=key):
+        T.load_params(f)
