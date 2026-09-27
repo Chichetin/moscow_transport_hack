@@ -80,6 +80,8 @@ class Estimate:
     pos_cov: Tuple[float, float, float]   # var_x, var_y, cov_xy in grid axes
     slip: SlipState
     gnss_used: bool
+    position_absolute: bool   # x, y, z, yaw in the MGRS grid (D-083); False: local metres of
+                              # the run with no geodetic anchor yet (no map, no fix), frame odom
     filter_diagnostics: Optional[FilterDiagnostics] = None
 
 

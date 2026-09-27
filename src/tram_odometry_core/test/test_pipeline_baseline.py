@@ -97,6 +97,15 @@ def test_no_fix_without_map_keeps_the_local_line():
     """Known limit (D-083): no map and no fix -> no absolute anchor, the line stays local."""
     est = drive(Odometry(PARAMS), 0.0, 1.0, KMH_36)
     assert (est.x, est.y) == pytest.approx((est.distance, 0.0))
+    assert est.position_absolute is False            # local: published in `odom`, not `map` (#162)
+
+
+def test_position_is_absolute_from_the_first_fix_without_map():
+    odo = Odometry(PARAMS)
+    assert drive(odo, 0.0, 1.0, KMH_36).position_absolute is False
+    odo.step(gnss_fix(1.0))
+    assert odo.step(cmd(1.0, 0)).position_absolute is True
+    assert drive(odo, 1.1, 2.0, KMH_36).position_absolute is True
 
 
 def test_fix_at_lat_lon_zero_is_not_the_line_origin():

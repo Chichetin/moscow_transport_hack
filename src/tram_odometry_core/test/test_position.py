@@ -245,6 +245,7 @@ def test_pipeline_before_the_first_fix_starts_at_the_map_origin_in_the_grid():
     fx, fy, fz = _grid(*_lla(est.distance, 0.0))              # yaw 0: east
     assert math.hypot(est.x - fx, est.y - fy) < 0.1 and est.z == pytest.approx(fz, abs=0.01)
     assert est.x > 1e4 and est.y > 1e4
+    assert est.position_absolute is True          # the map origin is a geodetic anchor (#162)
 
 
 def test_pipeline_without_route_keeps_the_baseline():
