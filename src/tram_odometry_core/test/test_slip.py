@@ -360,6 +360,18 @@ def test_slide_recovery_of_both_bogies_is_not_antiphase_noise():
     assert s.slip_front and s.slip_rear
 
 
+def test_latest_same_way_jumps_override_older_antiphase_jumps():
+    # A stale opposite-direction jump remains in the 1 s memory, but both latest
+    # jumps are upward. The readings still straddle the prediction, so the special
+    # same-side rule alone would incorrectly keep 0.5/0.5.
+    det = SlipDetector(P)
+    _pair(det, 0.0, 9.2, 10.8, est=10.4)
+    _pair(det, 0.1, 9.6, 10.4, est=10.4)
+    s = _pair(det, 0.2, 10.0, 10.8, est=10.4)
+    assert (s.front_trust, s.rear_trust) == (0.0, 0.0)
+    assert s.slip_front and s.slip_rear
+
+
 def _ramp(det, n, v0, accel_model, extra_front, extra_rear, start=5, t0=0.0):
     """`n` pairs at DT: the car follows the model from v0; from step `start` the front and the
     rear run `extra_*` m/s^2 above it. The estimate passed is the car. Returns (states, car)."""
@@ -439,16 +451,15 @@ def test_bogies_adhere_again_back_at_the_car_speed():
     assert det.car_speed(t) is None
 
 
-def test_slide_ends_after_slide_max_s_whatever_the_bogies_show():
+def test_sustained_slide_keeps_the_original_car_anchor():
     det = SlipDetector(P)
-    out, car = _ramp(det, 16, 3.0, 0.8, 1.8, 2.6)
-    assert det.car_speed(15 * DT) is not None
-    # the bogies stay far above the car: after slide_max_s they are back in the pair rules
-    t, f, r = 16 * DT, 6.0, 7.0
-    while t < 15 * DT + P.slip.slide_max_s + 2 * DT:
-        det.update(ws('front', t, f), ws('rear', t, r), 0.0, car)
-        t += DT
-    assert det.car_speed(t) is None
+    out, car = _ramp(det, 75, 3.0, 0.8, 1.2, 1.6)
+    # A timeout must not make the filter trust spinning wheels or restart from their
+    # already inflated speeds. At 7.4 s the wheels are ~9-12 m/s above the car.
+    assert (out[-1].front_trust, out[-1].rear_trust) == (0.0, 0.0)
+    # The onset window may already contain up to ~1 m/s of spin; it must not acquire
+    # another several metres per second from a new anchor after the old one expires.
+    assert abs(det.car_speed(74 * DT) - (car - 0.8 * DT)) < 1.1
 
 
 def test_start_from_the_dead_zone_is_no_evidence_of_a_spin():
@@ -466,3 +477,28 @@ def test_antiphase_ramp_is_not_a_slide():
     det = SlipDetector(P)
     _ramp(det, 20, 3.0, 0.8, 2.6, -2.6)
     assert det.car_speed(19 * DT) is None
+
+
+def test_clock_resync_restores_adhesion_model_timeline():
+    # D-043: after a confirmed backward clock jump, the drive integral must resume on the
+    # new timeline. Otherwise its dt stays zero until the old future stamp is reached.
+    det = SlipDetector(P)
+    _ramp(det, 20, 3.0, 0.8, 0.0, 0.0, t0=86400.0)
+    out, _ = _ramp(det, 20, 3.0, 0.8, 1.8, 2.6, t0=0.0)
+    assert (out[-1].front_trust, out[-1].rear_trust) == (0.0, 0.0)
+    assert det.car_speed(19 * DT) is not None
+
+
+def test_buffered_wheels_do_not_anchor_a_slide_to_later_commands():
+    # Wheel stamps can lag the controller by 3.7 s. Its current acceleration is then
+    # unrelated to the wheel window; a restart from that integral would be arbitrary.
+    det = SlipDetector(P)
+    for k in range(25):
+        t = k * DT
+        car = 3.0 + 0.8 * t
+        extra = max(0, k - 5) * DT
+        accel_now = -1.0 if k < 12 else 0.8  # command changed during the lag
+        det.update(ws('front', t, car + 1.8 * extra),
+                   ws('rear', t, car + 2.6 * extra), accel_now, car,
+                   state_time=t + 3.0)
+        assert det.car_speed(t + 3.0) is None

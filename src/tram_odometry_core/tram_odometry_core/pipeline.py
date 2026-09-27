@@ -110,7 +110,7 @@ class Odometry:
         drive = self.params.drive
         self._accel_model = (model_accel(self._notch_at(now), self._v, self.params)
                              if drive.use_model else 0.0)
-        st = self._slip.update(front, rear, self._accel_model, est)
+        st = self._slip.update(front, rear, self._accel_model, est, state_time=now)
         if wheel_arrived:
             self._t_wheel_rx = now
         if (drive.use_model and self._t_wheel_rx is not None

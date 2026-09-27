@@ -61,18 +61,42 @@ class SlipDetector:
         self._car = None
 
     def update(self, front: Optional[WheelSample], rear: Optional[WheelSample],
-               accel_model: float, est: Optional[float]) -> SlipState:
-        """`est` is the fused speed (m/s) before this update, None until there is one."""
+               accel_model: float, est: Optional[float],
+               state_time: Optional[float] = None) -> SlipState:
+        """`est` is the fused speed before this update. `state_time` is the pipeline time;
+        direct callers may omit it when the wheels are on the current timeline."""
         p = self._p
         stamps = [s.t for s in (front, rear) if s is not None]
         if not stamps:
             return SlipState(0.0, 0.0, False, False, None)
         t_now = max(stamps)
+        if self._t_prev is not None and self._t_prev - t_now > p.input.max_stamp_jump_s:
+            # Both wheel streams are back on a new clock timeline (D-043). The model
+            # integral and slide anchors belong to the old one; retaining _t_prev would
+            # keep dt at zero until the old future stamp was reached again.
+            self._t_prev = None
+            self._integral = self._accel = 0.0
+            self._car = None
+            for name in ('front', 'rear'):
+                self._hist[name].clear()
+                self._slide[name] = self._resid[name] = None
+                self._released[name] = -math.inf
         dt = 0.0 if self._t_prev is None else max(0.0, t_now - self._t_prev)
         self._t_prev = t_now if self._t_prev is None else max(self._t_prev, t_now)
         if math.isfinite(accel_model):
             self._integral += accel_model * dt
             self._accel = accel_model
+        lagged = (state_time is not None
+                  and state_time - t_now > p.input.stale_timeout_s)
+        if lagged:
+            # The model acceleration belongs to state_time, not to these buffered wheel
+            # stamps. A gradual slide inferred from it would restart the filter from a
+            # false car speed, especially when the command changed during the lag.
+            self._car = None
+            for name in ('front', 'rear'):
+                self._hist[name].clear()
+                self._slide[name] = self._resid[name] = None
+                self._released[name] = -math.inf
 
         live = {n: s for n, s in (('front', front), ('rear', rear))
                 if s is not None and t_now - s.t <= p.input.stale_timeout_s}
@@ -100,7 +124,8 @@ class SlipDetector:
                 self._repeat[name] = ((n + 1, dv + accel_model * (s.t - prev.t))
                                       if s.speed == prev.speed and s.speed != 0.0 else (0, 0.0))
             self._last[name] = s
-            self._adhesion(name, s, accel_model, t_now)
+            if not lagged:
+                self._adhesion(name, s, accel_model, t_now)
         if self._slide['front'] is None and self._slide['rear'] is None:
             self._car = None
 
@@ -119,6 +144,7 @@ class SlipDetector:
             slip[dead] = (front, rear)[dead == 'rear'] is not None
         elif len(live) == 2:
             f, r = live['front'].speed, live['rear'].speed
+            jumps = self._jump_relation(t_now)
             if abs(f - r) <= tol:
                 trust['front'] = trust['rear'] = 1.0
             elif (f == 0.0) != (r == 0.0) and (
@@ -131,15 +157,14 @@ class SlipDetector:
                 bad = 'front' if f == 0.0 else 'rear'
                 trust['rear' if bad == 'front' else 'front'] = 1.0
                 slip[bad] = True
-            elif self._jumps(t_now, same=True) and (
-                    not self._jumps(t_now, same=False)
-                    or (pred is not None and min(f - pred, r - pred) > tol)
+            elif jumps is not None and jumps[0] and (
+                    jumps[1] or (pred is not None and min(f - pred, r - pred) > tol)
                     or (pred is not None and max(f - pred, r - pred) < -tol)):
-                # a slide of the whole car: same-way jumps and none opposite, or both bogies
-                # past the prediction on one side (a slide and its recovery jump both ways,
-                # 30618_2050d396 444 s, #156); antiphase noise straddles the prediction
+                # The latest jumps point the same way and belong to one near-simultaneous
+                # pair, or both readings lie beyond the car prediction on the same side.
+                # Staggered jumps are ambiguous in antiphase noise (#82).
                 slip['front'] = slip['rear'] = True
-            elif pred is None or self._jumps(t_now, same=False):
+            elif pred is None or jumps is not None:
                 trust['front'] = trust['rear'] = 0.5
             else:
                 dev = {'front': abs(f - pred), 'rear': abs(r - pred)}
@@ -178,8 +203,7 @@ class SlipDetector:
         than the model: in a spin the car is at most that speed, in a skid at least. A bogie
         adheres again once its window is back inside both limits and its speed is back within
         `front_rear_threshold_mps` of the car speed on the slide side and within that plus
-        `readhesion_accel_mps2 * t` (the drift of the model over t) on the other, or after
-        `slide_max_s` whatever it shows."""
+        `readhesion_accel_mps2 * t` (the drift of the model over t) on the other."""
         p = self._p.slip
         hist = self._hist[name]
         integral = self._integral
@@ -220,14 +244,21 @@ class SlipDetector:
         near = p.front_rear_threshold_mps
         far = near + p.readhesion_accel_mps2 * (s.t - t_car)
         low, high = (car - far, car + near) if spin else (car - near, car + far)
-        if (s.t - self._slide[name] > p.slide_max_s
-                or (-p.skid_accel_mps2 <= resid <= p.spin_accel_mps2 and low <= s.speed <= high)):
+        if -p.skid_accel_mps2 <= resid <= p.spin_accel_mps2 and low <= s.speed <= high:
             self._slide[name] = None
             self._released[name] = s.t
 
-    def _jumps(self, t_now: float, same: bool) -> bool:
-        """Both bogies jumped within `slip.noise_hold_s`, in the same or in opposite directions."""
-        def recent(key):
-            t = self._t_jump[key]
-            return t is not None and 0.0 <= t_now - t <= self._p.slip.noise_hold_s
-        return any(recent(('front', up)) and recent(('rear', up == same)) for up in (True, False))
+    def _jump_relation(self, t_now: float):
+        """(same direction, paired stamps) for each bogie's latest recent jump, if both exist."""
+        def latest(name):
+            up, down = self._t_jump[(name, True)], self._t_jump[(name, False)]
+            if up is None and down is None:
+                return None
+            direction = down is None or (up is not None and up > down)
+            t = up if direction else down
+            return ((t, direction) if 0.0 <= t_now - t <= self._p.slip.noise_hold_s else None)
+        front, rear = latest('front'), latest('rear')
+        if front is None or rear is None:
+            return None
+        return (front[1] == rear[1],
+                abs(front[0] - rear[0]) <= self._p.filter.pair_window_s)
