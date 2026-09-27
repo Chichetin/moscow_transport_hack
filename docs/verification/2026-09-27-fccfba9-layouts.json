@@ -1,0 +1,96 @@
+{
+  "commit": "fccfba998f3bbfb3b44e8723ea54bafb458371bd",
+  "dirty": 0,
+  "created": "2026-09-27T19:26:52+00:00",
+  "layouts": [
+    {
+      "name": "readme",
+      "what": "README: cp -r src/* <ws>/src/ && colcon build",
+      "build": "ok",
+      "note": ""
+    },
+    {
+      "name": "clone_in_src",
+      "what": "git clone репозитория в <ws>/src/ пустого workspace",
+      "build": "ok",
+      "note": ""
+    },
+    {
+      "name": "repo_root",
+      "what": "colcon build прямо в корне клона",
+      "build": "ok",
+      "note": ""
+    },
+    {
+      "name": "jury_msgs_in_src",
+      "what": "клон в <ws>/src/, где уже лежит tram_vehicle_msgs жюри (README данных, §6.1)",
+      "build": "ok",
+      "note": ""
+    },
+    {
+      "name": "over_orig_msgs",
+      "what": "cp -r src/* поверх оригинала организаторов в <ws>/src/",
+      "build": "ok",
+      "note": ""
+    },
+    {
+      "name": "jury_msgs_over",
+      "what": "cp -r src/*, затем tram_vehicle_msgs жюри поверх в <ws>/src/ (README данных, §6.1)",
+      "build": "ok",
+      "note": ""
+    },
+    {
+      "name": "up_to",
+      "what": "README, но colcon build --packages-up-to tram_odometry",
+      "build": "ok",
+      "note": ""
+    },
+    {
+      "name": "merge_install",
+      "what": "README, но colcon build --merge-install",
+      "build": "ok",
+      "note": ""
+    },
+    {
+      "name": "symlink_install",
+      "what": "README, но colcon build --symlink-install",
+      "build": "ok",
+      "note": ""
+    },
+    {
+      "name": "underlay",
+      "what": "tram_vehicle_msgs жюри собран отдельно (underlay), наш src поверх",
+      "build": "ok",
+      "note": ""
+    },
+    {
+      "name": "judge_msgs_in_src",
+      "what": "клон в <ws>/src/ образа судьи: tram_vehicle_msgs только с VelocitySensor (#184)",
+      "build": "ok",
+      "note": ""
+    },
+    {
+      "name": "judge_msgs_over",
+      "what": "cp -r src/*, затем tram_vehicle_msgs судьи (только VelocitySensor) поверх (#184)",
+      "build": "ok",
+      "note": ""
+    }
+  ],
+  "runs": [
+    {
+      "bag": "30618_082f1d65",
+      "status": "ok",
+      "note": "нода жива: yes; /result/velocity: 891; /result/position: 891; ошибок в логе ноды: 0; [INFO] [1790537150.914089008] [rosbag2_storage]: Opened database '/tmp/rec_30618_082f1d65/rec_30618_082f1d65_0.db3' for READ_ONLY. [INFO] [1790537151.011058808] [rosbag2_storage]: Opened database '/bags/30618_082f1d65/30618_082f1d65_0.db3' for READ_ONLY. ok: типы ok; stamp из входного bag: /result/velocity 891, /result/position 891"
+    },
+    {
+      "bag": "30618_5036aa78",
+      "status": "ok",
+      "note": "нода жива: yes; /result/velocity: 1125; /result/position: 937; ошибок в логе ноды: 0; [INFO] [1790537183.812885031] [rosbag2_storage]: Opened database '/tmp/rec_30618_5036aa78/rec_30618_5036aa78_0.db3' for READ_ONLY. [INFO] [1790537183.912647883] [rosbag2_storage]: Opened database '/bags/30618_5036aa78/30618_5036aa78_0.db3' for READ_ONLY. ok: типы ok; stamp из входного bag: /result/velocity 1125, /result/position 937"
+    },
+    {
+      "bag": "30618_082f1d65@judge_msgs",
+      "status": "ok",
+      "note": "нода жива: yes; /result/velocity: 430; /result/position: 429; ошибок в логе ноды: 0; [INFO] [1790537212.401628956] [rosbag2_storage]: Opened database '/tmp/rec_30618_082f1d65@judge_msgs/rec_30618_082f1d65@judge_msgs_0.db3' for READ_ONLY. [INFO] [1790537212.474116167] [rosbag2_storage]: Opened database '/bags/30618_082f1d65/30618_082f1d65_0.db3' for READ_ONLY. ok: типы ok; stamp из входного bag: /result/velocity 430, /result/position 429"
+    }
+  ]
+}

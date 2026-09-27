@@ -1,0 +1,58 @@
+{
+  "topics": {
+    "/result/velocity": {
+      "latency": {
+        "n": 10456,
+        "p50_ms": 0.5367225,
+        "p99_ms": 2.996771950000002,
+        "max_ms": 28.56592
+      },
+      "unmatched": 0,
+      "rate": {
+        "n": 10456,
+        "mean_hz": 39.78291915606412,
+        "min_window_hz": 9.0
+      }
+    },
+    "/result/position": {
+      "latency": {
+        "n": 10452,
+        "p50_ms": 0.6534655,
+        "p99_ms": 3.226190439999997,
+        "max_ms": 29.290709
+      },
+      "unmatched": 0,
+      "rate": {
+        "n": 10452,
+        "mean_hz": 39.76911658961463,
+        "min_window_hz": 8.0
+      }
+    }
+  },
+  "latency": {
+    "n": 20908,
+    "p50_ms": 0.593302,
+    "p99_ms": 3.1252443800000007,
+    "max_ms": 29.290709
+  },
+  "rate": {
+    "n": 10452,
+    "mean_hz": 39.76911658961463,
+    "min_window_hz": 8.0
+  },
+  "resources": {
+    "n_samples": 265,
+    "cpu_mean_cores": 0.054528276846166346,
+    "cpu_max_cores": 0.10989011784690621,
+    "rss_peak_mb": 64.4296875,
+    "rss_growth_mb_min": -0.000579661077812749
+  },
+  "verdict": {
+    "latency_p99": true,
+    "latency_peak": true,
+    "rate": true,
+    "cpu": true,
+    "rss": true,
+    "rss_growth": true
+  }
+}
