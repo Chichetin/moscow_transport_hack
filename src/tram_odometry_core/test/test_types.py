@@ -1,5 +1,6 @@
 import dataclasses
 import math
+import re
 from pathlib import Path
 
 import pytest
@@ -195,3 +196,22 @@ def test_load_params_rejects_invalid_adhesion_setting(tmp_path, key, bad):
     f = _write(tmp_path, lambda r: r['slip'].update({key: bad}))
     with pytest.raises(ValueError, match=key):
         T.load_params(f)
+
+
+@pytest.mark.parametrize('literal,loads', [('1.0e-9', True), ('1e-9', False)])
+def test_stop_snap_switch_is_written_with_a_dot(tmp_path, literal, loads):
+    """The switch of the stop snap in docs/pitch/qa.md (question 4): stop_snap_max_m: 0 with
+    relock_sigma: 1.0e-9, typed into params.yaml. PyYAML reads 1e-9 without a dot as a string,
+    so the node would not start on it."""
+    text = PARAMS_YAML.read_text(encoding='utf-8')
+    for key, value in (('stop_snap_max_m', '0'), ('relock_sigma', literal)):
+        text, n = re.subn(rf'^(\s+{key}:)\s*[^\s#]+', rf'\g<1> {value}', text, flags=re.M)
+        assert n == 1
+    f = tmp_path / 'p.yaml'
+    f.write_text(text, encoding='utf-8')
+    if loads:
+        p = T.load_params(f).position
+        assert (p.stop_snap_max_m, p.relock_sigma) == (0.0, 1e-9)
+    else:
+        with pytest.raises(TypeError, match='relock_sigma'):
+            T.load_params(f)
