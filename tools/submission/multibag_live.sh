@@ -35,6 +35,9 @@ fresh_a	a	map
 fresh_b	b	map
 fresh_c	c	map
 EOF
+if [ "${MULTIBAG_ONLY:-all}" = no_gnss ]; then
+  sed -i '/^no_gnss\t/!d' "$RUN/plan.tsv"
+fi
 "$PY" - "$DATA" "$RUN" <<'PY'
 import json, sys
 from pathlib import Path
@@ -47,7 +50,7 @@ printf 'commit %s\ncommand bash tools/submission/multibag_live.sh\nstarted %s\n'
 docker build -q -f "$TMP/repo/docker/Dockerfile" --target jury -t tram-odom:jury "$TMP/repo" >/dev/null
 set +e
 docker run --rm --network=none --cpus=2 --memory=512m --memory-swap=512m \
-  --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  --user "$(id -u):$(id -g)" -e HOME=/tmp -e MULTIBAG_ONLY="${MULTIBAG_ONLY:-all}" \
   -v "$TMP/repo:/repo:ro" -v "$SCEN:/runner:ro" -v "$RUN/bags:/bags:ro" \
   -v "$RUN:/out" tram-odom:jury bash /runner/multibag_live_inside.sh 2>&1 | tee "$RUN/container.log"
 container=${PIPESTATUS[0]}

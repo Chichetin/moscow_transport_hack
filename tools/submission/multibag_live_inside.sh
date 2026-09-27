@@ -40,7 +40,12 @@ run_group() {
     python3 /runner/wait_ready.py 20 $RESULTS > "$stage/record_ready.log" 2>&1
     printf 'record_ready_exit\t%s\n' "$?" >> "$stage/exit.tsv"
     echo "== $group/$bag play"
-    ros2 bag play "/bags/$bag" > "$stage/play.log" 2>&1
+    if [ "$bag" = b_no_gnss ]; then
+      ros2 bag play /bags/b --topics /vehicle/front_bogie_velocity \
+        /vehicle/rear_bogie_velocity /vehicle/driver_position_cmd > "$stage/play.log" 2>&1
+    else
+      ros2 bag play "/bags/$bag" > "$stage/play.log" 2>&1
+    fi
     printf 'play_exit\t%s\n' "$?" >> "$stage/exit.tsv"
     sleep 2
     stop_process "$rec" record "$stage"
@@ -50,10 +55,15 @@ run_group() {
   done
   stop_process "$node" node "/out/$group"
 }
-run_group three a:map b:map c:map
-run_group no_gnss a:map b_no_gnss:odom
-run_group gnss_first a:map b_gnss_first:map
-run_group fresh_a a:map
-run_group fresh_b b:map
-run_group fresh_c c:map
+case "${MULTIBAG_ONLY:-all}" in
+  all)
+    run_group three a:map b:map c:map
+    run_group no_gnss a:map b_no_gnss:odom
+    run_group gnss_first a:map b_gnss_first:map
+    run_group fresh_a a:map
+    run_group fresh_b b:map
+    run_group fresh_c c:map ;;
+  no_gnss) run_group no_gnss a:map b_no_gnss:odom ;;
+  *) echo "Unknown MULTIBAG_ONLY=${MULTIBAG_ONLY}" >&2; exit 2 ;;
+esac
 exit "$failed"
