@@ -160,6 +160,13 @@ def test_load_params_rejects_invalid_speed_scale_prior(tmp_path, bad):
         T.load_params(f)
 
 
+@pytest.mark.parametrize('bad', [0.0, -1.0])
+def test_load_params_rejects_invalid_relock_sigma(tmp_path, bad):
+    f = _write(tmp_path, lambda r: r['position'].update(relock_sigma=bad))
+    with pytest.raises(ValueError, match='relock_sigma'):
+        T.load_params(f)
+
+
 @pytest.mark.parametrize('key,bad', [
     ('adhesion_window_s', 0.0),
     ('adhesion_window_s', 1.1),

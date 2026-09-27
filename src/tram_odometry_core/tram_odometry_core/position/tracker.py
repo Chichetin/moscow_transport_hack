@@ -15,7 +15,9 @@ shifted by the run's median height offset from the map in the window.
 Stop places (D-034): a stop of the tram (the pipeline detects it) close to a stop place of the
 map moves s to that place, weighted by the variances, and resets the along-track variance.
 Between two snaps on one branch the ratio of map arc to wheel path updates a slow online wheel
-scale. Both use the map only, never GNSS after the window.
+scale. A stop past the snap gate is a signal, unless a wheel scale error has carried s off the
+places: two such misses in a row on one side, on the line of a scale error from the anchor,
+relock s onto the place (#154). All of it uses the map only, never GNSS after the window.
 """
 import math
 from typing import Optional, Tuple
@@ -57,6 +59,7 @@ class PathTracker:
         self._chain_arc = 0.0                 # m, map arc between consecutive snaps on one branch
         self._chain_wheel = 0.0               # m, wheel path between the same snaps
         self._last_snap: Optional[Tuple[int, float, float]] = None   # branch, place s, distance
+        self._pending: Optional[Tuple[float, float]] = None   # path, place - s of the last miss
         self._master = None                   # (ECEF, distance) of the last accepted master fix
         self._rover = None                    # (ECEF, status) of the last accepted rover fix
 
@@ -137,7 +140,7 @@ class PathTracker:
         if self._undo is not None:
             if self._overrun(distance) > self.p.side_overrun_m:
                 self._anchor, self._var0, self._last_snap = self._undo
-                self._undo = None
+                self._undo = self._pending = None
             return
         if not (math.isfinite(speed) and speed > self.p.side_speed_mps):
             return
@@ -150,7 +153,7 @@ class PathTracker:
         j = side[1]
         self._anchor = (j, float(self._s[j][0]) + s - side[0], distance)
         self._var0 = var
-        self._last_snap = None
+        self._last_snap = self._pending = None
 
     def _overrun(self, distance: float) -> float:
         """Path beyond the dead end of the side branch at `distance` (0 before it): the state
@@ -273,7 +276,7 @@ class PathTracker:
         self._anchor = (k, s, distance)
         self._undo = None
         self._var0 = self.p.anchor_std_m ** 2
-        self._last_snap = None
+        self._last_snap = self._pending = None
         return k, s, float(p[2])
 
     def _state(self, distance: float):
@@ -318,22 +321,47 @@ class PathTracker:
             return False
         distances = np.abs(places - s)
         nearest = int(np.argmin(distances))
-        if distances[nearest] > self.p.stop_snap_max_m:
-            return False                      # not at a stop place: a signal, keep s
-        if len(places) > 1:
-            second = float(np.partition(distances, 1)[1])
-            if second - distances[nearest] <= 2.0 * self.p.stop_std_m:
-                return False                  # map uncertainty cannot distinguish close candidates
         place = float(places[nearest])
+        # map uncertainty cannot distinguish close candidates (D-047)
+        ambiguous = len(places) > 1 and (float(np.partition(distances, 1)[1]) - distances[nearest]
+                                         <= 2.0 * self.p.stop_std_m)
+        relock = bool(distances[nearest] > self.p.stop_snap_max_m)
+        if relock:
+            if not self._relock(place - s, distance, ambiguous):
+                return False                  # not at a stop place: a signal, keep s
+        elif ambiguous:
+            return False
         var = self._var_along(distance)
         gain = var / (var + self.p.stop_std_m ** 2)
         self._update_scale(k, place, distance)
-        self._accumulate_chain(k, place, distance)
+        if not relock:     # the pair across a lost lock may hold a wheel gap or a false relock
+            self._accumulate_chain(k, place, distance)
         self._anchor = (k, s + gain * (place - s), distance)
-        self._undo = None
+        self._undo = self._pending = None
         self._var0 = (1.0 - gain) * var
         self._last_snap = (k, place, distance)
         return True
+
+    def _relock(self, innovation: float, distance: float, ambiguous: bool) -> bool:
+        """A stop past the gate is a signal, unless the wheel scale has carried s off the
+        places: then the misses (`innovation` = place - s) are on one side and grow with the
+        path from the anchor. True for the second such miss in a row when it lies on the line
+        of the first within `relock_sigma`; a miss no scale within 1 +- scale_max_dev explains
+        drops the first one, a miss at an ambiguous place is skipped (#154)."""
+        path = distance - self._anchor[2]
+        if path <= 0.0 or abs(self._scale + innovation / path - 1.0) > self.p.scale_max_dev:
+            self._pending = None
+            return False
+        if ambiguous:
+            return False
+        first, self._pending = self._pending, (distance, innovation)
+        if first is None or first[1] * innovation <= 0.0 or distance <= first[0]:
+            return False
+        # both misses are e = c * path + a (c: scale error, a: anchor error of var0) plus a
+        # place error of stop_std_m each; the second minus q times the first cancels c
+        q = path / (first[0] - self._anchor[2])
+        var = self.p.stop_std_m ** 2 * (1.0 + q * q) + self._var0 * (1.0 - q) ** 2
+        return abs(innovation - q * first[1]) <= self.p.relock_sigma * math.sqrt(var)
 
     def _update_scale(self, k: int, place: float, distance: float) -> None:
         """Slow update of the wheel scale from two snaps on one branch far enough apart."""
