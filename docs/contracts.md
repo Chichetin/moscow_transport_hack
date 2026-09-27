@@ -22,7 +22,7 @@ PR** с перечнем потребителей в описании. В том
 |---|---|---|---|---|
 | `/vehicle/front_bogie_velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | вход | ~10 Гц | **км/ч** (D-003) |
 | `/vehicle/rear_bogie_velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | вход | ~10 Гц | **км/ч** |
-| `/vehicle/driver_position_cmd` | `tram_vehicle_msgs/msg/DriverControllerCommand` | вход | 20 Гц | `position` −15…+15 |
+| `/vehicle/driver_position_cmd` | `tram_vehicle_msgs/msg/DriverControllerCommand` | вход | 20 Гц | `position` −15…+15; **необязателен**: в образе судьи организаторов `tram_vehicle_msgs` без этого типа, `ros2 bag play` топик пропускает, нода работает по тележкам (D-093, #184) |
 | `/sensing/gnss/master/fix`, `/rover/fix` | `sensor_msgs/msg/NavSatFix` | вход | 10 Гц | только первые `gnss.init_window_s` с (D-005) |
 | `/sensing/gnss/master/vel` | `geometry_msgs/msg/TwistStamped` | вход | 10 Гц | ENU, только окно выставки |
 | `/result/velocity` | `tram_vehicle_msgs/msg/VelocitySensor` | **выход** | на каждый вход, ~40 Гц | `velocity` — продольная скорость, **м/с**, ≥ 0 |

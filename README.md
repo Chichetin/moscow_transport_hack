@@ -70,6 +70,11 @@ ros2 bag play <абсолютный путь к каталогу bag>
 от первого сообщения bag — для начальной выставки на карте; дальше сообщения GNSS
 отбрасываются в ядре (тест `test_real_core_ignores_gnss_after_window_through_the_node`).
 Подписки best-effort, поэтому нода соединяется с `ros2 bag play` при любом QoS издателя.
+Если в workspace стоит `tram_vehicle_msgs` без `DriverControllerCommand` (так в образе судьи
+организаторов `check-code`: там только `VelocitySensor`), нода всё равно запускается и считает
+по двум тележкам без модели привода (выход тогда ~20 Гц — только на входы тележек);
+`ros2 bag play` в таком окружении топик контроллера
+пропускает с WARN о typesupport (D-093, раскладки `judge_msgs_*` в `jury_layouts.sh`).
 
 ### 3. Что ожидать на выходе
 
