@@ -97,7 +97,9 @@ bash docker/jury-stand.sh 30618_e9a34502                     # 20 мин bag; з
 ```
 
 Во время питча вживую — только `run_eval.py --bag` (время замерить заранее) и `ros2 topic hz /result/velocity`
-на короткой записи; полный стенд — заранее, показываем `stand.json` и таблицу.
+на короткой записи; полный стенд — заранее, показываем `stand.json` и таблицу. Терминал `topic hz` —
+свежая сессия: сначала `cd <ws> && source /opt/ros/humble/setup.bash && source install/setup.bash`
+(README §2/§3, D-090), иначе команда падает на неизвестном типе сообщения.
 
 ## Репетиция
 
