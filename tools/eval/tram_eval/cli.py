@@ -146,6 +146,7 @@ def main(argv=None) -> int:
     notes = [r.pop(bagmod.NOTES, {}) for r in results]
     nonfinite = sum(n.get('nonfinite', 0) for n in notes)
     mismatch = sum(n.get('stamp_mismatch', 0) for n in notes)
+    local = [(n.get('position_local', 0), b) for n, b in zip(notes, names)]
     commit = git_commit()
     label = args.split or (names[0] if len(names) == 1 else 'bags')
     result = {'commit': commit, 'split': label, 'gnss_window_s': window, 'ref_point': args.ref_point,
@@ -164,7 +165,9 @@ def main(argv=None) -> int:
     crashed = sorted(b for b, m in result['bags'].items() if m['crashed'])
     print(f"\n{len(paths)} bag, окно GNSS {window} с, {time.monotonic() - t0:.0f} с; "
           f"упали: {', '.join(crashed) if crashed else 'нет'}; "
-          f"оценок NaN/inf (вне метрик): {nonfinite}; t != stamp входа: {mismatch}; -> {out / 'metrics.json'}")
+          f"оценок NaN/inf (вне метрик): {nonfinite}; t != stamp входа: {mismatch}; "
+          f"в odom без привязки (вне метрик положения): {sum(k for k, _ in local)} "
+          f"в {sum(k > 0 for k, _ in local)} bag; -> {out / 'metrics.json'}")
     if args.stress:
         if args.jobs > 1 and len(paths) > 1:
             with ProcessPoolExecutor(min(args.jobs, len(paths))) as ex:

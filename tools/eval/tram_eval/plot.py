@@ -84,7 +84,7 @@ def bag_series(msgs, gnss_window_s: float, make_odometry=None, name: str = '',
     est, _ = bagmod.finite_only(est)
     # estimates come in recording order (late bursts, trap 5): lines and slip bands need time order
     order = np.argsort(est.t, kind='stable')
-    est = Estimates(est.t[order], est.speed[order], est.pos[order], est.slip[order])
+    est = est.select(order)
     ref = bagmod.bag_reference(msgs, window_end, ref_point)
 
     scale = wheel_speed_scale()

@@ -173,7 +173,7 @@ def gnss_window_end(msgs, gnss_window_s: float) -> float:
 
 def run_pipeline(msgs, odometry, window_end: float):
     """Feed messages; returns Estimates, crash text or None, count of Estimate.t != input stamp."""
-    t, speed, pos, slip = [], [], [], []
+    t, speed, pos, slip, absolute = [], [], [], [], []
     crash, stamp_mismatch = None, 0
     for topic, msg in msgs:
         s = stamp(msg)
@@ -191,15 +191,17 @@ def run_pipeline(msgs, odometry, window_end: float):
         speed.append(est.speed)
         pos.append((est.x, est.y, getattr(est, 'z', 0.0)))
         slip.append(bool(est.slip.slip_front or est.slip.slip_rear))
+        absolute.append(bool(getattr(est, 'position_absolute', True)))
     est = Estimates(np.asarray(t, float), np.asarray(speed, float),
-                    np.asarray(pos, float).reshape(-1, 3), np.asarray(slip, bool))
+                    np.asarray(pos, float).reshape(-1, 3), np.asarray(slip, bool),
+                    np.asarray(absolute, bool))
     return est, crash, stamp_mismatch
 
 
 def finite_only(est: Estimates) -> tuple[Estimates, int]:
     """Estimates without NaN/inf in time, speed or position, and how many were dropped."""
     ok = np.isfinite(est.t) & np.isfinite(est.speed) & np.isfinite(est.pos).all(axis=1)
-    return Estimates(est.t[ok], est.speed[ok], est.pos[ok], est.slip[ok]), int((~ok).sum())
+    return est.select(ok), int((~ok).sum())
 
 
 def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None,
@@ -225,7 +227,11 @@ def evaluate_bag(path: Path, gnss_window_s: float, make_odometry=None, msgs=None
         print(f'{name}: {mismatch} estimates with t != input stamp (contract §1, D-015)', file=sys.stderr)
     if nonfinite:
         print(f'{name}: {nonfinite} non-finite estimates (NaN/inf) left out of the metrics', file=sys.stderr)
+    local = int((~est.absolute).sum())
+    if local:
+        print(f'{name}: {local} estimates in local odom (no anchor yet) left out of position metrics',
+              file=sys.stderr)
     m = {k: (None if isinstance(v, float) and not math.isfinite(v) else
              round(v, 4) if isinstance(v, float) else v) for k, v in m.items()}
-    m[NOTES] = {'nonfinite': nonfinite, 'stamp_mismatch': int(mismatch)}
+    m[NOTES] = {'nonfinite': nonfinite, 'stamp_mismatch': int(mismatch), 'position_local': local}
     return m
