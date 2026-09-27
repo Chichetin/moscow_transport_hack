@@ -415,3 +415,21 @@ def test_an_untrusted_then_trusted_sample_with_the_same_stamp_does_not_divide_by
     filt.update(wheel(0.1, 10.0), 1.0)
     speed, _, _ = filt.state()
     assert speed == pytest.approx(10.0)
+
+
+def test_restart_takes_the_car_speed_and_forgets_the_bias():
+    # a slide of the whole car (#156): the state followed slipping bogies and learned a bias
+    f = initialized()
+    f._x[1] = -0.6
+    f.restart(7.2)
+    speed, var, accel = f.state()
+    assert speed == pytest.approx(7.2)
+    assert accel == pytest.approx(f._model_accel)
+    assert var >= PARAMS.slip.front_rear_threshold_mps ** 2
+    assert f._cov[0, 1] == 0.0
+
+
+def test_restart_before_the_first_wheel_is_ignored():
+    f = SpeedFilter(PARAMS)
+    f.restart(5.0)
+    assert f.state()[0] == 0.0

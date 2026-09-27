@@ -173,7 +173,10 @@ class OdometryNode(Node):
                                         throttle_duration_sec=5.0)
                 return
             self.pub_velocity.publish(velocity_msg(est, msg.header.stamp, self.params))
-            self.pub_position.publish(position_msg(est, msg.header.stamp, self.params))
+            if est.position_absolute:
+                # before the first valid master fix there is no position at all, not even a local
+                # one: a judge that ignores frame_id would compare it with the grid (#163, D-086)
+                self.pub_position.publish(position_msg(est, msg.header.stamp, self.params))
             if topic in (VEHICLE_INPUTS[0][0], VEHICLE_INPUTS[1][0], VEHICLE_INPUTS[2][0]):
                 self._last_input_ns[topic] = stamp_ns
             if (self._last_diagnostic_ns is None

@@ -84,9 +84,9 @@ def test_local_position_is_published_in_odom_not_in_the_grid():
     assert on.position_msg(_estimate(), STAMP, params).header.frame_id == params.frames.map
 
 
-def test_node_without_map_publishes_odom_until_the_first_fix(node, monkeypatch):
-    """The whole node: without a map the first output is local (`odom`), after a master fix in
-    the GNSS window it is the grid (`map`)."""
+def test_node_publishes_no_position_until_the_first_fix(node, monkeypatch):
+    """The whole node: before a master fix there is no position to publish -- not even in
+    `odom`, a judge may ignore frame_id (#163, D-086); from the fix on it is the grid (`map`)."""
     node.odometry = on.Odometry(node.params)             # no route: no anchor until a fix
     frames = []
     monkeypatch.setattr(node.pub_position, 'publish', lambda m: frames.append(m.header.frame_id))
@@ -99,7 +99,7 @@ def test_node_without_map_publishes_odom_until_the_first_fix(node, monkeypatch):
     w.header.stamp = Time(sec=STAMP.sec, nanosec=STAMP.nanosec + 2000)
     node.on_input('/vehicle/front_bogie_velocity', w)
     assert node.errors == 0
-    assert frames[0] == 'odom' and frames[-1] == node.params.frames.map
+    assert frames == [node.params.frames.map] * len(frames) and len(frames) >= 1
 
 
 def test_velocity_message_follows_contract():
@@ -182,7 +182,31 @@ def _stamp(sec, nanosec=0):
     return Time(sec=sec, nanosec=nanosec)
 
 
+def _window_fix(node, stamp=STAMP):
+    """A master fix at the start of the run: /result/position is published only once the
+    first valid fix gives an absolute position (#163, D-086)."""
+    fix = NavSatFix()
+    fix.header.stamp = stamp
+    fix.status.status = 2
+    fix.latitude, fix.longitude, fix.altitude = 55.75, 37.62, 150.0
+    node.on_input('/sensing/gnss/master/fix', fix)
+
+
+def test_real_core_with_map_publishes_only_speed_before_the_first_fix(node, monkeypatch):
+    """#163: with the map, before any master fix only the map's origin is known, not where the
+    tram is: the speed goes out, the position does not; the first fix starts it."""
+    sent = _capture(node, monkeypatch)
+    node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
+    assert [k for k, _ in sent] == ['v']
+    _window_fix(node, _stamp(STAMP.sec, STAMP.nanosec + 10_000_000))
+    w = _wheel(36.0)
+    w.header.stamp = _stamp(STAMP.sec, STAMP.nanosec + 20_000_000)
+    node.on_input('/vehicle/front_bogie_velocity', w)
+    assert [k for k, _ in sent][-2:] == ['v', 'p']
+
+
 def test_real_core_converts_kmh_to_mps_once(node, monkeypatch):
+    _window_fix(node)
     sent = _capture(node, monkeypatch)
     node.on_input('/vehicle/front_bogie_velocity', _wheel(36.0))
     p = node.params
@@ -202,6 +226,7 @@ def test_real_core_drops_nan_wheel_without_publishing(node, monkeypatch):
 
 
 def test_real_core_ignores_gnss_after_window_through_the_node(node, monkeypatch):
+    _window_fix(node)
     sent = _capture(node, monkeypatch)
     t0 = STAMP.sec
     w = _wheel(36.0)
@@ -300,6 +325,7 @@ def test_empty_zero_stamp_and_nonfinite_output_do_not_publish(node, monkeypatch)
 def test_controller_continues_prediction_during_wheel_silence(node, monkeypatch):
     """Trap 7: a bogie silent for 73 s while the controller keeps talking (here every 5 s,
     within input.max_stamp_jump_s, #77): every command publishes on the model prediction."""
+    _window_fix(node)
     sent = _capture(node, monkeypatch)
     diagnostics = []
     monkeypatch.setattr(node.pub_diagnostics, 'publish', diagnostics.append)
