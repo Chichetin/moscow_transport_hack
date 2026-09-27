@@ -41,9 +41,8 @@ class Preprocessor:
     applies to it, so in motion it is a glitch. A long silent bogie (trap 7, up to
     73 s) needs no special handling here — it simply stops producing samples; the gap is large
     enough that the acceleration implied by whatever speed it reports on return is normally
-    small. GNSS fix/vel of master and the rover fix outside `gnss.init_window_s`
-    are dropped (D-005); status filtering and course selection stay in `pipeline` (position is
-    not preprocess's job).
+    small. GNSS vel and rover fix outside `gnss.init_window_s` are dropped; late master fix
+    passes only in correction mode. Status filtering and course selection stay in `pipeline`.
     """
 
     def __init__(self, params: Params):
@@ -191,13 +190,28 @@ class Preprocessor:
         return self.t0 - self.p.input.max_stamp_jump_s <= t <= self.t0 + self.p.gnss.init_window_s
 
     def _fix(self, t: float, msg, antenna: str) -> Optional[GnssFix]:
-        if not self._in_window(t):
+        late = not self._in_window(t)
+        if late and not (antenna == 'master' and self.p.gnss.correction_enabled
+                         and t > self.t0 + self.p.gnss.init_window_s):
             return None
         lat, lon, alt = msg.latitude, msg.longitude, msg.altitude
         if not (_finite_number(lat) and _finite_number(lon) and _finite_number(alt)):
             return None
+        std = None
+        covariance = getattr(msg, 'position_covariance', None)
+        if late and getattr(msg, 'position_covariance_type', 0) != 0 and covariance is not None:
+            try:
+                xx, xy, yx, yy = (float(covariance[i]) for i in (0, 1, 3, 4))
+            except (TypeError, ValueError, IndexError):
+                return None
+            cross = (xy + yx) / 2.0
+            if (not all(math.isfinite(v) for v in (xx, xy, yx, yy)) or xx < 0.0
+                    or yy < 0.0 or xx * yy < cross * cross):
+                return None
+            horizontal_var = (xx + yy + math.hypot(xx - yy, 2.0 * cross)) / 2.0
+            std = math.sqrt(horizontal_var)
         return GnssFix(t=t, antenna=antenna, lat=lat, lon=lon, alt=alt,
-                       status=msg.status.status)
+                       status=msg.status.status, horizontal_std_m=std)
 
     def _vel(self, t: float, msg) -> Optional[GnssVel]:
         if not self._in_window(t):

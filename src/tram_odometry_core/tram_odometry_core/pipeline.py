@@ -52,6 +52,8 @@ class Odometry:
         # the line restarts from 0; None before it (no absolute position is known then)
         self._line_frame = None
         self._gnss_used = False
+        self._correction_pending: Optional[GnssFix] = None
+        self._last_correction_t: Optional[float] = None
         self._fix_ok = False                  # valid master fix seen in the window
         self._vel_best = 0.0                  # fastest GNSS speed seen in the window
         self._stop_since: Optional[float] = None   # stamp when the current standstill began
@@ -159,7 +161,25 @@ class Odometry:
         self._x += ds * math.cos(self._yaw)
         self._y += ds * math.sin(self._yaw)
         self._on_standstill(now)
+        self._apply_pending_correction(now, t)
         return self._estimate(t, now)
+
+    def _apply_pending_correction(self, now: float, output_t: float) -> None:
+        fix = self._correction_pending
+        if fix is None or fix.t > now or fix.t > output_t:
+            return                         # a future measurement cannot affect this output
+        self._correction_pending = None
+        g = self.params.gnss
+        if (now - fix.t > g.correction_max_age_s or fix.status < g.correction_min_status
+                or (fix.horizontal_std_m is not None
+                    and fix.horizontal_std_m > g.correction_max_std_m)
+                or (self._last_correction_t is not None
+                    and fix.t - self._last_correction_t < g.correction_min_interval_s)
+                or self._tracker is None or not self._tracker.ready):
+            return
+        if self._tracker.correct(fix.lat, fix.lon, fix.alt, self._distance):
+            self._last_correction_t = fix.t
+            self._gnss_used = True
 
     def _track_zero(self, v_before: float, t_before: Optional[float], now: float,
                     accel: float) -> None:
@@ -226,6 +246,11 @@ class Odometry:
             filter_diagnostics=self._filter.diagnostics())
 
     def _on_fix(self, sample: GnssFix) -> None:
+        if (self._t0 is not None
+                and sample.t > self._t0 + self.params.gnss.init_window_s):
+            if self.params.gnss.correction_enabled and sample.antenna == 'master':
+                self._correction_pending = sample
+            return
         if sample.antenna == 'rover':
             # heading only (trap 15): never the origin of the frame or the anchor
             if self._tracker is not None:

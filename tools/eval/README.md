@@ -2,8 +2,10 @@
 
 Читает bag библиотекой `rosbags`, подаёт сообщения в `tram_odometry_core.pipeline.Odometry`
 **в порядке записи**, как их публикует `ros2 bag play` (с откатами и опозданиями `header.stamp`,
-ловушки 5–6 `docs/data.md`). **GNSS обрезается после первых `--gnss-window` секунд** от stamp
-первого сообщения (по умолчанию = `gnss.init_window_s` из `params.yaml`, D-005). Эталон строится
+ловушки 5–6 `docs/data.md`). В режиме A **GNSS обрезается после первых `--gnss-window` секунд** от stamp
+первого сообщения (по умолчанию = `gnss.init_window_s` из `params.yaml`, D-005). В режиме B
+(`gnss.correction_enabled: true`) поздний master fix поступает в тот же `Odometry`, что у ноды;
+rover/vel после окна не поступают. Эталон строится
 из всего GNSS master прогона, считаются метрики критериев 1–2. Формат вывода и определения
 метрик — `docs/contracts.md` §4 (контракт), уточнения — D-020. Наборы — `splits.yaml`
 (контракт, D-011).

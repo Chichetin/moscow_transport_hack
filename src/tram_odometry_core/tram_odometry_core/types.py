@@ -36,6 +36,7 @@ class GnssFix:
     lon: float
     alt: float
     status: int
+    horizontal_std_m: Optional[float] = None  # NavSatFix covariance when reported
 
 
 @dataclass(frozen=True)
@@ -199,6 +200,14 @@ class GnssParams:
     init_window_s: float
     topic_fix: str
     topic_vel: str
+    correction_enabled: bool
+    correction_min_status: int
+    correction_min_interval_s: float
+    correction_max_age_s: float
+    correction_max_std_m: float
+    correction_map_gate_m: float
+    correction_innovation_gate_m: float
+    correction_alpha: float
 
 
 @dataclass(frozen=True)
@@ -316,9 +325,24 @@ def load_params(path) -> Params:
     _validate_slip(params.slip)
     _validate_side(params.position)
     _validate_base_link(params.position)
+    _validate_gnss(params.gnss)
     if not (math.isfinite(params.position.relock_sigma) and params.position.relock_sigma > 0):
         raise ValueError('position.relock_sigma must be positive and finite')
     return params
+
+
+def _validate_gnss(gnss: GnssParams) -> None:
+    if not isinstance(gnss.correction_enabled, bool):
+        raise ValueError('gnss.correction_enabled must be bool')
+    for key in ('correction_min_interval_s', 'correction_max_age_s',
+                'correction_max_std_m', 'correction_map_gate_m',
+                'correction_innovation_gate_m'):
+        if not (math.isfinite(getattr(gnss, key)) and getattr(gnss, key) > 0.0):
+            raise ValueError(f'gnss.{key} must be positive and finite')
+    if not (math.isfinite(gnss.correction_alpha) and 0.0 < gnss.correction_alpha <= 1.0):
+        raise ValueError('gnss.correction_alpha must be in (0, 1]')
+    if not isinstance(gnss.correction_min_status, int) or gnss.correction_min_status < 0:
+        raise ValueError('gnss.correction_min_status must be a nonnegative integer')
 
 
 def _validate_slip(slip: SlipParams) -> None:

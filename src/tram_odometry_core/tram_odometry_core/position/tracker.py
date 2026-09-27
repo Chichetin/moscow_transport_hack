@@ -36,6 +36,7 @@ JOIN_MAX_TURN_RAD = 2.0 * math.pi / 3.0   # a branch never continues onto a trac
 class PathTracker:
     def __init__(self, params: Params, route: Route):
         self.p = params.position
+        self.p_gnss = params.gnss
         self.route = route
         self._s = [b.s for b in route.branches]
         # the mean step, not s[1] - s[0]: s is stored to 3 decimals, and a first step rounded up
@@ -283,6 +284,33 @@ class PathTracker:
         self._var0 = self.p.anchor_std_m ** 2
         self._last_snap = self._pending = None
         return k, s, float(p[2])
+
+    def correct(self, lat: float, lon: float, alt: float, distance: float) -> bool:
+        """Fuse a later master fix into the current directed rail arc, never into speed.
+
+        A fix cannot select another branch: near parallel tracks that would make a single
+        noisy observation jump across a switch. The current route remains determined by the
+        wheel model and the known joins until an explicit branch matcher is validated.
+        """
+        if self._anchor is None or not all(math.isfinite(v) for v in (lat, lon, alt, distance)):
+            return False
+        p = self._rot @ (_ecef(lat, lon, alt) - self._ecef0)
+        k, predicted = self._state(distance)
+        _, measured, lateral = self._nearest((self._xyz[k],), p[:2])
+        if lateral > self.p_gnss.correction_map_gate_m:
+            return False
+        # Reject a point clearly on another nearby track. A tie keeps the current branch.
+        for j, branch in enumerate(self._xyz):
+            if j != k and self._nearest((branch,), p[:2])[2] + self.p_gnss.correction_map_gate_m / 2 < lateral:
+                return False
+        innovation = measured - predicted
+        if abs(innovation) > self.p_gnss.correction_innovation_gate_m:
+            return False
+        variance = self._var_along(distance)
+        self._anchor = (k, predicted + self.p_gnss.correction_alpha * innovation, distance)
+        self._var0 = max(self.p.anchor_std_m ** 2, (1.0 - self.p_gnss.correction_alpha) * variance)
+        self._undo = self._pending = None
+        return True
 
     def _state(self, distance: float):
         """(branch, s) at path `distance`, following the joins at the ends of branches."""

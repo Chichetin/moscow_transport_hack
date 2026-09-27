@@ -2,8 +2,9 @@
 
 Messages go to the pipeline in recording order, exactly as `ros2 bag play` publishes them
 to the node, including the non-monotonic and late header.stamp (docs/data.md, traps 5-6).
-GNSS is passed only while its header.stamp is within the init window from the stamp of the
-first message (D-005); the reference is built from the whole GNSS record.
+GNSS is passed inside the init window; with gnss.correction_enabled, later master fixes
+also reach the same online Odometry as in the ROS node. The reference uses the whole GNSS
+record independently of the runtime inputs.
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ MASTER_FIX = '/sensing/gnss/master/fix'
 ROVER_FIX = '/sensing/gnss/rover/fix'
 MASTER_VEL = '/sensing/gnss/master/vel'
 INPUTS = (FRONT, REAR, CMD)
-GNSS = (MASTER_FIX, ROVER_FIX, MASTER_VEL)     # model inputs inside the window (contracts §1)
+GNSS = (MASTER_FIX, ROVER_FIX, MASTER_VEL)     # model inputs in the startup window
 NOTES = '_notes'   # per-bag counters for the CLI summary line; not part of metrics.json (§4)
 
 
@@ -177,7 +178,10 @@ def run_pipeline(msgs, odometry, window_end: float):
     crash, stamp_mismatch = None, 0
     for topic, msg in msgs:
         s = stamp(msg)
-        if topic in GNSS and s > window_end:
+        late_master = (topic == MASTER_FIX and
+                       getattr(getattr(odometry, 'params', None), 'gnss', None) is not None and
+                       odometry.params.gnss.correction_enabled)
+        if topic in GNSS and s > window_end and not late_master:
             continue
         try:
             est = odometry.step(to_raw(topic, msg))

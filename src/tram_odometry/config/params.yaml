@@ -99,3 +99,11 @@
       init_window_s: 5.0        # сколько секунд GNSS разрешено для начальной выставки (D-005)
       topic_fix: /sensing/gnss/master/fix
       topic_vel: /sensing/gnss/master/vel
+      correction_enabled: false # A: только старт; true = B: редкая коррекция s по RTK master
+      correction_min_status: 2  # только RTK/GBAS fix; другие статусы требуют отдельной валидации
+      correction_min_interval_s: 30.0 # минимум между принятыми коррекциями, не GNSS-частота bag
+      correction_max_age_s: 0.5 # отставший от состояния fix не перематывает фильтр назад
+      correction_max_std_m: 3.0 # максимум горизонтального 1σ, когда covariance известна
+      correction_map_gate_m: 5.0 # поперечное расстояние master до текущей ветки
+      correction_innovation_gate_m: 25.0 # максимум |s_fix - s_pred| по текущей ветке
+      correction_alpha: 0.5    # доля продольной ошибки, переносимая в якорь

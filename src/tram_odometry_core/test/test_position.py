@@ -277,6 +277,88 @@ def test_pipeline_ignores_gnss_after_the_window():
     assert math.hypot(est.x - fx, est.y - fy) < 2.0
 
 
+def test_optional_late_gnss_corrects_path_not_wheel_speed():
+    from tram_odometry_core.pipeline import Odometry
+    enabled = replace(PARAMS, gnss=replace(PARAMS.gnss, correction_enabled=True,
+                                           correction_min_interval_s=1.0))
+    a, b = Odometry(PARAMS, _route()), Odometry(enabled, _route())
+    for odo in (a, b):
+        odo.step(_fix_msg(0.0, _lla(-1000.0, 0.0, 170.0)))
+        _wheels(odo, 0.0, 10.0, 36.0)
+        odo.step(_fix_msg(10.0, _lla(-1110.0, 0.0, 170.2)))
+    ea = _wheels(a, 10.1, 11.0, 36.0)
+    eb = _wheels(b, 10.1, 11.0, 36.0)
+    target_x, target_y, _ = _grid(*_lla(-1120.0, 0.0, 170.24))
+    assert math.hypot(eb.x - target_x, eb.y - target_y) < math.hypot(ea.x - target_x, ea.y - target_y)
+    assert eb.speed == pytest.approx(ea.speed)
+    assert eb.distance == pytest.approx(ea.distance)
+
+
+@pytest.mark.parametrize('status,east,north', [(-1, -1110.0, 0.0),
+                                               (0, -1110.0, 0.0),
+                                               (2, -1110.0, 30.0),
+                                               (2, -1300.0, 0.0)])
+def test_late_gnss_rejects_invalid_or_implausible_fix(status, east, north):
+    from tram_odometry_core.pipeline import Odometry
+    enabled = replace(PARAMS, gnss=replace(PARAMS.gnss, correction_enabled=True,
+                                           correction_min_interval_s=1.0))
+    a, b = Odometry(PARAMS, _route()), Odometry(enabled, _route())
+    for odo in (a, b):
+        odo.step(_fix_msg(0.0, _lla(-1000.0, 0.0, 170.0)))
+        _wheels(odo, 0.0, 10.0, 36.0)
+    b.step(_fix_msg(10.0, _lla(east, north), status))
+    ea = _wheels(a, 10.1, 11.0, 36.0)
+    eb = _wheels(b, 10.1, 11.0, 36.0)
+    assert (eb.x, eb.y, eb.speed) == pytest.approx((ea.x, ea.y, ea.speed))
+
+
+def test_future_late_gnss_does_not_change_earlier_output():
+    from tram_odometry_core.pipeline import Odometry
+    enabled = replace(PARAMS, gnss=replace(PARAMS.gnss, correction_enabled=True,
+                                           correction_min_interval_s=1.0))
+    a, b = Odometry(enabled, _route()), Odometry(enabled, _route())
+    for odo in (a, b):
+        odo.step(_fix_msg(0.0, _lla(-1000.0, 0.0, 170.0)))
+        _wheels(odo, 0.0, 10.0, 36.0)
+    b.step(_fix_msg(12.0, _lla(-1130.0, 0.0, 170.3)))
+    ea = _wheels(a, 10.1, 11.0, 36.0)
+    eb = _wheels(b, 10.1, 11.0, 36.0)
+    assert (eb.x, eb.y, eb.speed) == pytest.approx((ea.x, ea.y, ea.speed))
+
+
+def test_late_gnss_rejects_reported_large_covariance():
+    from tram_odometry_core.pipeline import Odometry
+    enabled = replace(PARAMS, gnss=replace(PARAMS.gnss, correction_enabled=True,
+                                           correction_min_interval_s=1.0))
+    a, b = Odometry(PARAMS, _route()), Odometry(enabled, _route())
+    for odo in (a, b):
+        odo.step(_fix_msg(0.0, _lla(-1000.0, 0.0, 170.0)))
+        _wheels(odo, 0.0, 10.0, 36.0)
+    topic, msg = _fix_msg(10.0, _lla(-1110.0, 0.0, 170.2))
+    msg.position_covariance_type = 2
+    msg.position_covariance = [100.0, 0, 0, 0, 100.0, 0, 0, 0, 100.0]
+    b.step((topic, msg))
+    ea = _wheels(a, 10.1, 11.0, 36.0)
+    eb = _wheels(b, 10.1, 11.0, 36.0)
+    assert (eb.x, eb.y, eb.speed) == pytest.approx((ea.x, ea.y, ea.speed))
+
+
+def test_late_fix_on_adjacent_parallel_track_cannot_change_branch():
+    lines = []
+    for north in (0.0, 3.0):
+        a = _lla(0.0, north)
+        b = _lla(-1000.0, north)
+        lines.append(_branch(np.linspace(a[0], b[0], 100),
+                             np.linspace(a[1], b[1], 100), np.full(100, ORIGIN[2])))
+    route = Route(origin=ORIGIN, branches=tuple(lines))
+    p = replace(PARAMS, gnss=replace(PARAMS.gnss, correction_enabled=True))
+    tracker = PathTracker(p, route)
+    tracker.on_fix(*_lla(-500.0, 0.0), 2, 0.0)
+    assert tracker.ready and tracker._state(100.0)[0] == 0
+    assert not tracker.correct(*_lla(-610.0, 3.0), 100.0)
+    assert tracker._state(100.0)[0] == 0
+
+
 def test_pipeline_before_the_first_fix_has_no_anchor_even_with_a_map():
     """No fix yet: where the tram is is unknown, the map's origin is kilometres from a start at
     the other terminal (#163). The line stays in local metres and is marked not absolute: the

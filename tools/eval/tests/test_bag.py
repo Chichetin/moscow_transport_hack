@@ -90,6 +90,16 @@ def test_gnss_after_window_is_not_fed_but_used_as_reference():
     assert m['crashed'] is False
 
 
+def test_gnss_correction_mode_feeds_only_late_master_fix():
+    from types import SimpleNamespace
+    odo = DeadReckoning()
+    odo.params = SimpleNamespace(gnss=SimpleNamespace(correction_enabled=True))
+    msgs = drive(8.0)
+    run_pipeline(msgs, odo, bag.gnss_window_end(msgs, 5.0))
+    late = [(topic, t) for topic, t in odo.seen if t > 105.0 and topic in bag.GNSS]
+    assert late and all(topic == MASTER_FIX for topic, _ in late)
+
+
 def test_zero_window_feeds_no_gnss():
     odo = DeadReckoning()
     run_pipeline(drive(), odo, bag.gnss_window_end(drive(), 0.0))
