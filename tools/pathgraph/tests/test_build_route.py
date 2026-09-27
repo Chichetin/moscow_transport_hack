@@ -165,6 +165,26 @@ def test_refine_branch_ignores_bins_where_passes_split_between_tracks():
     assert np.max(np.abs(out[:, 1])) < 0.5
 
 
+def test_refine_branch_follows_recent_passes_where_the_track_was_relaid():
+    x = np.arange(0.0, 400.0, 1.0)
+    relaid = np.clip(np.minimum(x - 150.0, 250.0 - x) / 20.0, 0.0, 1.0) * 4.0  # 4 m off at 170..230
+    passes = [np.column_stack([x, np.zeros_like(x)]) for _ in range(5)]        # older majority
+    rng = np.random.default_rng(2)
+    for _ in range(3):                      # current layout, fixes ~1 m apart: 1 m bins with holes
+        xs = np.sort(rng.uniform(0.0, 400.0, 400))
+        passes.append(np.column_stack([xs, np.interp(xs, x, relaid)]))
+    recent = np.array([False] * 5 + [True] * 3)
+    ref = np.column_stack([x, np.zeros_like(x)])
+    for mask, y_mid in ((None, 0.0), (recent, 4.0)):
+        s, out = br.refine_branch(ref, passes, step=1.0, gates=(15.0, 6.0), min_passes=3,
+                                  smooth_m=15.0, recent=mask)
+        mid = (out[:, 0] > 180) & (out[:, 0] < 220)
+        away = (out[:, 0] < 120) | (out[:, 0] > 280)
+        assert np.max(np.abs(out[mid, 1] - y_mid)) < 0.3
+        assert np.max(np.abs(out[away, 1])) < 0.05     # agreeing bins stay where all passes are
+        assert np.max(np.abs(np.diff(out[:, 1]))) < 0.25   # no zig-zag from the holes
+
+
 def test_coverage_ignores_standing_jitter():
     rng = np.random.default_rng(1)
     standing = rng.normal(0, 0.5, (1000, 2))
