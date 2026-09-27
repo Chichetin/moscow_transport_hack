@@ -54,6 +54,8 @@ def ats_pairs(refs, results):
         mine[s] = v
         while len(mine) > QUEUE:
             del mine[min(mine)]
+        if s not in mine:       # pushed out of its own queue at once: no pair (as in Humble)
+            continue
         best = min(other, key=lambda o: abs(o - s), default=None)
         if best is None or not abs(best - s) < SLOP_NS:
             continue
