@@ -35,6 +35,8 @@ expect block "ключ LLM в коде"                      check-secrets.sh
 rm llm.py
 echo 'KEY sk-3f9a8c72b1d04e6fa9b7c2d5e8f10a4b' > notes.md
 expect block "голый ключ sk- в тексте"              check-secrets.sh
+echo 'sk-3f9a8c72b1d04e6fa9b7c2d5e8f10a4b' > notes.md
+expect block "ключ sk- в начале строки"             check-secrets.sh
 echo 'run_eval.py --out /tmp/msk-issue161-base-84a3304-train' > notes.md
 expect pass  "путь /tmp/msk-… — не ключ sk-"        check-secrets.sh
 rm notes.md
