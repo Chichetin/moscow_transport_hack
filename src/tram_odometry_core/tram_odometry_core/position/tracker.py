@@ -79,6 +79,8 @@ class PathTracker:
         # of the point in m^2); the anchor first, then the place of the last scale update
         self._ref: Optional[Tuple[int, float, float, float]] = None
         self._miss: Optional[Tuple[float, float]] = None   # path, place - s of the last stop past the gate
+        self._chain_arc = 0.0                 # m, map arc between consecutive snaps on one branch
+        self._chain_wheel = 0.0               # m, wheel path between the same snaps
         self._last_snap: Optional[Tuple[int, float, float]] = None   # branch, place s, distance
         self._master = None                   # (ECEF, distance) of the last accepted master fix
         self._rover = None                    # (ECEF, status) of the last accepted rover fix
@@ -350,6 +352,7 @@ class PathTracker:
         gain = var / (var + self.p.stop_std_m ** 2)
         walked = self._scale * (distance - self._anchor[2]) + gain * (place - s)   # old -> new anchor
         updated = over <= 0.0 and self._update_scale(k, place - s, distance)
+        self._accumulate_chain(k, place, distance)
         self._anchor = (k, s + gain * (place - s), distance)
         self._undo = None
         self._var0 = (1.0 - gain) * var
@@ -401,6 +404,29 @@ class PathTracker:
         q = path / (miss[0] - self._anchor[2])
         var = self.p.stop_std_m ** 2 * (1.0 + q * q) + self._var0 * (1.0 - q) ** 2
         return abs(innovation - q * miss[1]) <= self.p.relock_sigma * math.sqrt(var)
+
+    def _accumulate_chain(self, k: int, place: float, distance: float) -> None:
+        """Sums for the speed scale over consecutive snaps on one branch: they telescope, so
+        the error of the ratio is that of the chain ends (where exactly the car stood), not of
+        every pair; short pairs count too."""
+        last = self._last_snap
+        if last is None or last[0] != k or distance <= last[2] or place < last[1]:
+            return
+        arc, wheel = place - last[1], distance - last[2]
+        if abs(arc - wheel) > 2.0 * self.p.stop_snap_max_m + self.p.scale_max_dev * wheel:
+            return     # not one stretch of track: e.g. a whole loop passed with no snap on the way
+        self._chain_arc += arc
+        self._chain_wheel += wheel
+
+    @property
+    def speed_scale(self) -> float:
+        """Wheel scale for the published speed (#153): the chain ratio shrunk to 1 by a prior
+        of `speed_scale_prior_m` of path, within 1 +- scale_max_dev. The per-pair `_scale` of the
+        path is re-anchored at every stop; the speed has no such reset and needs the quieter
+        estimate (one pair scatters by 0.6 % on train, the true scale of 30618 by 0.15 %)."""
+        prior = self.p.speed_scale_prior_m
+        k = (self._chain_arc + prior) / (self._chain_wheel + prior)
+        return min(max(k, 1.0 - self.p.scale_max_dev), 1.0 + self.p.scale_max_dev)
 
     def advance(self, distance: float, speed: float = 0.0):
         """(x, y, z, yaw, (var_x, var_y, cov_xy)) of base_link at path `distance` and speed

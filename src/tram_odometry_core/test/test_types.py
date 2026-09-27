@@ -151,3 +151,10 @@ def test_load_params_rejects_invalid_drive_model(tmp_path, change, field):
     f = _write(tmp_path, lambda r: change(r['drive']))
     with pytest.raises(ValueError, match=field):
         T.load_params(f)
+
+
+@pytest.mark.parametrize('bad', [0.0, -1.0])   # inf is a TypeError of the loader already
+def test_load_params_rejects_invalid_speed_scale_prior(tmp_path, bad):
+    f = _write(tmp_path, lambda r: r['position'].update(speed_scale_prior_m=bad))
+    with pytest.raises(ValueError, match='speed_scale_prior_m'):
+        T.load_params(f)

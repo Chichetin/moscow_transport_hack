@@ -179,6 +179,7 @@ class PositionParams:
     scale_max_dev: float
     scale_min_arc_m: float
     relock_sigma: float
+    speed_scale_prior_m: float
 
 
 @dataclass(frozen=True)
@@ -324,6 +325,8 @@ def _validate_base_link(position: PositionParams) -> None:
         raise ValueError('position.antenna_height_m must be finite')
     if not (0 <= position.scale_max_dev < 1):
         raise ValueError('position.scale_max_dev must satisfy 0 <= dev < 1')
+    if not (position.speed_scale_prior_m > 0):
+        raise ValueError('position.speed_scale_prior_m must be positive')
 
 
 def _validate_scale(position: PositionParams) -> None:
