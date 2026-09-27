@@ -6,7 +6,7 @@
         head within a bag (sign flips of the paired difference), per day, bags around the
         median of drift_pct, short bags
   days  <wheel_scale_exp json>                     clean medians per day of every variant
-  grid  <dir of wheel_scale_ext grid-*>             stress grid per cell and variant against base
+  grid  <dir of wheel_scale_ext grid-*> [versus]    stress grid per cell and variant against base (or versus)
   std   <dir of wheel_scale_ext std-train>          sensitivity around h123
   curve <dir of wheel_scale_ext grid-*>             drift at fractions of the run, end error in m
   sensgrid <dir of wheel_scale_ext grid-*>         one row per variant over the grid, against base and h123
@@ -244,7 +244,7 @@ def family(sc):
 
 def cmd_grid(d, versus='base'):
     res = load_dir(d)
-    variants = [v for v in ('base', 'h1_ema', 'h12', 'h3', 'h13', 'h123', 'h123_k1.5', 'h123_k2.5', 'h123_k3',
+    variants = [v for v in ('base', 'h1_ema', 'h12', 'h3', 'h3_v0', 'h13', 'h123', 'h123_k1.5', 'h123_k2.5', 'h123_k3',
                             'h123_p0.5', 'h123_p1.5', 'h123_p2', 'h123_s1.5', 'h123_s3', 'h123_s5',
                             'h123_a200', 'h123_a500') if v in res]
     only = os.environ.get('WSX_VARIANTS')
@@ -343,7 +343,7 @@ def cmd_grid(d, versus='base'):
 
 def cmd_std(d):
     res = load_dir(d)
-    order = [v for v in ('base', 'h1_ema', 'h12', 'h3', 'h13', 'h123', 'h123_k1.5', 'h123_k2.5', 'h123_k3',
+    order = [v for v in ('base', 'h1_ema', 'h12', 'h3', 'h3_v0', 'h13', 'h123', 'h123_k1.5', 'h123_k2.5', 'h123_k3',
                          'h123_p0.5', 'h123_p1.5', 'h123_p2', 'h123_s1.5', 'h123_s3', 'h123_s5',
                          'h123_a200', 'h123_a500') if v in res]
     days = bag_days()
@@ -412,7 +412,7 @@ def cmd_curve(d):
 def cmd_sensgrid(d):
     """One row per variant over the whole stress grid: against base and against h123."""
     res = load_dir(d)
-    order = [v for v in ('base', 'h1_ema', 'h12', 'h3', 'h13', 'h123', 'h123_k1.5', 'h123_k2.5', 'h123_k3',
+    order = [v for v in ('base', 'h1_ema', 'h12', 'h3', 'h3_v0', 'h13', 'h123', 'h123_k1.5', 'h123_k2.5', 'h123_k3',
                          'h123_p0.5', 'h123_p1.5', 'h123_p2', 'h123_s1.5', 'h123_s3', 'h123_s5',
                          'h123_a200', 'h123_a500') if v in res]
     scen = [k for k in next(iter(res['base'].values())) if k != 'clean']
@@ -454,7 +454,7 @@ if __name__ == '__main__':
     elif cmd == 'days':
         cmd_days(sys.argv[2])
     elif cmd == 'grid':
-        cmd_grid(sys.argv[2])
+        cmd_grid(*sys.argv[2:4])
     elif cmd == 'std':
         cmd_std(sys.argv[2])
     elif cmd == 'sensgrid':

@@ -221,14 +221,18 @@ def run(mode, split, variants):
     size = {n: sum(f.stat().st_size for f in (bag.data_dir() / n).glob('*')) for n in names}
     d = out_root() / f'{mode}-{split}'
     d.mkdir(parents=True, exist_ok=True)
-    jobs = []
+    jobs, stale = [], []
     for n in sorted(names, key=lambda n: -size[n]):
         for v in variants:
             p = d / f'{n}__{v}.json'
-            # a file of another cfg under the same name (h3 of 6853330 before the q ~ 1 rule of
-            # the review of #160) is stale: run it again
-            if not p.exists() or json.loads(p.read_text()).get('cfg') != allv[v]:
+            if not p.exists():
                 jobs.append((mode, n, v, allv[v], str(p)))
+            elif json.loads(p.read_text()).get('cfg') != allv[v]:
+                stale.append(p.name)
+    # a file of another cfg under the same name (h3 of 6853330 before the q ~ 1 rule of the
+    # review of #160) is neither reused nor overwritten: it may be a sealed result
+    if stale:
+        raise SystemExit(f'{d}: {len(stale)} files of another cfg ({stale[0]} ...); set WSX_OUT to a new directory')
     print(f'{mode} {split}: {len(jobs)} tasks -> {d}', flush=True)
     t0 = time.time()
     with ProcessPoolExecutor(int(os.environ.get('WSX_JOBS', 20))) as pool:
