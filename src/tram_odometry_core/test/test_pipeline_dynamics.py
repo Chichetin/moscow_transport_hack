@@ -171,6 +171,30 @@ def test_speed_at_the_stamp_of_a_late_wheel_is_never_negative():
             assert est is not None and est.speed >= 0.0
 
 
+def test_late_wheel_position_uses_its_stamp_while_distance_stays_at_state_time():
+    params = replace(PARAMS, drive=replace(PARAMS.drive, use_model=False))
+    odo = Odometry(params)
+    t = _cruise(odo, 18.0, T0, T0 + 2.0, notch=0)
+    odo.step((CMD, _cmd(t + 1.0, 0)))
+
+    est = odo.step((FRONT, _wheel(t, 18.0)))
+
+    assert est.t == pytest.approx(t)
+    assert est.distance == pytest.approx(odo._distance)
+    assert est.distance - est.x == pytest.approx(5.0, abs=0.15)
+
+
+def test_late_wheel_stamped_during_standstill_has_no_position_shift():
+    odo = Odometry(PARAMS)
+    t = _cruise(odo, 0.0, T0, T0 + 1.0, notch=0)
+    odo.step((CMD, _cmd(t + 1.0, 0)))
+
+    est = odo.step((FRONT, _wheel(t, 0.0)))
+
+    assert est.t == pytest.approx(t)
+    assert est.x == pytest.approx(est.distance)
+
+
 @pytest.mark.parametrize('alive', [FRONT, REAR])
 def test_one_silent_bogie_with_controller_events_in_between(alive):
     """30639: one bogie is silent for up to 73 s while the other talks; controller events

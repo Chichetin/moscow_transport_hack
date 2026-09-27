@@ -196,16 +196,29 @@ class Odometry:
         # speed is moved back along the filter acceleration only while the car moves: at
         # rest it is 0 after the moment the state reached 0 and the braking it stopped with
         # before (under brake the acceleration at v = 0 is negative and would invent |a|*lag)
+        lag = now - t
         if self._t_zero is None:
-            speed = max(0.0, self._v - accel * (now - t))
+            speed = max(0.0, self._v - accel * lag)
+            # Integrate the same linear speed used for the output. When acceleration started
+            # from rest inside the lag, there was no travel before that moment.
+            if accel > 0.0 and speed == 0.0:
+                back_distance = self._v * self._v / (2.0 * accel)
+            else:
+                back_distance = (self._v + speed) * lag / 2.0
         elif t >= self._t_zero:
             speed = 0.0
+            back_distance = 0.0
         else:
             speed = -self._a_zero * (self._t_zero - t)
+            back_distance = speed * (self._t_zero - t) / 2.0
+        path_at_stamp = self._distance - back_distance
+        pose_x = self._x - back_distance * math.cos(self._yaw)
+        pose_y = self._y - back_distance * math.sin(self._yaw)
+        map_speed = speed
         if self._tracker is not None:
             speed *= self._tracker.speed_scale     # wheel scale from the stop chain (#153)
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
-        pose = (self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0))
+        pose = (pose_x, pose_y, 0.0, self._yaw, (pos_var, pos_var, 0.0))
         # the output is the flat MGRS grid (D-083): the ENU pose of the map, else the straight
         # line (D-021) from the first valid master fix -- also with a map that rejected every fix
         # of the window (a bag off the route, #163); before any fix there is no anchor at all:
@@ -213,7 +226,7 @@ class Odometry:
         # the GNSS window is open and publishes them in odom after it (position_due, D-086)
         frame = self._line_frame
         if self._tracker is not None:
-            on_map = self._tracker.advance(self._distance, self._v)
+            on_map = self._tracker.advance(path_at_stamp, map_speed)
             if on_map is not None:
                 pose, frame = on_map, self._tracker.frame
         x, y, z, yaw, pos_cov = pose if frame is None else pose_to_grid(*frame, self._grid, *pose)
