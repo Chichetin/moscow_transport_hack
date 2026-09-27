@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from tram_odometry_core.output import HISTORY_MARGIN_S, MAX_SAMPLES, DelayLine
+from tram_odometry_core.output import HISTORY_MARGIN_S, MAX_SAMPLES, DelayLine, RunClock
 
 # literals, not params.yaml: the rollback of D-095 (output.velocity_delay_s: 0) keeps these green
 DELAY = 0.09          # s, the lag of the judge's reference on its bag (D-095)
@@ -144,3 +144,54 @@ def test_output_of_nonnegative_speeds_is_finite_nonnegative_and_within_the_input
         out = line.push(t, v)
         assert math.isfinite(out) and 0.0 <= out <= 20.0
 
+
+def test_run_clock_keeps_one_run_through_rollbacks_and_short_gaps():
+    """#200: within one bag the vehicle clock never leaves input.max_stamp_jump_s (data: gaps up
+    to 2.6 s, rollbacks up to 3.7 s): no candidate run ever starts."""
+    clock = RunClock(JUMP)
+    stamps = [T0, T0 + 0.05, T0 - 3.7, T0 + 2.6, T0 + 2.6, T0 + 9.0, T0 + 18.9]
+    assert [clock.vehicle(t) for t in stamps] == ['run'] * len(stamps)
+    assert clock.clock == T0 + 18.9 and clock.candidate is None
+
+
+@pytest.mark.parametrize('shift', [-3600.0, -JUMP - 0.1, JUMP + 0.1, 86400.0])
+def test_run_clock_starts_a_candidate_on_a_far_stamp_and_settles_on_it(shift):
+    clock = RunClock(JUMP)
+    clock.vehicle(T0)
+    assert clock.vehicle(T0 + shift) == 'new'
+    assert clock.vehicle(T0 + shift + 0.05) == 'candidate'
+    assert clock.vehicle(T0 + shift + 0.02) == 'candidate'        # a rollback in the new bag
+    assert clock.clock == T0 and clock.candidate == T0 + shift + 0.05
+    clock.settle()
+    assert clock.clock == T0 + shift + 0.05 and clock.candidate is None
+    assert clock.vehicle(T0 + shift + 0.1) == 'run'
+
+
+def test_run_clock_glitch_is_cancelled_by_the_next_stamp_near_the_run():
+    """A stamp glitch (D-043), single or two in a row: the next normal stamp is back near the
+    publishing clock and cancels the candidate; the clock never moved to the glitch."""
+    clock = RunClock(JUMP)
+    clock.vehicle(T0)
+    assert clock.vehicle(T0 + 86400.0) == 'new'
+    assert clock.vehicle(T0 + 86400.1) == 'candidate'
+    assert clock.vehicle(T0 + 0.1) == 'run'
+    assert clock.clock == T0 + 0.1 and clock.candidate is None
+    assert clock.vehicle(T0 - 86400.0) == 'new'
+    assert clock.vehicle(T0 + 0.15) == 'run' and clock.candidate is None
+
+
+def test_run_clock_stamp_far_from_both_clocks_moves_neither():
+    clock = RunClock(JUMP)
+    clock.vehicle(T0)
+    clock.vehicle(T0 + 100.0)
+    assert clock.vehicle(T0 + 86400.0) == 'candidate'
+    assert clock.clock == T0 and clock.candidate == T0 + 100.0
+
+
+def test_run_clock_settle_without_candidate_keeps_the_clock():
+    clock = RunClock(JUMP)
+    clock.settle()
+    assert clock.clock is None
+    clock.vehicle(T0)
+    clock.settle()
+    assert clock.clock == T0 and clock.candidate is None

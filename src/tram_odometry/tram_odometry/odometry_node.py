@@ -4,7 +4,8 @@ Thin by design (D-001): the raw input of Odometry.step is the (topic, message) p
 received, exactly what tools/eval passes (tools/eval/tram_eval/bag.py: to_raw); parsing, units
 and stamps are the core's job. One publication per accepted input; header.stamp is that
 input's stamp (D-015); /result/velocity carries the estimate output.velocity_delay_s before
-it, the time base of the judge's reference (D-095).
+it, the time base of the judge's reference (D-095). Bags played one after another into one node
+get a fresh core each, once the new one has its fix (#200, D-098).
 """
 import math
 import os
@@ -23,7 +24,7 @@ try:  # the organizers' judge image ships tram_vehicle_msgs with VelocitySensor 
 except ImportError:
     DriverControllerCommand = None
 
-from tram_odometry_core.output import DelayLine
+from tram_odometry_core.output import DelayLine, RunClock
 from tram_odometry_core.pipeline import Odometry
 from tram_odometry_core.types import load_params, load_route
 
@@ -146,15 +147,28 @@ def diagnostics_msg(est, stamp, params, ages) -> DiagnosticArray:
     return m
 
 
+class Run:
+    """What belongs to one bag: the core and the delay line of its speed (#200)."""
+
+    def __init__(self, params, route):
+        self.odometry = Odometry(params, route=route)
+        self.velocity_delay = DelayLine(params.output.velocity_delay_s,
+                                        params.input.max_stamp_jump_s)
+
+
 class OdometryNode(Node):
     def __init__(self, params_file=None):
         super().__init__('tram_odometry')
         path = self.declare_parameter('params_file', params_file or '').value
         self.params = load_params(path or default_params_file())
-        route = load_route(route_file(self.params)) if self.params.position.use_map else None
-        self.odometry = Odometry(self.params, route=route)
-        self.velocity_delay = DelayLine(self.params.output.velocity_delay_s,
-                                        self.params.input.max_stamp_jump_s)
+        self._route = (load_route(route_file(self.params)) if self.params.position.use_map
+                       else None)
+        run = Run(self.params, self._route)
+        self.odometry, self.velocity_delay = run.odometry, run.velocity_delay
+        # a new bag played into this node starts a candidate Run; it publishes from its first
+        # fix on, until then the current run does, without position (#200, D-098)
+        self.run_clock = RunClock(self.params.input.max_stamp_jump_s)
+        self.candidate = None
         self.errors = 0
         self.pub_velocity = self.create_publisher(VelocitySensor, '/result/velocity', 10)
         self.pub_position = self.create_publisher(OdometryMsg, '/result/position', 10)
@@ -175,7 +189,12 @@ class OdometryNode(Node):
             stamp_ns = _stamp_ns(msg.header.stamp)
             if stamp_ns <= 0:
                 return
-            est = self.odometry.step(to_raw(topic, msg))
+            raw = to_raw(topic, msg)
+            if topic in VEHICLE_TOPICS:
+                self._place(stamp_ns / 1_000_000_000)
+            est = self.odometry.step(raw)
+            if self.candidate is not None:
+                est = self._step_candidate(raw, est)
             if est is None:
                 return
             if not _finite_estimate(est):
@@ -187,10 +206,11 @@ class OdometryNode(Node):
             # the sensors by that much (D-095); /result/position keeps est.speed and est.t
             speed = self.velocity_delay.push(est.t, est.speed)
             self.pub_velocity.publish(velocity_msg(speed, msg.header.stamp, self.params))
-            if self.odometry.position_due(est):
+            if self.candidate is None and self.odometry.position_due(est):
                 # inside the GNSS window before the first valid fix there is no position yet, not
                 # even a local one: a judge that ignores frame_id would compare it with the grid;
-                # a bag without GNSS gets local odom after the window (#163, D-086)
+                # a bag without GNSS gets local odom after the window (#163, D-086); while a new
+                # bag waits for its fix, the previous bag's position is kilometres off (#200)
                 self.pub_position.publish(position_msg(est, msg.header.stamp, self.params))
             if topic in VEHICLE_TOPICS:
                 self._last_input_ns[topic] = stamp_ns
@@ -205,6 +225,37 @@ class OdometryNode(Node):
         except Exception as e:  # noqa: BLE001 — the node must outlive any bad input or core bug
             self.errors += 1
             self.get_logger().error(f'{topic} input skipped: {e!r}', throttle_duration_sec=5.0)
+
+    def _place(self, t: float) -> None:
+        """A vehicle stamp far from the current run's clock starts a candidate run; one back
+        near it was a stamp glitch and cancels the candidate (RunClock, #200)."""
+        where = self.run_clock.vehicle(t)
+        if where == 'run':
+            self.candidate = None
+        elif where == 'new':
+            self.candidate = Run(self.params, self._route)
+
+    def _step_candidate(self, raw, est):
+        """Feed `raw` to the candidate run too. With its own absolute position (a fix in its
+        GNSS window) it becomes the current run and its estimate is published; once its window
+        has closed without a fix, the jump was a silence of every vehicle stream within one bag
+        and it is dropped. Otherwise the current run's estimate goes out, without position."""
+        run = self.candidate
+        fresh = run.odometry.step(raw)
+        if fresh is None or not _finite_estimate(fresh):
+            return est
+        if fresh.position_absolute:
+            self.odometry, self.velocity_delay = run.odometry, run.velocity_delay
+            self._last_input_ns, self._last_diagnostic_ns = {}, None
+            self.candidate = None
+            self.run_clock.settle()
+            self.get_logger().info('new bag: a fresh run publishes from its first fix (#200)')
+            return fresh
+        run.velocity_delay.push(fresh.t, fresh.speed)
+        if run.odometry.position_due(fresh):
+            self.candidate = None
+            self.run_clock.settle()
+        return est
 
 
 def main(args=None):

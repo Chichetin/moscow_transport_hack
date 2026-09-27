@@ -6,6 +6,8 @@ sensors: on their check bag 30618_88aea4d9 our speed v(t) against ref(t + d) has
 RMSE at d = 0.09 s, and so does their own GNSS master/vel. At the input stamp t the node
 therefore publishes the speed estimate of t - output.velocity_delay_s, linear between the
 estimates already made: past values only (online), the stamp stays the input's (D-015).
+
+RunClock tells the node when a new bag is played into it without a restart (#200, D-098).
 """
 import math
 from bisect import bisect_left, bisect_right
@@ -60,3 +62,44 @@ class DelayLine:
         w = (q - ts[i - 1]) / (ts[i] - ts[i - 1])   # in [0, 1): ts[i] > q >= ts[i - 1]
         # exact at w = 0 and between equal values; never below 0 between nonnegative ones
         return vs[i - 1] + w * (vs[i] - vs[i - 1])
+
+
+class RunClock:
+    """The vehicle clock of the run the node publishes, and of a candidate run (#200, D-098).
+
+    One node may get several bags one after another: each is a run of its own, and the state of
+    the previous one (the GNSS window start, the anchor on the map) is kilometres off in the
+    next. A vehicle stamp (bogies, controller) farther than `max_jump_s` from the clock of the
+    publishing run may start a candidate run; the node makes it the publishing run only once
+    it has its own absolute position (a fix in its window: every check bag starts with GNSS),
+    and drops it when its window closes without one -- a silence of every vehicle stream
+    within one bag (the publishing run carries on, as before this class). A stamp back near
+    the publishing clock cancels the candidate: it was a stamp glitch (D-043). GNSS never
+    starts or confirms a candidate by its stamp: only the vehicle streams move the clocks.
+    """
+
+    def __init__(self, max_jump_s: float):
+        self.max_jump_s = max_jump_s    # s, input.max_stamp_jump_s: farther is another clock
+        self.clock = None               # s, newest vehicle stamp of the publishing run
+        self.candidate = None           # s, newest vehicle stamp of the candidate; None: none
+
+    def vehicle(self, t: float) -> str:
+        """Place the vehicle stamp `t`: 'run' -- it belongs to the publishing run (a candidate,
+        if any, was a glitch and is gone); 'new' -- start a candidate run at `t`;
+        'candidate' -- a candidate is pending, feed `t` to both runs."""
+        if self.clock is None or abs(t - self.clock) <= self.max_jump_s:
+            self.clock = t if self.clock is None else max(self.clock, t)
+            self.candidate = None
+            return 'run'
+        if self.candidate is None:
+            self.candidate = t
+            return 'new'
+        if abs(t - self.candidate) <= self.max_jump_s:
+            self.candidate = max(self.candidate, t)
+        return 'candidate'
+
+    def settle(self) -> None:
+        """The candidate is resolved: it became the publishing run, or it was dropped and the
+        publishing run went on across the jump; either way its clock is the clock now."""
+        if self.candidate is not None:
+            self.clock, self.candidate = self.candidate, None

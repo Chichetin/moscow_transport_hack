@@ -592,7 +592,7 @@ def test_nonfinite_z_is_not_published(node, monkeypatch):
     assert sent == [] and node.errors == 1
 
 
-def _route_run(route, window_s, duration=30.0, speed=10.0, late_north_m=30.0):
+def _route_run(route, window_s, duration=30.0, speed=10.0, late_north_m=30.0, start_s=1000):
     """(topic, ROS message) of a tram along branch 0 of the installed map; after the GNSS
     window the GNSS lies: fixes late_north_m north of the track, vel north and faster (#57)."""
     import numpy as np
@@ -600,7 +600,7 @@ def _route_run(route, window_s, duration=30.0, speed=10.0, late_north_m=30.0):
     lat0, lon0, alt0 = route.origin
     out = []
     for k in range(int(duration * 10)):
-        ns = 1_000_000_000 * 1000 + 100_000_000 * k
+        ns = 1_000_000_000 * start_s + 100_000_000 * k
         s = speed * 0.1 * k
         x, y, z = (float(np.interp(s, b.s, c)) for c in (b.x, b.y, b.z))
         dx, dy = (float(np.interp(s + 1.0, b.s, c)) - v for c, v in ((b.x, x), (b.y, y)))
@@ -658,3 +658,90 @@ def test_gnss_after_window_changes_no_published_bit(node, monkeypatch):
     for i, ((kf, mf), (kc, mc)) in enumerate(zip(full, cut)):
         assert (kf, mf) == (kc, mc), f'message {i} ({kf}) at {mf.header.stamp}: {mf} != {mc}'
     assert len(full) == len(cut)
+
+
+def _vp(sent):
+    return [(k, m) for k, m in sent if k in ('v', 'p')]
+
+
+def _without_gnss(msgs, after_ns):
+    return [(t, m) for t, m in msgs
+            if not (t.startswith('/sensing/gnss/') and on._stamp_ns(m.header.stamp) > after_ns)]
+
+
+@pytest.mark.parametrize('start_s', [400, 1042, 90_000])
+def test_next_bag_into_the_same_node_publishes_as_a_fresh_node(node, monkeypatch, start_s):
+    """#200: the judge may play bag after bag into one node. The second bag (earlier, a few
+    seconds or a day later) is published like by a node started for it: from the input after its
+    first fix on; before that only the speed goes out, never the previous bag's position."""
+    window_s = node.params.gnss.init_window_s
+    first = _route_run(node.odometry.route, window_s)
+    second = _route_run(node.odometry.route, window_s, duration=20.0, start_s=start_s)
+    for topic, m in first:
+        node.on_input(topic, m)
+    sent = _capture(node, monkeypatch)
+    for topic, m in second:
+        node.on_input(topic, m)
+    fresh, errors = _published(second, monkeypatch)
+    fresh = _vp(fresh)
+    assert node.errors == errors == 0 and node.candidate is None
+    i = next(k for k, (kind, _) in enumerate(fresh) if kind == 'p')
+    j = next(k for k, (kind, _) in enumerate(sent) if kind == 'p')
+    assert sent[j - 1:] == fresh[i - 1:] and len(fresh) - i > 300
+    assert [k for k, _ in sent[:j - 1]] == ['v'] * (j - 1)    # no position of the first bag
+
+
+def test_stamp_glitches_publish_as_before_and_no_position_at_a_glitch(node, monkeypatch):
+    """A far vehicle stamp inside one bag (D-043) is a glitch: the next normal stamp cancels the
+    candidate run. Output as without the candidate mechanism, except that a position at a
+    glitch confirmed by a second glitch is held back."""
+    window_s = node.params.gnss.init_window_s
+    msgs = _route_run(node.odometry.route, window_s)
+    glitched = []
+    for n, (topic, m) in enumerate(msgs):
+        glitched.append((topic, m))
+        if n in (400, 800):                    # one glitch, then two in a row (D-043)
+            for k in range(1 if n == 400 else 2):
+                g = VelocitySensor()
+                g.header.stamp = _stamp(m.header.stamp.sec + 86_400, k * 10_000_000)
+                g.velocity = 36.0
+                glitched.append((('/vehicle/rear_bogie_velocity',
+                                  '/vehicle/front_bogie_velocity')[k], g))
+    created = []
+    original = on.Run
+
+    def spy(*a):
+        created.append(1)
+        return original(*a)
+    monkeypatch.setattr(on, 'Run', spy)
+    with_runs, errors = _published(glitched, monkeypatch)
+    assert errors == 0 and created
+    monkeypatch.setattr(on.OdometryNode, '_place', lambda self, t: None)
+    before, _ = _published(glitched, monkeypatch)
+    day = msgs[0][1].header.stamp.sec + 86_400 - 10
+    assert _vp(with_runs) == [(k, m) for k, m in _vp(before)
+                              if not (k == 'p' and m.header.stamp.sec > day)]
+
+
+def test_silence_of_every_vehicle_stream_keeps_the_run(node, monkeypatch):
+    """No bag has all vehicle streams silent > input.max_stamp_jump_s (max 2.6 s, D-043); if one
+    does, the candidate gets no fix in its window and is dropped: the run goes on, its
+    positions held back only for that window."""
+    window_s = node.params.gnss.init_window_s
+    gap_ns = int((node.params.input.max_stamp_jump_s + 5.0) * 1e9)
+    msgs = _route_run(node.odometry.route, window_s, duration=60.0)
+    start_ns = on._stamp_ns(msgs[0][1].header.stamp)
+    msgs = _without_gnss(msgs, start_ns + int(window_s * 1e9))
+    mid_ns = start_ns + 20_000_000_000
+    silent = [(t, m) for t, m in msgs
+              if not (t.startswith('/vehicle/') and mid_ns <= on._stamp_ns(m.header.stamp)
+                      < mid_ns + gap_ns)]
+    with_runs, errors = _published(silent, monkeypatch)
+    monkeypatch.setattr(on.OdometryNode, '_place', lambda self, t: None)
+    before, _ = _published(silent, monkeypatch)
+    held_end = mid_ns + gap_ns + int(window_s * 1e9)    # the candidate's window: t0 + window
+    kept = [(k, m) for k, m in _vp(before)
+            if not (k == 'p' and mid_ns + gap_ns <= on._stamp_ns(m.header.stamp) <= held_end)]
+    assert errors == 0 and _vp(with_runs) == kept
+    assert sum(k == 'p' and on._stamp_ns(m.header.stamp) > held_end for k, m in kept) > 200
+    assert len(_vp(before)) - len(kept) <= 3 * 10 * (window_s + 1)   # 30 Hz: only that window held
