@@ -79,6 +79,12 @@ class Odometry:
         try:
             sample = self._preprocess.accept(raw)
             self._t0 = self._preprocess.t0
+            if (isinstance(sample, (WheelSample, CommandSample))
+                    and self._last_correction_t is not None
+                    and sample.t < self._last_correction_t):
+                # A buffered vehicle message stamped before an already fused fix must not
+                # publish a position containing that later absolute observation.
+                return None
             if isinstance(sample, WheelSample):
                 self._wheel[sample.bogie] = sample
                 return self._advance(sample.t, sample=sample, wheel_arrived=True)
@@ -177,7 +183,8 @@ class Odometry:
                     and fix.t - self._last_correction_t < g.correction_min_interval_s)
                 or self._tracker is None or not self._tracker.ready):
             return
-        if self._tracker.correct(fix.lat, fix.lon, fix.alt, self._distance):
+        if self._tracker.correct(fix.lat, fix.lon, fix.alt, self._distance,
+                                 self._v * (now - fix.t)):
             self._last_correction_t = fix.t
             self._gnss_used = True
 

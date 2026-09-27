@@ -359,6 +359,33 @@ def test_late_fix_on_adjacent_parallel_track_cannot_change_branch():
     assert tracker._state(100.0)[0] == 0
 
 
+def test_late_fix_is_propagated_from_its_stamp_by_internal_distance():
+    p = replace(PARAMS, gnss=replace(PARAMS.gnss, correction_enabled=True))
+    tracker = PathTracker(p, _route())
+    tracker.on_fix(*_lla(-1000.0, 0.0, 170.0), 2, 0.0)
+    before = tracker._state(110.0)
+    assert tracker.correct(*_lla(-1100.0, 0.0, 170.2), 110.0, travel_after_fix_m=10.0)
+    after = tracker._state(110.0)
+    assert after[0] == before[0]
+    assert after[1] == pytest.approx(before[1], abs=0.3)
+
+
+def test_lagging_vehicle_stamp_cannot_publish_after_later_fix_is_fused():
+    from types import SimpleNamespace
+    from tram_odometry_core.pipeline import Odometry
+    p = replace(PARAMS, gnss=replace(PARAMS.gnss, correction_enabled=True,
+                                     correction_min_interval_s=1.0))
+    odo = Odometry(p, _route())
+    odo.step(_fix_msg(0.0, _lla(-1000.0, 0.0, 170.0)))
+    _wheels(odo, 0.0, 10.0, 36.0)
+    odo.step(_fix_msg(10.0, _lla(-1110.0, 0.0, 170.2)))
+    _wheels(odo, 10.1, 10.2, 36.0)
+    assert odo._last_correction_t == 10.0
+    stale = odo.step(('/vehicle/driver_position_cmd',
+                      SimpleNamespace(header=_hdr(9.9), position=0)))
+    assert stale is None
+
+
 def test_pipeline_before_the_first_fix_has_no_anchor_even_with_a_map():
     """No fix yet: where the tram is is unknown, the map's origin is kilometres from a start at
     the other terminal (#163). The line stays in local metres and is marked not absolute: the

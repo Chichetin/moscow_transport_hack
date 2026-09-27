@@ -285,14 +285,16 @@ class PathTracker:
         self._last_snap = self._pending = None
         return k, s, float(p[2])
 
-    def correct(self, lat: float, lon: float, alt: float, distance: float) -> bool:
+    def correct(self, lat: float, lon: float, alt: float, distance: float,
+                travel_after_fix_m: float = 0.0) -> bool:
         """Fuse a later master fix into the current directed rail arc, never into speed.
 
         A fix cannot select another branch: near parallel tracks that would make a single
         noisy observation jump across a switch. The current route remains determined by the
         wheel model and the known joins until an explicit branch matcher is validated.
         """
-        if self._anchor is None or not all(math.isfinite(v) for v in (lat, lon, alt, distance)):
+        if self._anchor is None or not all(math.isfinite(v) for v in
+                                            (lat, lon, alt, distance, travel_after_fix_m)):
             return False
         p = self._rot @ (_ecef(lat, lon, alt) - self._ecef0)
         k, predicted = self._state(distance)
@@ -303,7 +305,9 @@ class PathTracker:
         for j, branch in enumerate(self._xyz):
             if j != k and self._nearest((branch,), p[:2])[2] + self.p_gnss.correction_map_gate_m / 2 < lateral:
                 return False
-        innovation = measured - predicted
+        # The GNSS stamp normally falls between vehicle updates. Propagate its arc with
+        # internal wheel/controller velocity to the current vehicle stamp before fusion.
+        innovation = measured + self._scale * travel_after_fix_m - predicted
         if abs(innovation) > self.p_gnss.correction_innovation_gate_m:
             return False
         variance = self._var_along(distance)

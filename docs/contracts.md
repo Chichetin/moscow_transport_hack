@@ -148,7 +148,7 @@ class Route:
 контроллера и без нового измерения `Estimate.filter_diagnostics` равен `None`.
 `gnss.correction_enabled` задаёт режим A/B. При B поздний fix master с достаточным
 статусом проходит через `Preprocessor`, `pipeline` принимает его только в текущем времени
-и не чаще `correction_min_interval_s`; `PathTracker.correct` меняет якорь `edge_id/s`,
+и не чаще `correction_min_interval_s`; fix переносится к текущему vehicle stamp по внутренней скорости, а вход с более ранним stamp после коррекции пропускается; `PathTracker.correct` меняет якорь `edge_id/s`,
 не скорость и не wheel distance. Все пороги описаны в `docs/parameters.md`.
 Обязательные ROS-топики и формат `metrics.json` не меняются.
 
