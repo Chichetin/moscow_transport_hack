@@ -267,7 +267,11 @@ def make(cfg):
 
 
 def truth(tracker, ref_m):
-    """True s of master on the branch of each logged stop (window of +-300 m around s)."""
+    """True s of master on the branch of each logged stop (window of +-300 m around s). The
+    reference is in the MGRS grid of the output since #159 (D-083), the branches of the tracker
+    in the ENU frame of the run: the branch points go to the grid (enu_to_grid, as pipeline)."""
+    from tram_odometry_core.position.geo import enu_to_grid
+    grid = bag.output_grid()
     out = []
     for e in tracker.log:
         rec = dict(e)
@@ -277,7 +281,9 @@ def truth(tracker, ref_m):
             xyz, ss = tracker._xyz[k], tracker._s[k]
             sel = np.flatnonzero(np.abs(ss - s) <= 300.0)
             if len(sel):
-                d2 = (xyz[sel, 0] - xy[0]) ** 2 + (xyz[sel, 1] - xy[1]) ** 2
+                rot, ecef0 = tracker.frame
+                g = np.array([enu_to_grid(rot, ecef0, grid, *xyz[j]) for j in sel])
+                d2 = (g[:, 0] - xy[0]) ** 2 + (g[:, 1] - xy[1]) ** 2
                 j = sel[int(np.argmin(d2))]
                 if d2.min() < 15.0 ** 2:
                     rec['s_true'] = float(ss[j])

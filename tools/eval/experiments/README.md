@@ -13,13 +13,30 @@
 .venv/bin/python tools/eval/experiments/r_stress.py                      # R от |cmd| в стресс-сценариях, train
 ```
 
-Онлайн-масштаб пути колеса (#154, D-087, не взято): гипотезы H1 (якорь — первая опора масштаба),
+Онлайн-масштаб пути колеса (#154, D-087): гипотезы H1 (якорь — первая опора масштаба),
 H2 (фильтр Калмана вместо EMA), H3 (восстановление захвата) подменой `PathTracker` в памяти; train,
-clean и `scale_up`/`scale_down`/`gap_both_30`, ложные привязки — по GNSS-эталону (только в eval).
-`base` — масштаб пути `main` (плюс цепочка скорости #153), `h123` — кандидат, код которого лежит в
-ветке `worktree-154-wheel-scale` @ `20e3e1e` (отчёт `docs/verification/2026-09-27-issue154-wheel-scale.md`).
+clean и `scale_up`/`scale_down`/`gap_both_30`, ложные привязки — по GNSS-эталону (только в eval;
+ветки переводятся в сетку MGRS эталона, #159). `base` — масштаб пути `main` до #154 (плюс цепочка
+скорости #153); `h123` — отвергнутый кандидат, код в ветке `worktree-154-wheel-scale` @ `20e3e1e`;
+`h3` — только H3 поверх EMA, ядро ветки `worktree-154-wheel-scale-report` совпадает с ним побайтно
+(отчёт `docs/verification/2026-09-27-issue154-wheel-scale.md`).
 
 ```bash
 .venv/bin/python tools/eval/experiments/wheel_scale_exp.py train                 # все варианты, ~8 мин на 12 процессах
-.venv/bin/python tools/eval/experiments/wheel_scale_exp.py train base h123       # только база и кандидат
+.venv/bin/python tools/eval/experiments/wheel_scale_exp.py train base h123 h3    # база и кандидаты
+```
+
+Расширенная оценка (#154, evaluator): `wheel_scale_ext.py` — прогоны, `wheel_scale_stats.py` —
+статистика (markdown в stdout). Запуск из корня репозитория; вывод — `out/wheel_scale_ext/<режим>-<набор>/`,
+по файлу на bag × вариант (готовые файлы не пересчитываются). Holdout — только `grid` и только
+замороженные кандидаты `base`, `h123`, `h3` (D-011). `WSX_BAGS=a,b` — короткая проверка на части bag,
+`WSX_JOBS` — процессы (20), `WSX_OUT` — каталог вывода.
+
+```bash
+.venv/bin/python tools/eval/experiments/wheel_scale_ext.py grid train base h123 h3   # 54 ячейки: масштаб 0,97…1,03 × старт, gap_both 30/60 с
+.venv/bin/python tools/eval/experiments/wheel_scale_ext.py std train base h3 h123_k1.5   # clean + scale_up/scale_down/gap_both_30, чувствительность
+.venv/bin/python tools/eval/experiments/wheel_scale_ext.py verify <dir> core <bag> ...  # Estimates ядра (или варианта) для побайтной сверки
+.venv/bin/python tools/eval/experiments/wheel_scale_ext.py cmp <dir1> <dir2>
+.venv/bin/python tools/eval/experiments/wheel_scale_stats.py pairs out/eval/<base>/metrics.json out/eval/<head>/metrics.json   # бутстрэп, знаковый, Wilcoxon, перестановки
+.venv/bin/python tools/eval/experiments/wheel_scale_stats.py grid out/wheel_scale_ext/grid-train   # и sensgrid, curve; std out/wheel_scale_ext/std-train
 ```
