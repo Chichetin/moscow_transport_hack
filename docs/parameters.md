@@ -15,6 +15,7 @@
 | `frames.grid_origin_e_m` | UTM easting угла квадрата сетки, м; `300000.0` (квадрат `37UCB`). `x` = easting − это, без переноса за 100 км. |
 | `frames.grid_origin_n_m` | UTM northing угла квадрата сетки, м; `6100000.0` (`37UCB`). `y` = northing − это. |
 | `frames.base` | Имя системы вагона для `Odometry.child_frame_id` и `VelocitySensor.header.frame_id`; `base_link`. |
+| `output.velocity_delay_s` | с, `0.09`, ≥ 0: `/result/velocity` — оценка скорости на столько раньше своего stamp, линейно по истории уже сделанных оценок (`DelayLine`, `tram_odometry_core/output.py`). Эталон судьи `/localization/kinematic_state` отстаёт от датчиков на ~0,09 с (bag организаторов `30618_88aea4d9`, D-095). `/result/position` не задерживается, `0` — без задержки. Использует ROS-обёртка; `tools/eval` считает скорость ядра без задержки. |
 | `input.wheel_speed_scale` | Множитель км/ч → м/с (`1/3,6`), применяется один раз в `Preprocessor._wheel`. |
 | `input.stale_timeout_s` | Секунды допустимого молчания тележки; старше этого `SlipDetector.update` ставит доверие 0. |
 | `input.max_wheel_accel_mps2` | м/с², предел выброса производной колеса в `Preprocessor._wheel` (`8`); исключения: падение до ровно 0 проходит всегда, скачок с ровно 0 — только если свежая вторая тележка показывает ту же скорость (залипшая тележка, D-031, D-056). Отсекает только сбой датчика; скачки 3–8 м/с² (шум, юз) доходят до `SlipDetector` и разбираются там (D-054). |
