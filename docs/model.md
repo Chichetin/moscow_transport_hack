@@ -15,7 +15,7 @@
 и задаёт ускорение модели после задержки `drive.response_delay_s`. GNSS rover fix в том же окне
 даёт только курс master → rover для выбора ветки выставки (D-062). Выходы ноды — `/result/velocity` в м/с и `/result/position` в метрах,
 плоская сетка MGRS `37UCB` и высота над эллипсоидом (ядро считает в ENU прогона и переводит
-на выходе, D-082); их заполнение выполняют
+на выходе, D-083); их заполнение выполняют
 [`velocity_msg` и `position_msg`](../src/tram_odometry/tram_odometry/odometry_node.py).
 
 Внутренние величины `Estimate`: скорость `speed` (м/с), путь `distance` (м), положение
@@ -75,8 +75,28 @@ z = v_i / k_i + a_model · age;   R = r_wheel / (trust · k_i²) + q_accel · ag
 `δ`: `δ += 0,02 · (clip((v_r − v_f)/(v_r + v_f), ±0,03) − δ)`, но только на
 согласованных парах: stamp в пределах 0,02 с, обе скорости не ниже 2 м/с, разница не
 больше 0,5 м/с, доверие не ниже 0,8.
-Общий масштаб уточняет привязка к остановкам D-034. NIS и решение по новому колесу доступны в
-`Estimate.filter_diagnostics` (D-032, D-057).
+NIS и решение по новому колесу доступны в `Estimate.filter_diagnostics` (D-032, D-057).
+
+Общий масштаб колеса фильтр не оценивает, его дают привязки к остановкам. Путь по карте
+использует свой масштаб (D-034, раздел «Положение»). Опубликованная скорость — скорость
+фильтра, умноженная на отдельный масштаб по цепочке привязок (D-082,
+[`PathTracker.speed_scale`](../src/tram_odometry_core/tram_odometry_core/position/tracker.py)):
+
+```text
+A += s_stop − s_stop_prev;   W += distance − distance_prev;
+speed_scale = clip((A + position.speed_scale_prior_m) / (W + position.speed_scale_prior_m), 1 ± scale_max_dev);
+Estimate.speed = v · speed_scale.
+```
+
+В суммы идёт каждая пара привязок подряд на одной ветке, в том числе короткая, если путь
+колёс вырос, место не позади прошлого и `|Δs_stop − Δdistance| ≤ 2·stop_snap_max_m +
+scale_max_dev·Δdistance` (иначе пара — не один отрезок пути, например круг без привязок).
+Суммы телескопируются: ошибка отношения — только от концов цепочки, то есть от того, где
+именно встал вагон. `speed_scale_prior_m` (4000 м) сжимает оценку к 1, пока цепочка
+короткая; до первой пары `speed_scale = 1`. Масштаб умножает только `Estimate.speed`
+(`/result/velocity` и twist `/result/position`); `distance`, положение, `speed_var` и
+`accel` — без него. Без карты масштаб не применяется
+([`Odometry._estimate`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)).
 
 [`Odometry._advance`](../src/tram_odometry_core/tram_odometry_core/pipeline.py)
 передаёт доверие `SlipState` фильтру и интегрирует его скорость:

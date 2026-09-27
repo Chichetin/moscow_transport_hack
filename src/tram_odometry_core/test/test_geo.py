@@ -1,4 +1,4 @@
-"""Output frame of /result/position: WGS84 -> flat MGRS grid 37UCB (#155, D-082)."""
+"""Output frame of /result/position: WGS84 -> flat MGRS grid 37UCB (#155, D-083)."""
 import math
 from pathlib import Path
 

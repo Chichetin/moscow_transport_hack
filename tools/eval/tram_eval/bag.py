@@ -153,14 +153,14 @@ def rover_inputs(msgs):
 
 
 def output_grid():
-    """(zone, e0, n0) of the MGRS grid of /result/position: frames.grid_* of params.yaml (D-082)."""
+    """(zone, e0, n0) of the MGRS grid of /result/position: frames.grid_* of params.yaml (D-083)."""
     frames = yaml.safe_load(PARAMS_YAML.read_text(encoding='utf-8'))['/**']['ros__parameters']['frames']
     return int(frames['grid_zone']), float(frames['grid_origin_e_m']), float(frames['grid_origin_n_m'])
 
 
 def bag_reference(msgs, window_end: float, point: str = REF_POINT):
     """The reference of a bag at `point` ('base_link' or 'master', D-077), in the grid of the
-    published position (D-082)."""
+    published position (D-083)."""
     rover_t, rover_llas = rover_inputs(msgs) if point != 'master' else ((), ())
     return build_reference(*reference_inputs(msgs), window_end, point=point,
                            rover_t=rover_t, rover_llas=rover_llas, grid=output_grid())

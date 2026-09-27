@@ -90,7 +90,7 @@ def test_cli_plot_writes_png_per_bag(short_bags, tmp_path):  # noqa: F811
 
 
 def test_route_in_the_grid_of_the_reference():
-    """With the grid of the published position (D-082) the map is drawn in it too."""
+    """With the grid of the published position (D-083) the map is drawn in it too."""
     from tram_eval.reference import core_geo
     geo = core_geo()
     grid = (37, 300000.0, 6100000.0)

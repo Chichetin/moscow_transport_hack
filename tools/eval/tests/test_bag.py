@@ -45,7 +45,7 @@ FRAME = (GEO.enu_rotation(LAT0, LON0), GEO.ecef(LAT0, LON0, 150.0), bag.output_g
 
 
 def grid_xyz(x_east):
-    """The published frame (D-082): ENU (x_east, 0, 0) of the first fix -> MGRS grid."""
+    """The published frame (D-083): ENU (x_east, 0, 0) of the first fix -> MGRS grid."""
     return GEO.enu_to_grid(*FRAME, x_east, 0.0, 0.0)
 
 

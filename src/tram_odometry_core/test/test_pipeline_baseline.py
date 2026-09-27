@@ -21,7 +21,7 @@ GRID = (PARAMS.frames.grid_zone, PARAMS.frames.grid_origin_e_m, PARAMS.frames.gr
 
 
 def line_pose(e, n, yaw):
-    """Grid pose (D-082) of the straight line (D-021) at ENU (e, n) of the first fix."""
+    """Grid pose (D-083) of the straight line (D-021) at ENU (e, n) of the first fix."""
     rot, e0 = geo.enu_rotation(*FIX_LLA[:2]), geo.ecef(*FIX_LLA)
     return geo.pose_to_grid(rot, e0, GRID, e, n, 0.0, yaw, (0.0, 0.0, 0.0))[:4]
 
@@ -83,7 +83,7 @@ def test_uniform_motion_distance_is_v_times_t():
 
 def test_straight_line_is_published_in_the_grid_from_the_first_fix():
     """Without a map the line starts at the first valid master fix (D-021) and is published
-    in the MGRS grid (D-082): at the fix it is the fix itself, far from any local 0."""
+    in the MGRS grid (D-083): at the fix it is the fix itself, far from any local 0."""
     odo = Odometry(PARAMS)
     drive(odo, 0.0, 1.0, KMH_36)                     # 10 m before the fix: not part of the line
     odo.step(gnss_fix(1.0))
@@ -94,7 +94,7 @@ def test_straight_line_is_published_in_the_grid_from_the_first_fix():
 
 
 def test_no_fix_without_map_keeps_the_local_line():
-    """Known limit (D-082): no map and no fix -> no absolute anchor, the line stays local."""
+    """Known limit (D-083): no map and no fix -> no absolute anchor, the line stays local."""
     est = drive(Odometry(PARAMS), 0.0, 1.0, KMH_36)
     assert (est.x, est.y) == pytest.approx((est.distance, 0.0))
 

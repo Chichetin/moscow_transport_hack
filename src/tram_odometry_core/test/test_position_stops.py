@@ -154,3 +154,77 @@ def test_stops_of_the_repository_map_are_valid():
     assert len(r.stops) >= 20
     for b, s in r.stops:
         assert 0.0 < s < r.branches[b].s[-1]                # none clamped onto a branch end
+
+
+def test_speed_scale_is_one_before_any_chain():
+    tr = _tracker([(0, 1500.0)])
+    assert tr.speed_scale == 1.0
+    tr.on_stop(495.0)                                  # a single snap is not a pair
+    assert tr.speed_scale == 1.0
+
+
+def test_speed_scale_telescopes_consecutive_snaps_including_short_pairs():
+    # #153: map 100 m + 500 m over wheels 103 m + 507 m; the 100 m pair is below
+    # scale_min_arc_m for the path scale but still counts in the chain
+    tr = _tracker([(0, 1500.0), (0, 1600.0), (0, 2100.0)])
+    assert tr.on_stop(500.0) and tr.on_stop(603.0) and tr.on_stop(1110.0)
+    prior = P.speed_scale_prior_m
+    assert tr._chain_arc == pytest.approx(600.0)
+    assert tr._chain_wheel == pytest.approx(610.0)
+    assert tr.speed_scale == pytest.approx((600.0 + prior) / (610.0 + prior))
+
+
+def test_speed_scale_does_not_pair_snaps_on_different_branches():
+    tr = _tracker([(0, 1500.0), (0, 2100.0)])
+    assert tr.on_stop(500.0)
+    tr._last_snap = (1, tr._last_snap[1], tr._last_snap[2])   # as if the last snap was on branch 1
+    assert tr.on_stop(1100.0)
+    assert tr._chain_arc == 0.0 and tr._chain_wheel == 0.0 and tr.speed_scale == 1.0
+
+
+def test_speed_scale_is_clamped():
+    tr = _tracker([(0, 1500.0)])
+    tr._chain_arc, tr._chain_wheel = 1.0e6, 2.0e6                 # a ratio of 0.5
+    assert tr.speed_scale == pytest.approx(1.0 - P.scale_max_dev)
+
+
+def test_pipeline_publishes_speed_times_the_chain_scale():
+    r = _route()
+    route = Route(origin=r.origin, branches=r.branches, stops=((0, 1600.0),))
+    plain, scaled = Odometry(PARAMS, route=route), Odometry(PARAMS, route=route)
+    for odo in (plain, scaled):
+        odo.step(_fix_msg(0.0, _lla(-START_S, 0.0, 170.0)))
+        _wheels(odo, 0.0, 9.0, 36.0)
+    scaled._tracker._chain_arc, scaled._tracker._chain_wheel = 1010.0, 1000.0
+    k = scaled._tracker.speed_scale
+    assert k > 1.0
+    a, b = _wheels(plain, 9.1, 10.0, 36.0), _wheels(scaled, 9.1, 10.0, 36.0)
+    assert b.speed == pytest.approx(a.speed * k)
+    assert (b.x, b.y, b.distance) == (a.x, a.y, a.distance)       # the path keeps its own scale
+
+
+def test_speed_scale_skips_a_pair_that_is_not_one_stretch_of_track():
+    # review #153: two snaps on branch 0 a whole loop apart (no snap on the way) -- map 600 m,
+    # wheels 10 km; pairing them would pin the speed scale at the clamp for the rest of the run
+    tr = _tracker([(0, 1500.0), (0, 2100.0)])
+    assert tr.on_stop(500.0)
+    tr._anchor = (0, 2100.0, 10500.0)
+    assert tr.on_stop(10500.0)
+    assert tr._chain_arc == 0.0 and tr._chain_wheel == 0.0 and tr.speed_scale == 1.0
+
+
+def test_speed_scale_skips_a_place_behind_the_previous_one():
+    # 30 m back over 5 m of wheels passes the stretch guard; only the order check stops it
+    tr = _tracker([(0, 1500.0), (0, 1530.0)])
+    assert tr.on_stop(530.0)                           # s = 1530
+    tr._anchor = (0, 1500.0, 535.0)
+    assert tr.on_stop(535.0)                           # place 1500 behind 1530
+    assert tr._chain_arc == 0.0 and tr._chain_wheel == 0.0
+
+
+def test_speed_scale_ignores_a_stop_at_a_shorter_path():
+    tr = _tracker([(0, 1500.0), (0, 1600.0)])
+    assert tr.on_stop(500.0) and tr.on_stop(603.0)
+    sums = (tr._chain_arc, tr._chain_wheel)
+    assert tr.on_stop(600.0)                           # the same place 3 m of path earlier
+    assert (tr._chain_arc, tr._chain_wheel) == sums

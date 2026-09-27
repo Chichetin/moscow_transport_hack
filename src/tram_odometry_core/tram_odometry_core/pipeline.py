@@ -46,7 +46,7 @@ class Odometry:
         self._x = self._y = 0.0
         self._yaw = 0.0
         f = params.frames
-        self._grid = (f.grid_zone, f.grid_origin_e_m, f.grid_origin_n_m)   # output frame (D-082)
+        self._grid = (f.grid_zone, f.grid_origin_e_m, f.grid_origin_n_m)   # output frame (D-083)
         # ENU frame of the straight line (x, y) without a map: the first valid master fix, where
         # the line restarts from 0; None before it (no absolute position is known then)
         self._line_frame = None
@@ -185,9 +185,11 @@ class Odometry:
             speed = 0.0
         else:
             speed = -self._a_zero * (self._t_zero - t)
+        if self._tracker is not None:
+            speed *= self._tracker.speed_scale     # wheel scale from the stop chain (#153)
         pos_var = var * (now - self._t0) ** 2      # speed noise integrated over the run
         pose = (self._x, self._y, 0.0, self._yaw, (pos_var, pos_var, 0.0))
-        # the output is the flat MGRS grid (D-082): the ENU pose of the map, or of the straight
+        # the output is the flat MGRS grid (D-083): the ENU pose of the map, or of the straight
         # line (D-021) in the map's own ENU before the first fix, goes through geodetic -> UTM
         frame = self._line_frame
         if self._tracker is not None:

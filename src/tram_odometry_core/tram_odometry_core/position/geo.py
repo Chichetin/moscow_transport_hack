@@ -1,4 +1,4 @@
-"""WGS84 geodesy for the output frame (#155, D-082): geodetic <-> ECEF, local ENU, UTM and the
+"""WGS84 geodesy for the output frame (#155, D-083): geodetic <-> ECEF, local ENU, UTM and the
 flat MGRS grid of /result/position.
 
 The organizers' frame is the plane MGRS grid of one 100 km square: UTM easting and northing of
@@ -109,7 +109,7 @@ def pose_to_grid(rot: np.ndarray, ecef0: np.ndarray, grid: Grid, x: float, y: fl
                  yaw: float, cov):
     """(x, y, z, yaw, (var_x, var_y, cov_xy)) of a local ENU frame -> the same in the MGRS grid.
     The heading turns by the grid convergence plus the tilt of the local tangent plane (about
-    -1.3 deg on the route, D-082): it is taken from a second point 1 m ahead; the covariance
+    -1.3 deg on the route, D-083): it is taken from a second point 1 m ahead; the covariance
     turns with it (the UTM scale, 1 - 3e-4, is left out)."""
     gx, gy, gz = enu_to_grid(rot, ecef0, grid, x, y, z)
     ax, ay, _ = enu_to_grid(rot, ecef0, grid, x + math.cos(yaw), y + math.sin(yaw), z)

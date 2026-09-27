@@ -10,7 +10,7 @@ base_link is on the line master -> rover; without one it is where master will be
 later (the tram is rigid and runs forward on its track). `point='master'` keeps the antenna.
 
 `grid=(zone, e0, n0)` (what `bag.py` passes, from `frames.grid_*` of params.yaml) turns the
-finished track into the flat MGRS grid of /result/position (D-082) with the core's own
+finished track into the flat MGRS grid of /result/position (D-083) with the core's own
 conversion (`tram_odometry_core.position.geo`); without it the track stays in ENU of `origin`.
 """
 from __future__ import annotations
@@ -187,7 +187,7 @@ def track_ahead(pos: np.ndarray, pos_s: np.ndarray, ahead: float, heading=None) 
 class Reference:
     origin: tuple[float, float, float] | None   # lat, lon, alt of the ENU the track is built in
     pos_t: np.ndarray       # (N,) s, header.stamp of master fix, sorted
-    pos: np.ndarray         # (N, 3) m, MGRS grid with `grid` (D-082), else ENU of `origin`
+    pos: np.ndarray         # (N, 3) m, MGRS grid with `grid` (D-083), else ENU of `origin`
     pos_s: np.ndarray       # (N,) m, arc of each point along the reference track, non-decreasing
     poly: np.ndarray        # (M, 2) m, track for projection (the fixes; decimated without vel)
     poly_s: np.ndarray      # (M,) m, arc of the vertices, non-decreasing
@@ -275,7 +275,7 @@ def build_reference(fix_t, fix_llas, vel_t, vel_en, window_end: float, point: st
         else:
             poly, poly_s, pos_s = arc_polyline(pos[:, :2])
     if grid is not None and len(pos):
-        # the output frame (D-082); the arc stays the Doppler one or is taken in the grid
+        # the output frame (D-083); the arc stays the Doppler one or is taken in the grid
         # (scale 1 - 3e-4: along compares arcs on the same polyline either way)
         pos = enu_to_grid(pos, origin, grid)
         if len(vel_t) >= 2:

@@ -202,7 +202,7 @@ def test_plain_rover_fix_is_not_paired_with_a_gbas_master_track():
     assert np.abs(ref.pos[:, 1]).max() < 0.01                  # the plain fix did not turn base_link
 
 
-# the grid of /result/position (D-082): the reference goes through the core's conversion
+# the grid of /result/position (D-083): the reference goes through the core's conversion
 
 GRID = (37, 300000.0, 6100000.0)
 

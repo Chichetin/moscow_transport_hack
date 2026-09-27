@@ -48,7 +48,7 @@ def _route():
 
 
 def _grid(lat, lon, alt):
-    """The published frame of the pipeline: MGRS grid of params.yaml (D-082)."""
+    """The published frame of the pipeline: MGRS grid of params.yaml (D-083)."""
     f = PARAMS.frames
     return geo.to_grid(lat, lon, alt, (f.grid_zone, f.grid_origin_e_m, f.grid_origin_n_m))
 
@@ -239,7 +239,7 @@ def test_pipeline_ignores_gnss_after_the_window():
 
 def test_pipeline_before_the_first_fix_starts_at_the_map_origin_in_the_grid():
     """No fix yet: the straight line (D-021) runs from the map's own origin and is published in
-    the grid like the rest (D-082), never as local metres near 0."""
+    the grid like the rest (D-083), never as local metres near 0."""
     from tram_odometry_core.pipeline import Odometry
     est = _wheels(Odometry(PARAMS, route=_route()), 0.0, 1.0, 36.0)
     fx, fy, fz = _grid(*_lla(est.distance, 0.0))              # yaw 0: east

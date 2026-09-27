@@ -89,7 +89,7 @@ class Estimate:
 class FramesParams:
     map: str
     base: str
-    grid_zone: int            # UTM zone (north) of the MGRS grid of /result/position (D-082)
+    grid_zone: int            # UTM zone (north) of the MGRS grid of /result/position (D-083)
     grid_origin_e_m: float    # m, UTM easting of the corner of the grid square
     grid_origin_n_m: float    # m, UTM northing of the corner of the grid square
 
@@ -182,6 +182,7 @@ class PositionParams:
     scale_alpha: float
     scale_max_dev: float
     scale_min_arc_m: float
+    speed_scale_prior_m: float
 
 
 @dataclass(frozen=True)
@@ -326,6 +327,8 @@ def _validate_base_link(position: PositionParams) -> None:
         raise ValueError('position.antenna_height_m must be finite')
     if not (0 <= position.scale_max_dev < 1):
         raise ValueError('position.scale_max_dev must satisfy 0 <= dev < 1')
+    if not (position.speed_scale_prior_m > 0):
+        raise ValueError('position.speed_scale_prior_m must be positive')
 
 
 def _validate_filter(filt: FilterParams) -> None:

@@ -2,7 +2,7 @@
 
 Timeline: speed (estimate, reference, both bogies as recorded), speed error, along/cross
 error, driver controller, slip flags. Map: the route of maps/route.csv, reference and
-estimate in the frame of the eval reference (the MGRS grid of /result/position, D-082), where
+estimate in the frame of the eval reference (the MGRS grid of /result/position, D-083), where
 the metrics compare them. For
 debugging, docs/accuracy.md and the pitch; not part of
 metrics.json (contracts §4). matplotlib is imported only in `render`: the dev image has
@@ -62,7 +62,7 @@ def enu_rotation(lat_deg: float, lon_deg: float) -> np.ndarray:
 
 def route_in_ref_frame(route, origin, grid=None) -> list:
     """x/y of the map branches (ENU of the map's own origin) in the frame of the reference:
-    the MGRS grid with `grid` (D-082, what `bag_series` passes), else the ENU of `origin` (the
+    the MGRS grid with `grid` (D-083, what `bag_series` passes), else the ENU of `origin` (the
     transform of PathTracker._set_origin)."""
     if route is None or origin is None:
         return []
